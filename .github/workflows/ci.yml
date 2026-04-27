@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  verify:
+    name: verify (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Sync workspace
+        run: uv sync --all-extras
+
+      - name: Add venv to PATH
+        run: echo "$GITHUB_WORKSPACE/.venv/bin" >> "$GITHUB_PATH"
+
+      - name: Ruff lint
+        run: ruff check .
+
+      - name: Ruff format check
+        run: ruff format --check .
+
+      - name: Pyright
+        run: pyright
+
+      - name: Pytest
+        run: pytest
