@@ -1,0 +1,28 @@
+[tool.uv.workspace]
+members = [
+    "packages/smai-core",
+    "packages/smai-runtime",
+    "packages/smai-agents",
+    "packages/smai-orchestrator",
+    "packages/smai-cli",
+    "packages/smai",
+    "plugins/smai-llm-bedrock",
+    "plugins/smai-llm-anthropic",
+    "plugins/smai-llm-openai",
+    "plugins/smai-store-sqlite",
+    "plugins/smai-store-postgres",
+    "plugins/smai-artifacts-localfs",
+    "plugins/smai-artifacts-s3",
+    "plugins/smai-compute-localgpu",
+    "plugins/smai-compute-modal",
+    "plugins/smai-compute-runpod",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["packages", "plugins"]
+addopts = "--import-mode=importlib"
