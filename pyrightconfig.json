@@ -1,0 +1,22 @@
+{
+  "include": [
+    "packages",
+    "plugins"
+  ],
+  "pythonVersion": "3.11",
+  "venvPath": ".",
+  "venv": ".venv",
+  "executionEnvironments": [
+    {
+      "root": "packages/smai-core",
+      "reportMissingImports": "error",
+      "extraPaths": [
+        "packages/smai-core/src"
+      ]
+    }
+  ],
+  "typeCheckingMode": "standard",
+  "strict": [
+    "packages/smai-core"
+  ]
+}
