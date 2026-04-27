@@ -27,7 +27,7 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["packages", "plugins"]
+testpaths = ["packages", "plugins", "tests"]
 addopts = "--import-mode=importlib"
 asyncio_mode = "auto"
 

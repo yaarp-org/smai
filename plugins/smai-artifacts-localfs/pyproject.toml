@@ -5,6 +5,9 @@ description = "ArtifactStore plugin: local filesystem reference implementation."
 requires-python = ">=3.11"
 dependencies = []
 
+[project.entry-points."smai.artifact_stores"]
+localfs = "smai_artifacts_localfs:LocalFsStore"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

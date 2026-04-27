@@ -5,6 +5,9 @@ description = "Compute plugin: RunPod implementation."
 requires-python = ">=3.11"
 dependencies = []
 
+[project.entry-points."smai.computes"]
+runpod = "smai_compute_runpod:RunPodCompute"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

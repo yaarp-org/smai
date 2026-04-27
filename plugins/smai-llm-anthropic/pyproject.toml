@@ -5,6 +5,9 @@ description = "LlmProvider plugin: Anthropic SDK adapter."
 requires-python = ">=3.11"
 dependencies = []
 
+[project.entry-points."smai.llm_providers"]
+anthropic = "smai_llm_anthropic:AnthropicProvider"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

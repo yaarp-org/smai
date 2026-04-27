@@ -5,6 +5,9 @@ description = "Compute plugin: local Docker GPU implementation."
 requires-python = ">=3.11"
 dependencies = []
 
+[project.entry-points."smai.computes"]
+localgpu = "smai_compute_localgpu:LocalGpuCompute"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

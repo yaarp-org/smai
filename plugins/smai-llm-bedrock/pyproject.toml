@@ -5,6 +5,9 @@ description = "LlmProvider plugin: AWS Bedrock Converse adapter."
 requires-python = ">=3.11"
 dependencies = []
 
+[project.entry-points."smai.llm_providers"]
+bedrock = "smai_llm_bedrock:BedrockProvider"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

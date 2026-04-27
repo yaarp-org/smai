@@ -5,6 +5,9 @@ description = "MetadataStore plugin: PostgreSQL reference production implementat
 requires-python = ">=3.11"
 dependencies = []
 
+[project.entry-points."smai.metadata_stores"]
+postgres = "smai_store_postgres:PostgresStore"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

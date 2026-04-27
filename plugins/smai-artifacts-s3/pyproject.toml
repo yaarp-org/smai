@@ -5,6 +5,9 @@ description = "ArtifactStore plugin: BYO-bucket S3 implementation."
 requires-python = ">=3.11"
 dependencies = []
 
+[project.entry-points."smai.artifact_stores"]
+s3 = "smai_artifacts_s3:S3Store"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

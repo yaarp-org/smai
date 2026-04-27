@@ -5,6 +5,9 @@ description = "LlmProvider plugin: OpenAI SDK adapter."
 requires-python = ">=3.11"
 dependencies = []
 
+[project.entry-points."smai.llm_providers"]
+openai = "smai_llm_openai:OpenAIProvider"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

@@ -5,6 +5,9 @@ description = "MetadataStore plugin: SQLite reference local implementation."
 requires-python = ">=3.11"
 dependencies = []
 
+[project.entry-points."smai.metadata_stores"]
+sqlite = "smai_store_sqlite:SqliteStore"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
