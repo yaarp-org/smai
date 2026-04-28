@@ -29,6 +29,8 @@
       "extraPaths": [
         "packages/smai-agents/src",
         "packages/smai-core/src",
+        "packages/smai-runtime/src",
+        "packages/smai-orchestrator/src",
         "plugins/smai-llm-bedrock/src"
       ]
     },

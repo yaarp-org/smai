@@ -26,6 +26,9 @@ def test_render_with_all_variables() -> None:
         config,
         cg_id="cg-123",
         workspace_path="/tmp/ws",
+        factor_type="additive",
+        factor_dimension="augmentation",
+        manifest_artifact_path="comparison-groups/cg-123/harness/manifest.json",
     )
     assert "cg-123" in rendered
     assert "/tmp/ws" in rendered
@@ -36,8 +39,11 @@ def test_render_strict_undefined_raises() -> None:
     config = load_prompt_config("harness_builder")
     with pytest.raises(PromptConfigValidationError) as excinfo:
         render_initial_user_message(config, cg_id="cg-123")
-    # The error should name the missing variable.
-    assert "workspace_path" in str(excinfo.value)
+    # The error should name a missing variable; the harness builder
+    # template references several (workspace_path, factor_dimension,
+    # factor_type, manifest_artifact_path) — Jinja's StrictUndefined
+    # surfaces whichever it tries first.
+    assert "is undefined" in str(excinfo.value)
 
 
 def test_render_extra_variable_is_silently_ignored() -> None:
@@ -47,6 +53,9 @@ def test_render_extra_variable_is_silently_ignored() -> None:
         config,
         cg_id="cg-1",
         workspace_path="/x",
+        factor_type="additive",
+        factor_dimension="augmentation",
+        manifest_artifact_path="m",
         unused_var="ignored",
     )
     assert "ignored" not in rendered

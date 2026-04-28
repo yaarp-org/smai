@@ -2,7 +2,8 @@
 #
 # Per 04-agents.md §2.2. Multi-turn agent that builds the experiment
 # harness, validates it, and emits HarnessAPIManifest. Full standard
-# inventory plus run_experiment.
+# inventory plus run_experiment plus the harness-builder-only
+# emit_harness_manifest tool (registered by 2.B3's dispatch handler).
 #
 # PLACEHOLDER content. Production prompt is iterated post-M2.
 
@@ -17,6 +18,13 @@ system_prompt: |
   TechniqueContract, ExperimentPlan) and validate it via run_experiment
   before emitting the HarnessAPIManifest.
 
+  Per DEC-017 / 10-runtime-and-templates.md §9, the harness is always
+  built with the same code shape; what differs by factor type is whether
+  the extension point has a working default (additive) or is a mandatory
+  slot (substitutive). For additive factors the baseline runs the
+  harness as-is (no contribution); for substitutive factors every entry
+  including the baseline must populate the slot.
+
   This is a PLACEHOLDER prompt. Production content is iterated
   separately.
 
@@ -24,9 +32,23 @@ initial_user_message_template: |
   CG id: {{ cg_id }}
   Workspace: {{ workspace_path }}
 
-  Contract artifacts are in contracts/. Build the harness, validate it
-  with a few-epoch run via run_experiment, and emit
-  harness/harness_api_manifest.json once validation passes.
+  Factor: {{ factor_dimension }} ({{ factor_type }})
+  {%- if factor_type == "additive" %}
+  Factor type is **additive**: the harness's extension points must default
+  to a working no-op so the baseline (technique_id=null) runs the harness
+  as-is. Manifest extension points should be optional=true.
+  {%- elif factor_type == "substitutive" %}
+  Factor type is **substitutive**: the variable component is routed
+  through the technique module interface — every entry including the
+  baseline must populate the slot. Manifest extension points should be
+  optional=false (mandatory slots).
+  {%- endif %}
+
+  Contract artifacts are in contracts/. Build the harness in harness/,
+  the baseline in techniques/baseline.py, and config.yaml. Validate via
+  a few-epoch run through run_experiment. Once validation passes, emit
+  the manifest via the emit_harness_manifest tool — it writes the
+  manifest to the artifact store at {{ manifest_artifact_path }}.
 
 tools:
   - name: read_file
@@ -36,6 +58,7 @@ tools:
   - name: list_files
   - name: execute
   - name: run_experiment
+  - name: emit_harness_manifest
   - name: finish
 
 structured_output_tool: null
@@ -44,4 +67,4 @@ notes: >-
   PLACEHOLDER. The production prompt covers: contract reading, harness
   assembly per HarnessContract, validation run via run_experiment with
   capped epochs/subset, manifest emission at the implementing →
-  implemented gate.
+  implemented gate. Factor-type-aware framing per DEC-017.

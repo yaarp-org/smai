@@ -36,13 +36,20 @@ The shape exposed here:
 """
 
 from smai_agents.agents import (
+    EMIT_HARNESS_MANIFEST_TOOL_NAME,
     CGMetadata,
     CodeReviewerInput,
+    ContextKind,
     ContextualEvaluatorEntry,
     ContextualEvaluatorInput,
     EntryUnderReview,
+    make_dispatch_harness_build,
+    make_dispatch_technique_implementation,
+    make_emit_harness_manifest_tool,
     run_code_review,
     run_contextual_evaluation,
+    run_harness_builder_session,
+    run_technique_implementer_session,
 )
 from smai_agents.between_turn import (
     SUPERVISOR_NUDGE_PREFIX,
@@ -139,6 +146,7 @@ from smai_agents.truncation import TruncationPolicy
 __all__ = [
     "DEFAULT_CACHE_CONFIG",
     "EDIT_FILE_TOOL_NAME",
+    "EMIT_HARNESS_MANIFEST_TOOL_NAME",
     "EXECUTE_DEFAULT_TIMEOUT_SECONDS",
     "EXECUTE_MAX_LINES",
     "EXECUTE_MAX_TOKENS",
@@ -164,6 +172,7 @@ __all__ = [
     "CacheConfig",
     "CodeReviewResult",
     "CodeReviewerInput",
+    "ContextKind",
     "ContextualEvaluatorEntry",
     "ContextualEvaluatorInput",
     "ContextualVerdict",
@@ -203,7 +212,10 @@ __all__ = [
     "lint_after_python_write",
     "load_prompt_config",
     "load_retry_context",
+    "make_dispatch_harness_build",
+    "make_dispatch_technique_implementation",
     "make_edit_file_tool",
+    "make_emit_harness_manifest_tool",
     "make_execute_tool",
     "make_finish_tool",
     "make_list_files_tool",
@@ -214,7 +226,9 @@ __all__ = [
     "render_initial_user_message",
     "run_code_review",
     "run_contextual_evaluation",
+    "run_harness_builder_session",
     "run_loop",
+    "run_technique_implementer_session",
     "structured_call",
     "truncate_tool_output",
     "wait_for_compute_job",

@@ -1,19 +1,19 @@
-"""Role-shaped wrappers around the structured-output substrate.
+"""Role-shaped wrappers around the agent substrate.
 
-Per ``04-agents.md`` §2.4 / §2.5: the single-call agents (code reviewer,
-contextual evaluator, supervisor) bypass the multi-turn loop and call
-:func:`smai_agents.structured_call` directly. Each role here owns the
-user-message assembly + ``output_schema`` selection; the structured-call
-substrate itself is role-agnostic per §6, and the prompt-config surface
-(system prompt + structured-output tool name/description) is loaded from
-:mod:`smai_agents.prompts` per §10.
+Per ``04-agents.md`` §2.2 / §2.3 / §2.4 / §2.5: the multi-turn agents
+(harness builder, technique implementer) compose the loop substrate
+plus prompt config plus tool registry; the single-call agents (code
+reviewer, contextual evaluator, supervisor) bypass the loop and call
+:func:`smai_agents.structured_call` directly.
 
-Two of three single-call agents ship in 2.B4:
+Four of five agents ship across 2.B3 + 2.B4:
 
+* :func:`smai_agents.agents.harness_builder.run_harness_builder_session` — §2.2
+* :func:`smai_agents.agents.technique_implementer.run_technique_implementer_session` — §2.3
 * :func:`smai_agents.agents.code_reviewer.run_code_review` — §2.4
 * :func:`smai_agents.agents.contextual_evaluator.run_contextual_evaluation` — §2.5
 
-The third (supervisor, §2.6) lands in Task 3.G4.
+Supervisor (§2.6) lands in Task 3.G4. Planner (§2.1) lands in Task 3.E1.
 """
 
 from smai_agents.agents.code_reviewer import (
@@ -27,13 +27,33 @@ from smai_agents.agents.contextual_evaluator import (
     ContextualEvaluatorInput,
     run_contextual_evaluation,
 )
+from smai_agents.agents.harness_builder import (
+    make_dispatch_harness_build,
+    run_harness_builder_session,
+)
+from smai_agents.agents.manifest_tool import (
+    EMIT_HARNESS_MANIFEST_TOOL_NAME,
+    make_emit_harness_manifest_tool,
+)
+from smai_agents.agents.technique_implementer import (
+    ContextKind,
+    make_dispatch_technique_implementation,
+    run_technique_implementer_session,
+)
 
 __all__ = [
+    "EMIT_HARNESS_MANIFEST_TOOL_NAME",
     "CGMetadata",
     "CodeReviewerInput",
+    "ContextKind",
     "ContextualEvaluatorEntry",
     "ContextualEvaluatorInput",
     "EntryUnderReview",
+    "make_dispatch_harness_build",
+    "make_dispatch_technique_implementation",
+    "make_emit_harness_manifest_tool",
     "run_code_review",
     "run_contextual_evaluation",
+    "run_harness_builder_session",
+    "run_technique_implementer_session",
 ]

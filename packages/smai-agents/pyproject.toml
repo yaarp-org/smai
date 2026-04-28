@@ -5,6 +5,13 @@ description = "Custom Bedrock-Converse-style agent loop, prompt-config surface, 
 requires-python = ">=3.11"
 dependencies = [
     "smai-core",
+    # Task 2.B3 — the harness builder dispatch handler materializes the
+    # workspace via `smai_runtime.create_workspace_skeleton` /
+    # `write_template_files` / `write_contracts` (10-runtime-and-templates.md
+    # §2), and the `emit_harness_manifest` tool reuses
+    # `compute_harness_version_hash` / `freeze_manifest` /
+    # `HarnessAPIManifest` (§5).
+    "smai-runtime",
     "pydantic>=2.0",
     # YAML on disk + Pydantic in process per 04-agents.md §10.1.
     # Prompt configs ship as YAML and validate on load; pyyaml is the
@@ -19,6 +26,7 @@ dependencies = [
 
 [tool.uv.sources]
 smai-core = { workspace = true }
+smai-runtime = { workspace = true }
 smai-llm-bedrock = { workspace = true }
 
 [dependency-groups]

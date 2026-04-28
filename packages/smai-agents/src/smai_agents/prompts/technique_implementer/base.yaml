@@ -16,6 +16,17 @@ system_prompt: |
   technique module that satisfies its TechniqueContract and validates
   via run_experiment against the harness.
 
+  Per DEC-017, the harness was built factor-type-aware: additive
+  factors expose optional extension points; substitutive factors expose
+  mandatory slots. Read the HarnessAPIManifest at
+  contracts/harness_api_manifest.json — the manifest's extension_points
+  list is the locked typed surface your apply() must satisfy.
+
+  The harness, experiment.py, and techniques/__init__.py are no-go
+  zones (10-runtime-and-templates.md §7) — modifications cause
+  byte-level hash check failure at run start. Write only
+  techniques/<technique_name>.py.
+
   This is a PLACEHOLDER prompt. Production content is iterated
   separately.
 
@@ -25,9 +36,26 @@ initial_user_message_template: |
   Technique name: {{ technique_name }}
   Workspace: {{ workspace_path }}
 
-  HarnessAPIManifest is in contracts/harness_api_manifest.json.
-  Implement techniques/{{ technique_name }}.py and validate it via
-  run_experiment.
+  Factor: {{ factor_dimension }} ({{ factor_type }})
+  {%- if context_kind == "method_description" %}
+  Grounding context: method description at {{ grounding_path }}
+  (novel-technique pipeline; structured {description, mechanism,
+  key_details} triple). Implement from the description; use PyTorch /
+  torchvision built-ins where applicable.
+  {%- elif context_kind == "description_only" %}
+  Grounding context: standard technique — TechniqueRef.standard=True.
+  No paper artifact needed; implement from the technique description
+  using library APIs.
+  {%- elif context_kind == "paper_extract" %}
+  Grounding context: paper extract at {{ grounding_path }}
+  (focused method extraction; PaperFidelityAnchor). Implement from the
+  extracted method description; do NOT clone third-party
+  implementations.
+  {%- endif %}
+
+  HarnessAPIManifest is at contracts/harness_api_manifest.json — the
+  locked typed surface for apply()'s output. Implement
+  techniques/{{ technique_name }}.py and validate via run_experiment.
 
 tools:
   - name: read_file

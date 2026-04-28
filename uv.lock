@@ -740,6 +740,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pyyaml" },
     { name = "smai-core" },
+    { name = "smai-runtime" },
 ]
 
 [package.dev-dependencies]
@@ -753,6 +754,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "smai-core", editable = "packages/smai-core" },
+    { name = "smai-runtime", editable = "packages/smai-runtime" },
 ]
 
 [package.metadata.requires-dev]
