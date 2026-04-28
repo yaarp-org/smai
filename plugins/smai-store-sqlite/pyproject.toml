@@ -3,7 +3,27 @@ name = "smai-store-sqlite"
 version = "0.1.0"
 description = "MetadataStore plugin: SQLite reference local implementation."
 requires-python = ">=3.11"
-dependencies = []
+# Per DEC-036 (substrate choice settled at Task 2.A2): SQLAlchemy 2.0 async
+# Core + aiosqlite. Alembic deferred to Task 3.H2 — boot-time migrations
+# use ``metadata.create_all()`` for now (per ``09-cli.md`` §1's `smai dev`
+# ergonomics note). The Postgres plugin (Task 3.F1) reuses the same Core
+# schema and swaps the driver for asyncpg.
+dependencies = [
+    "smai-core",
+    "smai-orchestrator",
+    "sqlalchemy>=2.0",
+    "aiosqlite>=0.19",
+    # SQLAlchemy's async layer is implemented via greenlet bridging to
+    # the sync core; on Python 3.13 the package is not pulled in
+    # automatically by ``sqlalchemy[asyncio]`` so we declare it
+    # explicitly. Required for both SQLite (aiosqlite) and Postgres
+    # (asyncpg) drivers.
+    "greenlet>=3.0",
+]
+
+[tool.uv.sources]
+smai-core = { workspace = true }
+smai-orchestrator = { workspace = true }
 
 [project.entry-points."smai.metadata_stores"]
 sqlite = "smai_store_sqlite:SqliteStore"

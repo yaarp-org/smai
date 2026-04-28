@@ -42,7 +42,8 @@ from pathlib import Path
 # pipeline packages plus the ``smai`` umbrella (which depends on all of them
 # and re-exports the Tier A surface — importing it transitively breaks
 # atomicity the same way importing any of the four directly would).
-# Forbidden in both smai-core and plugin sources.
+# Forbidden in both smai-core and plugin sources, EXCEPT smai-orchestrator
+# in plugin sources (see ``PLUGIN_PIPELINE_ALLOWED`` below).
 PIPELINE_MODULES: frozenset[str] = frozenset(
     {"smai", "smai_agents", "smai_orchestrator", "smai_runtime", "smai_cli"}
 )
@@ -53,6 +54,29 @@ PIPELINE_MODULES: frozenset[str] = frozenset(
 PIPELINE_DISTS: frozenset[str] = frozenset(
     {"smai", "smai-agents", "smai-orchestrator", "smai-runtime", "smai-cli"}
 )
+
+# Pipeline packages that plugins ARE allowed to depend on / import. Per
+# Task 2.A2's MetadataStore-plugin work (DEC-036): the pipeline-tracking
+# record types (``ComparisonGroupRecord`` etc.) live in
+# ``smai-orchestrator.entities.tracking`` per ``01-data-model.md`` §5.1
+# / DEC-029, and ``MetadataStore`` plugins MUST construct + return these
+# at runtime (every ``create_*`` / ``get_*`` / ``transition_*`` method
+# round-trips a record). Forbidding the import would force plugins to
+# either re-declare the record types (drift risk) or push the
+# round-tripping responsibility back into smai-core (would break
+# DEC-029's "smai-core IS methodology, plugins are the seam" line).
+#
+# The allowance is narrow: only ``smai-orchestrator`` (which carries
+# record types). The other pipeline packages — ``smai-agents``,
+# ``smai-runtime``, ``smai-cli``, the ``smai`` umbrella — remain
+# forbidden because depending on them would couple the plugin to the
+# agent-loop / runtime / CLI surfaces it is meant to plug behind.
+#
+# Same hygiene applies bidirectionally: smai-orchestrator does NOT
+# depend on plugins (per its ``pyproject.toml``), so the dependency
+# graph stays acyclic.
+PLUGIN_PIPELINE_ALLOWED_DISTS: frozenset[str] = frozenset({"smai-orchestrator"})
+PLUGIN_PIPELINE_ALLOWED_MODULES: frozenset[str] = frozenset({"smai_orchestrator"})
 
 # Module-name prefixes for plugin packages. The four interface namespaces in
 # §2.4 of the implementation plan are llm_providers / metadata_stores /
@@ -348,7 +372,14 @@ def check_smai_core_imports(root: Path) -> list[Violation]:
 
 
 def check_plugin_boundaries(root: Path) -> list[Violation]:
-    """Rule 3: plugins don't pull in pipeline packages (deps or imports)."""
+    """Rule 3: plugins don't pull in pipeline packages (deps or imports).
+
+    Per Task 2.A2 (DEC-036): ``smai-orchestrator`` is exempt because
+    that's where the pipeline-tracking record types live, and every
+    ``MetadataStore`` plugin needs to construct + return them at
+    runtime. The other pipeline packages remain forbidden — see
+    :data:`PLUGIN_PIPELINE_ALLOWED_DISTS` for the full reasoning.
+    """
     plugins_dir = root / "plugins"
     if not plugins_dir.exists():
         return []
@@ -360,7 +391,7 @@ def check_plugin_boundaries(root: Path) -> list[Violation]:
         if pyproject.exists():
             for dep_spec in read_pyproject_dependencies(pyproject):
                 name = parse_dep_name(dep_spec)
-                if name in PIPELINE_DISTS:
+                if name in PIPELINE_DISTS and name not in PLUGIN_PIPELINE_ALLOWED_DISTS:
                     violations.append(
                         Violation(
                             rule="plugin-deps",
@@ -377,7 +408,7 @@ def check_plugin_boundaries(root: Path) -> list[Violation]:
             for lineno, module, snippet, in_type_checking in iter_top_level_imports(py_file):
                 if in_type_checking:
                     continue
-                if is_pipeline_module(module):
+                if is_pipeline_module(module) and module not in PLUGIN_PIPELINE_ALLOWED_MODULES:
                     violations.append(
                         Violation(
                             rule="plugin-imports",

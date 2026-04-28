@@ -203,17 +203,20 @@ def test_rule3_pass_with_clean_plugin(tmp_path: Path) -> None:
 
 
 def test_rule3_fail_on_plugin_pipeline_dep(tmp_path: Path) -> None:
+    """Plugins must not depend on the agent-loop / runtime / CLI
+    pipeline packages. ``smai-orchestrator`` is allowed (it carries the
+    record types — tested separately below)."""
     _make_plugin(
         tmp_path,
         "smai-store-sqlite",
         module="smai_store_sqlite",
-        deps=["smai-core", "smai-orchestrator>=0.1"],
+        deps=["smai-core", "smai-agents>=0.1"],
     )
     violations = check_deps.check_plugin_boundaries(tmp_path)
     assert len(violations) == 1
     v = violations[0]
     assert v.rule == "plugin-deps"
-    assert "smai-orchestrator" in v.detail
+    assert "smai-agents" in v.detail
     assert "smai-store-sqlite" in v.detail
     assert "implementation_plan.md" in v.reason
 
@@ -428,18 +431,48 @@ def test_type_checking_amendment_applies_to_plugin_rule_too(tmp_path: Path) -> N
 
 
 def test_runtime_pipeline_import_in_plugin_still_fails(tmp_path: Path) -> None:
-    """Rule 3's blocking behavior is unchanged for non-exempt cases."""
+    """Rule 3's blocking behavior is unchanged for non-exempt cases.
+
+    ``smai-orchestrator`` is exempt (Task 2.A2 / DEC-036 — record types
+    cross the plugin/pipeline seam by design); other pipeline-package
+    runtime imports remain blocked.
+    """
     _make_plugin(
         tmp_path,
-        "smai-store-sqlite",
-        module="smai_store_sqlite",
+        "smai-compute-modal",
+        module="smai_compute_modal",
         deps=["smai-core"],
-        sources={"store.py": "from smai_orchestrator.entities.tracking import RunRecord\n"},
+        sources={"runner.py": "from smai_runtime.harness import HarnessAPI\n"},
     )
     violations = check_deps.check_plugin_boundaries(tmp_path)
     assert len(violations) == 1
     assert violations[0].rule == "plugin-imports"
-    assert "smai_orchestrator" in violations[0].detail
+    assert "smai_runtime" in violations[0].detail
+
+
+def test_rule3_allows_plugin_smai_orchestrator_dep(tmp_path: Path) -> None:
+    """Plugins MAY depend on ``smai-orchestrator`` (Task 2.A2 / DEC-036).
+
+    Per ``01-data-model.md`` §5.1 / DEC-029, the pipeline-tracking
+    record types live in ``smai-orchestrator.entities.tracking`` and
+    every ``MetadataStore`` plugin needs to construct + return them at
+    runtime. Forbidding the dependency would force plugins to either
+    re-declare the record types or push the round-tripping
+    responsibility back into ``smai-core``.
+    """
+    _make_plugin(
+        tmp_path,
+        "smai-store-sqlite",
+        module="smai_store_sqlite",
+        deps=["smai-core", "smai-orchestrator>=0.1"],
+        sources={
+            "store.py": (
+                "from smai_orchestrator.entities.tracking import ComparisonGroupRecord\n"
+                "_ = ComparisonGroupRecord\n"
+            )
+        },
+    )
+    assert check_deps.check_plugin_boundaries(tmp_path) == []
 
 
 def test_conformance_subpackage_is_exempt_from_rule_2(tmp_path: Path) -> None:
