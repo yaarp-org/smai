@@ -132,9 +132,7 @@ class FakeCompute:
             return planned.status
         if handle.handle in self._sticky:
             return self._sticky[handle.handle]
-        raise RuntimeError(
-            f"FakeCompute.status: no outcome enqueued for handle {handle.handle!r}"
-        )
+        raise RuntimeError(f"FakeCompute.status: no outcome enqueued for handle {handle.handle!r}")
 
     async def logs(self, handle: JobHandle) -> str:
         return f"<no logs configured for {handle.handle!r}>"

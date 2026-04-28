@@ -469,9 +469,7 @@ async def test_run_worker_loop_respects_shutdown_immediately(
     """An already-set shutdown event short-circuits the loop on entry."""
     fake_compute = FakeCompute()
     fake_artifacts = FakeArtifactStore()
-    spec = _basic_spec(
-        dispatch_handler=make_dispatch(handle=make_job_handle("h-never"))
-    )
+    spec = _basic_spec(dispatch_handler=make_dispatch(handle=make_job_handle("h-never")))
 
     shutdown = asyncio.Event()
     shutdown.set()  # set BEFORE entry
@@ -540,9 +538,7 @@ async def test_phase2_query_pointing_at_terminal_state_raises(
     bad_spec = _basic_spec(dispatch_handler=make_dispatch(handle=make_job_handle("h")))
     # Misconfigure: phase-2 query keyed on a terminal state.
     bad_spec.phase2_queries = {
-        "implemented": SchedulingQueryRef(
-            name="bogus", fn=_ready_for_harness_build
-        ),
+        "implemented": SchedulingQueryRef(name="bogus", fn=_ready_for_harness_build),
     }
     with pytest.raises(ValueError, match="terminal"):
         await run_worker_cycle(
@@ -562,9 +558,7 @@ async def test_phase1_query_unregistered_state_raises(
     fake_artifacts = FakeArtifactStore()
     bad_spec = _basic_spec(dispatch_handler=make_dispatch(handle=make_job_handle("h")))
     bad_spec.phase1_queries = {
-        "no_such_state": SchedulingQueryRef(
-            name="bogus", fn=_in_flight_harness_build
-        ),
+        "no_such_state": SchedulingQueryRef(name="bogus", fn=_in_flight_harness_build),
     }
     with pytest.raises(LookupError, match="no_such_state"):
         await run_worker_cycle(

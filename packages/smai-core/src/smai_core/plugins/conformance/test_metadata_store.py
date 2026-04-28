@@ -306,9 +306,7 @@ class MetadataStoreConformance:
     # ``IS NULL``). The fixtures below seed the null/non-null partition
     # explicitly so any such plugin fails loudly here.
 
-    async def test_filter_correctness_harness_build_handle(
-        self, store: MetadataStore
-    ) -> None:
+    async def test_filter_correctness_harness_build_handle(self, store: MetadataStore) -> None:
         """``get_in_flight_harness_build`` and ``get_ready_for_harness_build``
         partition CGs correctly by ``harness_job_handle`` null-ness.
 
@@ -370,9 +368,7 @@ class MetadataStoreConformance:
             "the IS NULL predicate is not matching correctly"
         )
 
-    async def test_filter_correctness_proposal_design_handle(
-        self, store: MetadataStore
-    ) -> None:
+    async def test_filter_correctness_proposal_design_handle(self, store: MetadataStore) -> None:
         """``get_in_flight_proposal_design`` and ``get_ready_for_proposal_design``
         partition proposals correctly by ``planner_job_handle`` null-ness."""
         handle = JobHandle(plugin="test", handle="job-prop", metadata={})
@@ -421,9 +417,7 @@ class MetadataStoreConformance:
         assert "prop_filter_ready_null" in ready_ids
         assert "prop_filter_ready_real" not in ready_ids
 
-    async def test_filter_correctness_paper_fetch_handle(
-        self, store: MetadataStore
-    ) -> None:
+    async def test_filter_correctness_paper_fetch_handle(self, store: MetadataStore) -> None:
         """``get_in_flight_paper_fetch`` and ``get_ready_for_paper_fetch``
         partition papers correctly by ``fetcher_job_handle`` null-ness."""
         handle = JobHandle(plugin="test", handle="job-pap", metadata={})

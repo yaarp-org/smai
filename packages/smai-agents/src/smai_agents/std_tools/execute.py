@@ -114,10 +114,7 @@ async def _execute_handler(
     other agent sessions sharing the worker.
     """
     if not isinstance(parsed_input, ExecuteInput):
-        raise TypeError(
-            f"execute handler expected ExecuteInput, "
-            f"got {type(parsed_input).__name__}"
-        )
+        raise TypeError(f"execute handler expected ExecuteInput, got {type(parsed_input).__name__}")
 
     if _EXPERIMENT_PY_GUARD.search(parsed_input.command):
         # Per §12.2 — surface as a tool error so the agent self-corrects

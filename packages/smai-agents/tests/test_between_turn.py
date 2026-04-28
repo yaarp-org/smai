@@ -183,9 +183,7 @@ class _WriteFileInput(BaseModel):
     content: str
 
 
-async def _write_file_handler(
-    parsed_input: BaseModel, context: ToolContext
-) -> ToolResultContent:
+async def _write_file_handler(parsed_input: BaseModel, context: ToolContext) -> ToolResultContent:
     if not isinstance(parsed_input, _WriteFileInput):
         raise TypeError("expected _WriteFileInput")
     target = context.workspace_path / parsed_input.path

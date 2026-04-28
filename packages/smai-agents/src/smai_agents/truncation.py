@@ -87,9 +87,7 @@ def estimate_total_tokens(messages: list[NormalizedMessage]) -> int:
     return sum(estimate_message_tokens(m) for m in messages)
 
 
-def estimate_overhead_tokens(
-    *, system: str, tools: list[ToolDefinition] | None
-) -> int:
+def estimate_overhead_tokens(*, system: str, tools: list[ToolDefinition] | None) -> int:
     """Approximate token count for the always-sent prefix.
 
     System prompt + tool definitions are sent on every call but live
@@ -109,9 +107,7 @@ def effective_limit(capabilities: LlmCapabilities, policy: TruncationPolicy) -> 
     return int(capabilities.context_window * policy.threshold_fraction)
 
 
-def truncation_threshold(
-    capabilities: LlmCapabilities, policy: TruncationPolicy
-) -> int:
+def truncation_threshold(capabilities: LlmCapabilities, policy: TruncationPolicy) -> int:
     """Per §7: truncation fires at ``effective_limit * truncate_at_fraction``."""
     return int(effective_limit(capabilities, policy) * policy.truncate_at_fraction)
 

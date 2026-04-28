@@ -98,9 +98,7 @@ async def memoized(  # noqa: PLR0913
     # their offset on ``isoformat()``.
     if created_at.tzinfo is None:
         created_at = created_at.replace(tzinfo=UTC)
-    await checkpointer.save(
-        Checkpoint(key=key, result=body, created_at=created_at)
-    )
+    await checkpointer.save(Checkpoint(key=key, result=body, created_at=created_at))
     return result
 
 

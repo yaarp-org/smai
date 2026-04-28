@@ -139,8 +139,7 @@ def _read_validation_results(workspace: Path) -> tuple[bool, str]:
     if not isinstance(body, dict):
         return (
             False,
-            f"{VALIDATION_RESULTS_FILENAME} root must be an object, got "
-            f"{type(body).__name__}",
+            f"{VALIDATION_RESULTS_FILENAME} root must be an object, got {type(body).__name__}",
         )
     passed: object = body.get("passed")  # type: ignore[reportUnknownMemberType]
     if passed is not True:
@@ -297,7 +296,7 @@ def make_emit_harness_manifest_tool(
             "manifest is written to ArtifactStore with content_hash frozen."
         ),
         input_schema=HarnessAPIManifest,
-    handler=_handler,
+        handler=_handler,
     )
 
 

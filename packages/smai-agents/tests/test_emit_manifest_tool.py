@@ -55,9 +55,7 @@ class _NoopProvider:
         raise AssertionError("emit_manifest tests do not exercise LLM calls")
 
 
-def _make_workspace_with_harness(
-    workspace: Path, files: dict[str, bytes]
-) -> None:
+def _make_workspace_with_harness(workspace: Path, files: dict[str, bytes]) -> None:
     """Lay down ``harness/<file>`` for every entry in ``files``."""
     harness_dir = workspace / "harness"
     harness_dir.mkdir(parents=True, exist_ok=True)

@@ -325,10 +325,7 @@ def _validate_layer(
     if layer.layer != expected_kind:
         raise PromptConfigValidationError(
             location=location,
-            detail=(
-                f"layer kind {layer.layer!r} does not match expected "
-                f"{expected_kind!r}"
-            ),
+            detail=(f"layer kind {layer.layer!r} does not match expected {expected_kind!r}"),
         )
     return layer
 
@@ -380,9 +377,7 @@ def _compose(
     if initial_user_message_template is None:
         raise PromptConfigValidationError(
             location=base_location,
-            detail=(
-                "composed PromptConfig is missing initial_user_message_template"
-            ),
+            detail=("composed PromptConfig is missing initial_user_message_template"),
         )
 
     return PromptConfig(

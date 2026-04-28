@@ -95,21 +95,13 @@ ContextKind = Literal[
 DEFAULT_TECHNIQUE_CONTRACT_KEY_TEMPLATE = (
     "comparison-groups/{cg_id}/entries/{entry_id}/technique_contract.json"
 )
-DEFAULT_HARNESS_CONTRACT_KEY_TEMPLATE = (
-    "comparison-groups/{cg_id}/harness/contract.json"
-)
-DEFAULT_HARNESS_MANIFEST_KEY_TEMPLATE = (
-    "comparison-groups/{cg_id}/harness/manifest.json"
-)
+DEFAULT_HARNESS_CONTRACT_KEY_TEMPLATE = "comparison-groups/{cg_id}/harness/contract.json"
+DEFAULT_HARNESS_MANIFEST_KEY_TEMPLATE = "comparison-groups/{cg_id}/harness/manifest.json"
 DEFAULT_PREV_TRACE_KEY_TEMPLATE = (
     "comparison-groups/{cg_id}/entries/{entry_id}/conversation-trace.json"
 )
-DEFAULT_STATUS_KEY_TEMPLATE = (
-    "comparison-groups/{cg_id}/entries/{entry_id}/status.json"
-)
-DEFAULT_NUDGE_KEY_TEMPLATE = (
-    "comparison-groups/{cg_id}/entries/{entry_id}/nudge.txt"
-)
+DEFAULT_STATUS_KEY_TEMPLATE = "comparison-groups/{cg_id}/entries/{entry_id}/status.json"
+DEFAULT_NUDGE_KEY_TEMPLATE = "comparison-groups/{cg_id}/entries/{entry_id}/nudge.txt"
 
 
 # === In-process runner ======================================================
@@ -337,9 +329,7 @@ def make_dispatch_technique_implementation(
     """
 
     def _default_technique_contract_path(cg_id: str, entry_id: str) -> str:
-        return DEFAULT_TECHNIQUE_CONTRACT_KEY_TEMPLATE.format(
-            cg_id=cg_id, entry_id=entry_id
-        )
+        return DEFAULT_TECHNIQUE_CONTRACT_KEY_TEMPLATE.format(cg_id=cg_id, entry_id=entry_id)
 
     def _default_harness_contract_path(cg_id: str) -> str:
         return DEFAULT_HARNESS_CONTRACT_KEY_TEMPLATE.format(cg_id=cg_id)
@@ -348,9 +338,7 @@ def make_dispatch_technique_implementation(
         return DEFAULT_HARNESS_MANIFEST_KEY_TEMPLATE.format(cg_id=cg_id)
 
     def _default_prev_trace_path(cg_id: str, entry_id: str) -> str:
-        return DEFAULT_PREV_TRACE_KEY_TEMPLATE.format(
-            cg_id=cg_id, entry_id=entry_id
-        )
+        return DEFAULT_PREV_TRACE_KEY_TEMPLATE.format(cg_id=cg_id, entry_id=entry_id)
 
     def _default_status_path(cg_id: str, entry_id: str) -> str:
         return DEFAULT_STATUS_KEY_TEMPLATE.format(cg_id=cg_id, entry_id=entry_id)
@@ -361,15 +349,9 @@ def make_dispatch_technique_implementation(
     technique_contract_path_fn = (
         technique_contract_artifact_path or _default_technique_contract_path
     )
-    harness_contract_path_fn = (
-        harness_contract_artifact_path or _default_harness_contract_path
-    )
-    manifest_path_fn = (
-        harness_manifest_artifact_path or _default_manifest_path
-    )
-    prev_trace_path_fn = (
-        prev_trace_artifact_path or _default_prev_trace_path
-    )
+    harness_contract_path_fn = harness_contract_artifact_path or _default_harness_contract_path
+    manifest_path_fn = harness_manifest_artifact_path or _default_manifest_path
+    prev_trace_path_fn = prev_trace_artifact_path or _default_prev_trace_path
     status_path_fn = status_artifact_path or _default_status_path
     nudge_path_fn = nudge_artifact_path or _default_nudge_path
 
@@ -406,10 +388,7 @@ def make_dispatch_technique_implementation(
         except ValueError as exc:
             return DispatchOutcome(
                 submitted_handles=[],
-                error=(
-                    f"TechniqueContract at {contract_key!r} failed Pydantic "
-                    f"validation: {exc}"
-                ),
+                error=(f"TechniqueContract at {contract_key!r} failed Pydantic validation: {exc}"),
             )
 
         # Per DEC-013 / DEC-017: additive baselines are not implemented
@@ -426,16 +405,13 @@ def make_dispatch_technique_implementation(
             return DispatchOutcome(
                 submitted_handles=[],
                 error=(
-                    "DispatchContext.llm is None; technique implementer "
-                    "requires an LlmProvider."
+                    "DispatchContext.llm is None; technique implementer requires an LlmProvider."
                 ),
             )
 
         manifest_key = manifest_path_fn(cg_id)
         prev_trace_key = (
-            prev_trace_path_fn(cg_id, entry_id)
-            if entry_record.implementation_attempt > 0
-            else None
+            prev_trace_path_fn(cg_id, entry_id) if entry_record.implementation_attempt > 0 else None
         )
         status_key = status_path_fn(cg_id, entry_id)
         nudge_key = nudge_path_fn(cg_id, entry_id)
@@ -611,7 +587,7 @@ async def _load_harness_outputs(
     baseline_module: bytes | None = None
 
     async for key in iterator:
-        rel = key[len(prefix):]
+        rel = key[len(prefix) :]
         if not rel:
             continue
         # Skip the harness contract / manifest / status artifacts —
@@ -627,7 +603,7 @@ async def _load_harness_outputs(
         # the top of the prefix and is irrelevant to the no-go-zone
         # hash check the technique implementer's run will face.
         if rel.startswith("harness/"):
-            harness_files[rel[len("harness/"):]] = body
+            harness_files[rel[len("harness/") :]] = body
 
     return harness_files, baseline_module
 

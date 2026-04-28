@@ -89,55 +89,71 @@ async def test_run_harness_builder_session_produces_all_four_artifacts(
     fake_compute.set_workspace(workspace)
 
     write_calls = [
-        ("tu-w-init", "write_file", {
-            "path": "harness/__init__.py",
-            "content": SAMPLE_HARNESS_FILES["__init__.py"].decode(),
-        }),
-        ("tu-w-trainer", "write_file", {
-            "path": "harness/trainer.py",
-            "content": SAMPLE_HARNESS_FILES["trainer.py"].decode(),
-        }),
+        (
+            "tu-w-init",
+            "write_file",
+            {
+                "path": "harness/__init__.py",
+                "content": SAMPLE_HARNESS_FILES["__init__.py"].decode(),
+            },
+        ),
+        (
+            "tu-w-trainer",
+            "write_file",
+            {
+                "path": "harness/trainer.py",
+                "content": SAMPLE_HARNESS_FILES["trainer.py"].decode(),
+            },
+        ),
     ]
     canned = [
         # Turn 1: write harness/__init__.py + harness/trainer.py.
         model_response(tool_uses=write_calls, stop_reason="tool_use"),
         # Turn 2: write techniques/baseline.py.
         model_response(
-            tool_uses=[(
-                "tu-w-baseline",
-                "write_file",
-                {
-                    "path": "techniques/baseline.py",
-                    "content": "def apply(config):\n    return {}\n",
-                },
-            )],
+            tool_uses=[
+                (
+                    "tu-w-baseline",
+                    "write_file",
+                    {
+                        "path": "techniques/baseline.py",
+                        "content": "def apply(config):\n    return {}\n",
+                    },
+                )
+            ],
             stop_reason="tool_use",
         ),
         # Turn 3: run_experiment validation.
         model_response(
-            tool_uses=[(
-                "tu-run",
-                "run_experiment",
-                {"technique": "baseline", "seed": 42, "epochs": 1, "subset_fraction": 0.1},
-            )],
+            tool_uses=[
+                (
+                    "tu-run",
+                    "run_experiment",
+                    {"technique": "baseline", "seed": 42, "epochs": 1, "subset_fraction": 0.1},
+                )
+            ],
             stop_reason="tool_use",
         ),
         # Turn 4: emit_harness_manifest.
         model_response(
-            tool_uses=[(
-                "tu-emit",
-                "emit_harness_manifest",
-                manifest.model_dump(mode="json"),
-            )],
+            tool_uses=[
+                (
+                    "tu-emit",
+                    "emit_harness_manifest",
+                    manifest.model_dump(mode="json"),
+                )
+            ],
             stop_reason="tool_use",
         ),
         # Turn 5: finish.
         model_response(
-            tool_uses=[(
-                "tu-fin",
-                "finish",
-                {"success": True, "summary": "harness built and validated"},
-            )],
+            tool_uses=[
+                (
+                    "tu-fin",
+                    "finish",
+                    {"success": True, "summary": "harness built and validated"},
+                )
+            ],
             stop_reason="tool_use",
         ),
     ]

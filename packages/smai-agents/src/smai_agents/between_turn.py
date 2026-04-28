@@ -90,8 +90,7 @@ async def maybe_truncate_context(session: AgentSession) -> None:
     if before != after:
         session.truncations_fired += 1
         logger.info(
-            "agent loop: truncated context (turn=%d, role=%s, before=%d msgs, "
-            "after=%d msgs)",
+            "agent loop: truncated context (turn=%d, role=%s, before=%d msgs, after=%d msgs)",
             session.turn_count,
             session.current_role,
             before,

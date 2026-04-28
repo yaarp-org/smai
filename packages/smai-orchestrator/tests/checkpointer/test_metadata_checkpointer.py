@@ -32,9 +32,7 @@ async def test_save_then_load_round_trip() -> None:
     cp = MetadataStoreCheckpointer(InMemoryCheckpointBackend())
     key = CheckpointKey(thread_id="cg_1", step_id="step_v1", input_hash="h0")
     body = b'{"verdict":"pass"}'
-    await cp.save(
-        Checkpoint(key=key, result=body, created_at=datetime(2026, 4, 28, tzinfo=UTC))
-    )
+    await cp.save(Checkpoint(key=key, result=body, created_at=datetime(2026, 4, 28, tzinfo=UTC)))
     loaded = await cp.load(key)
     assert loaded is not None
     assert loaded.result == body
@@ -75,9 +73,7 @@ async def test_step_id_versioning_invalidates() -> None:
     cp = MetadataStoreCheckpointer(InMemoryCheckpointBackend())
     v1 = CheckpointKey(thread_id="cg_1", step_id="code_review_v1", input_hash="h")
     v2 = CheckpointKey(thread_id="cg_1", step_id="code_review_v2", input_hash="h")
-    await cp.save(
-        Checkpoint(key=v1, result=b"old", created_at=datetime(2026, 4, 28, tzinfo=UTC))
-    )
+    await cp.save(Checkpoint(key=v1, result=b"old", created_at=datetime(2026, 4, 28, tzinfo=UTC)))
     assert await cp.load(v2) is None  # different step_id → no memo
 
 

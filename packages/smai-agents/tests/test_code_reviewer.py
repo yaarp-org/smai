@@ -163,9 +163,7 @@ async def test_code_review_happy_path_returns_pass() -> None:
 async def test_code_review_tool_name_matches_v1_convention() -> None:
     """§6 / DEC-018: the tool name is ``submit_review`` per the v1 mapping table."""
     canned = model_response(
-        tool_uses=[
-            ("tu-2", "submit_review", {"findings": [], "overall_pass": True})
-        ],
+        tool_uses=[("tu-2", "submit_review", {"findings": [], "overall_pass": True})],
         stop_reason="tool_use",
     )
     llm = StubLlmProvider([canned])
@@ -309,9 +307,7 @@ async def test_code_review_calls_loader_when_prompt_config_is_none(
             structured_output_tool=StructuredOutputTool(
                 name="submit_review",
                 description="Submit the review.",
-                schema_module=(
-                    "smai_agents.schemas.code_review:CodeReviewResult"
-                ),
+                schema_module=("smai_agents.schemas.code_review:CodeReviewResult"),
             ),
             layer_chain=["code_reviewer/base", "code_reviewer/stub"],
         )
@@ -319,9 +315,7 @@ async def test_code_review_calls_loader_when_prompt_config_is_none(
     monkeypatch.setattr(_code_reviewer_module, "load_prompt_config", _fake_loader)
 
     canned = model_response(
-        tool_uses=[
-            ("tu-loader", "submit_review", {"findings": [], "overall_pass": True})
-        ],
+        tool_uses=[("tu-loader", "submit_review", {"findings": [], "overall_pass": True})],
         stop_reason="tool_use",
     )
     llm = StubLlmProvider([canned])
@@ -339,9 +333,7 @@ async def test_code_review_skips_loader_when_prompt_config_supplied(
     must NOT be called — the caller's config is used verbatim."""
 
     def _exploding_loader(*, role: str, variant_name: str | None = None) -> PromptConfig:
-        raise AssertionError(
-            "load_prompt_config must not be called when prompt_config is supplied"
-        )
+        raise AssertionError("load_prompt_config must not be called when prompt_config is supplied")
 
     monkeypatch.setattr(_code_reviewer_module, "load_prompt_config", _exploding_loader)
 
@@ -359,9 +351,7 @@ async def test_code_review_skips_loader_when_prompt_config_supplied(
     )
 
     canned = model_response(
-        tool_uses=[
-            ("tu-supplied", "submit_review", {"findings": [], "overall_pass": True})
-        ],
+        tool_uses=[("tu-supplied", "submit_review", {"findings": [], "overall_pass": True})],
         stop_reason="tool_use",
     )
     llm = StubLlmProvider([canned])

@@ -272,9 +272,7 @@ def test_scheduling_query_state_must_resolve() -> None:
         "edges": [],
         "pools": [],
     }
-    bogus_query = SchedulingQueryRef(
-        name="ghost", fn=lambda store: _empty_records()
-    )
+    bogus_query = SchedulingQueryRef(name="ghost", fn=lambda store: _empty_records())
     with pytest.raises(ValidationError, match="no matching StateDef"):
         PipelineSpec(
             **spec_kwargs,  # type: ignore[arg-type]
@@ -283,9 +281,7 @@ def test_scheduling_query_state_must_resolve() -> None:
 
 
 def test_scheduling_query_terminal_state_rejected() -> None:
-    bogus_query = SchedulingQueryRef(
-        name="bogus", fn=lambda store: _empty_records()
-    )
+    bogus_query = SchedulingQueryRef(name="bogus", fn=lambda store: _empty_records())
     with pytest.raises(ValidationError, match="terminal"):
         PipelineSpec(
             name="bad",
@@ -311,9 +307,7 @@ async def _empty_records():  # type: ignore[no-untyped-def]
 def test_engine_spec_partitions_by_outgoing_edge_trigger() -> None:
     """States with an outgoing ``job_succeeded`` / ``job_failed`` edge
     end up in ``phase1_queries``; the rest in ``phase2_queries``."""
-    q_in_flight = SchedulingQueryRef(
-        name="in_flight", fn=lambda store: _empty_records()
-    )
+    q_in_flight = SchedulingQueryRef(name="in_flight", fn=lambda store: _empty_records())
     q_ready = SchedulingQueryRef(name="ready", fn=lambda store: _empty_records())
     spec = PipelineSpec(
         name="partition_test",

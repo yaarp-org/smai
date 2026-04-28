@@ -110,16 +110,12 @@ def _env_var_for(role: TaskRole) -> str:
 
 def _parse_env_value(role: TaskRole, raw: str) -> tuple[str, str]:
     if ":" not in raw:
-        raise ModelSelectionError(
-            f"{_env_var_for(role)} must be 'provider:model_id'; got {raw!r}"
-        )
+        raise ModelSelectionError(f"{_env_var_for(role)} must be 'provider:model_id'; got {raw!r}")
     provider, model_id = raw.split(":", 1)
     provider = provider.strip()
     model_id = model_id.strip()
     if not provider or not model_id:
-        raise ModelSelectionError(
-            f"{_env_var_for(role)} must be 'provider:model_id'; got {raw!r}"
-        )
+        raise ModelSelectionError(f"{_env_var_for(role)} must be 'provider:model_id'; got {raw!r}")
     return provider, model_id
 
 

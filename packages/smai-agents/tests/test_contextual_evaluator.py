@@ -262,16 +262,12 @@ async def test_contextual_evaluation_calls_loader_when_prompt_config_is_none(
             structured_output_tool=StructuredOutputTool(
                 name="submit_evaluation",
                 description="Submit the evaluation.",
-                schema_module=(
-                    "smai_agents.schemas.contextual_verdict:ContextualVerdict"
-                ),
+                schema_module=("smai_agents.schemas.contextual_verdict:ContextualVerdict"),
             ),
             layer_chain=["contextual_evaluator/base", "contextual_evaluator/stub"],
         )
 
-    monkeypatch.setattr(
-        _contextual_evaluator_module, "load_prompt_config", _fake_loader
-    )
+    monkeypatch.setattr(_contextual_evaluator_module, "load_prompt_config", _fake_loader)
 
     llm = StubLlmProvider([_canned_verdict_response("tu-loader")])  # type: ignore[list-item]
     await run_contextual_evaluation(llm=llm, input=_baseline_input())
@@ -291,13 +287,9 @@ async def test_contextual_evaluation_skips_loader_when_prompt_config_supplied(
     must NOT be called — the caller's config is used verbatim."""
 
     def _exploding_loader(*, role: str, variant_name: str | None = None) -> PromptConfig:
-        raise AssertionError(
-            "load_prompt_config must not be called when prompt_config is supplied"
-        )
+        raise AssertionError("load_prompt_config must not be called when prompt_config is supplied")
 
-    monkeypatch.setattr(
-        _contextual_evaluator_module, "load_prompt_config", _exploding_loader
-    )
+    monkeypatch.setattr(_contextual_evaluator_module, "load_prompt_config", _exploding_loader)
 
     cfg = PromptConfig(
         role="contextual_evaluator",
@@ -307,17 +299,13 @@ async def test_contextual_evaluation_skips_loader_when_prompt_config_supplied(
         structured_output_tool=StructuredOutputTool(
             name="submit_evaluation",
             description="caller's tool description",
-            schema_module=(
-                "smai_agents.schemas.contextual_verdict:ContextualVerdict"
-            ),
+            schema_module=("smai_agents.schemas.contextual_verdict:ContextualVerdict"),
         ),
         layer_chain=["test/inline"],
     )
 
     llm = StubLlmProvider([_canned_verdict_response("tu-supplied")])  # type: ignore[list-item]
-    await run_contextual_evaluation(
-        llm=llm, input=_baseline_input(), prompt_config=cfg
-    )
+    await run_contextual_evaluation(llm=llm, input=_baseline_input(), prompt_config=cfg)
 
     assert llm.calls[0]["system"] == "CALLER-PROVIDED SYSTEM PROMPT"
     tools = llm.calls[0]["tools"]

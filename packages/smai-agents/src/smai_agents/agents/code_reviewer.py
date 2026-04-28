@@ -108,8 +108,12 @@ async def run_code_review(
     :class:`smai_agents.schemas.code_review.CodeReviewResult` validator
     enforces the ``overall_pass`` ↔ critical-findings invariant.
     """
-    cfg = prompt_config if prompt_config is not None else load_prompt_config(
-        role="code_reviewer",
+    cfg = (
+        prompt_config
+        if prompt_config is not None
+        else load_prompt_config(
+            role="code_reviewer",
+        )
     )
     sot = cfg.structured_output_tool
     if sot is None:
@@ -193,7 +197,7 @@ def _build_user_message(inp: CodeReviewerInput) -> str:
             parts.append(
                 "**Implementation source is missing.** This is unusual "
                 "for a non-baseline / substitutive entry; flag as "
-                "``critical`` (target_kind=\"entry\") if the absence is "
+                '``critical`` (target_kind="entry") if the absence is '
                 "unexpected."
             )
         else:

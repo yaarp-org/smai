@@ -31,9 +31,7 @@ from smai_orchestrator.engine import (
 from smai_orchestrator.entities.tracking import ComparisonGroupRecord
 
 
-async def _seed_cg(
-    store, *, version: int = 0
-) -> ComparisonGroupRecord:
+async def _seed_cg(store, *, version: int = 0) -> ComparisonGroupRecord:
     """Seed a single CG into the store for write-first tests."""
     cg = ComparisonGroupRecord(
         id="cg_writefirst",
@@ -150,9 +148,7 @@ async def test_handler_returning_error_rolls_back(
     """Same rollback shape, but the handler returns ``DispatchOutcome`` with
     a non-None ``error`` rather than raising."""
     cg = await _seed_cg(sqlite_store)
-    spec = _spec_with_external_dispatch(
-        handler=make_dispatch(error="precondition not met")
-    )
+    spec = _spec_with_external_dispatch(handler=make_dispatch(error="precondition not met"))
 
     outcome = await drive_entity_phase3(
         spec=spec,

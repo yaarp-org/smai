@@ -41,10 +41,7 @@ from smai_core.plugins import (
 # ``sys.path`` for the smai-agents test session by default — only
 # this one integration test needs the fake client.
 _BEDROCK_TESTS_DIR = (
-    Path(__file__).resolve().parent.parent.parent.parent
-    / "plugins"
-    / "smai-llm-bedrock"
-    / "tests"
+    Path(__file__).resolve().parent.parent.parent.parent / "plugins" / "smai-llm-bedrock" / "tests"
 )
 if str(_BEDROCK_TESTS_DIR) not in sys.path:
     sys.path.append(str(_BEDROCK_TESTS_DIR))
@@ -270,9 +267,7 @@ async def test_retry_context_writes_workspace_file(tmp_path: Path) -> None:
     class _ReadInput(BaseModel):
         path: str
 
-    async def _read_handler(
-        parsed_input: BaseModel, context: ToolContext
-    ) -> ToolResultContent:
+    async def _read_handler(parsed_input: BaseModel, context: ToolContext) -> ToolResultContent:
         if not isinstance(parsed_input, _ReadInput):
             raise TypeError("expected _ReadInput")
         target = context.workspace_path / parsed_input.path

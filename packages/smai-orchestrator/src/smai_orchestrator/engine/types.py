@@ -376,9 +376,7 @@ class EngineSpec(BaseModel):
         in-flight-state list per pool (per DEC-035 #3).
         """
         return {
-            s.name: s.on_entry_dispatch.pool
-            for s in self.states
-            if s.on_entry_dispatch is not None
+            s.name: s.on_entry_dispatch.pool for s in self.states if s.on_entry_dispatch is not None
         }
 
 

@@ -103,6 +103,7 @@ async def test_run_experiment_succeeds_and_harvests_metrics(tmp_path: Path) -> N
 @pytest.mark.asyncio
 async def test_run_experiment_baseline_omits_technique(tmp_path: Path) -> None:
     """``technique=None`` (additive baseline) skips the --technique flag."""
+
     async def drop_metrics(workspace: Path) -> None:
         (workspace / "metrics.json").write_text(json.dumps({"accuracy": 0.5}))
 
@@ -140,6 +141,7 @@ async def test_run_experiment_baseline_omits_technique(tmp_path: Path) -> None:
 async def test_run_experiment_caps_epochs_above_max(tmp_path: Path) -> None:
     """Per DEC-021 / §12.3: epochs > MAX_VALIDATION_EPOCHS is silently
     clamped at the tool layer."""
+
     async def drop_metrics(workspace: Path) -> None:
         (workspace / "metrics.json").write_text(json.dumps({"accuracy": 1.0}))
 
@@ -348,6 +350,7 @@ async def test_run_experiment_harvests_validation_results_on_failure(
     tmp_path: Path,
 ) -> None:
     """Failed run with validation_results.json → snippet in failure_reason."""
+
     async def drop_validation(workspace: Path) -> None:
         (workspace / "validation_results.json").write_text(
             json.dumps({"loss_decreased": False, "error": "diverged"})
@@ -382,10 +385,9 @@ async def test_run_experiment_metrics_with_invalid_value_treated_as_missing(
     tmp_path: Path,
 ) -> None:
     """Non-numeric metrics.json values → metrics=None (failure)."""
+
     async def drop_bad_metrics(workspace: Path) -> None:
-        (workspace / "metrics.json").write_text(
-            json.dumps({"accuracy": "not_a_number"})
-        )
+        (workspace / "metrics.json").write_text(json.dumps({"accuracy": "not_a_number"}))
 
     fake_compute = FakeCompute(
         status_queue=[_terminal_succeeded()],
@@ -428,8 +430,9 @@ def _make_immediate_wait_helper(clock: FakeClock):
 
     advancing_sleep = make_clock_advancing_sleep(clock)
 
-    async def _wait(*, handle, compute, time_provider, poll_interval=0.0,
-                    max_wait_seconds=None, sleep=None):
+    async def _wait(
+        *, handle, compute, time_provider, poll_interval=0.0, max_wait_seconds=None, sleep=None
+    ):
         del sleep, poll_interval  # we control these
         return await wait_for_compute_job(
             handle=handle,

@@ -63,9 +63,7 @@ class StubLlmProvider:
         cache_config: CacheConfig | None = None,
     ) -> ModelResponse:
         if not self._responses:
-            raise AssertionError(
-                "StubLlmProvider: ran out of canned responses (extra .call())"
-            )
+            raise AssertionError("StubLlmProvider: ran out of canned responses (extra .call())")
         # Snapshot the args so the test can assert on them after.
         self.calls.append(
             {
@@ -93,9 +91,7 @@ class StubArtifactStore:
         self.put_calls: list[tuple[str, bytes, str | None]] = []
         self.delete_calls: list[str] = []
 
-    async def put(
-        self, key: str, data: bytes, content_type: str | None = None
-    ) -> None:
+    async def put(self, key: str, data: bytes, content_type: str | None = None) -> None:
         self._data[key] = data
         self.put_calls.append((key, data, content_type))
 

@@ -294,9 +294,7 @@ async def _drive_phase3_for_records(  # noqa: PLR0913
                 if target_pool is not None and outcome.dispatch_outcome is not None:
                     handler_outcome = outcome.dispatch_outcome.handler_outcome
                     if handler_outcome.submitted_handles:
-                        available_per_pool[target_pool] = (
-                            available_per_pool.get(target_pool, 0) - 1
-                        )
+                        available_per_pool[target_pool] = available_per_pool.get(target_pool, 0) - 1
             case "no_match":
                 stats.phase3_no_match += 1
             case "conflict":
@@ -352,9 +350,7 @@ async def run_worker_cycle(  # noqa: PLR0913
     stats = WorkerCycleStats()
 
     # ---- Phase 1: complete ---------------------------------------------------
-    phase1_records = await _gather_phase1_records(
-        spec=spec, metadata_store=metadata_store
-    )
+    phase1_records = await _gather_phase1_records(spec=spec, metadata_store=metadata_store)
     await _drive_phase1_for_records(
         spec=spec,
         metadata_store=metadata_store,
@@ -367,9 +363,7 @@ async def run_worker_cycle(  # noqa: PLR0913
     )
 
     # ---- Phase 2: discover ---------------------------------------------------
-    phase2_records = await _gather_phase2_records(
-        spec=spec, metadata_store=metadata_store
-    )
+    phase2_records = await _gather_phase2_records(spec=spec, metadata_store=metadata_store)
     stats.phase2_candidates = len(phase2_records)
 
     # ---- Phase 3: dispatch ---------------------------------------------------

@@ -106,8 +106,7 @@ class PipelineSpec(BaseModel):
         state_names = {s.name for s in self.states}
         if self.initial_state not in state_names:
             raise ValueError(
-                f"initial_state {self.initial_state!r} is not in states "
-                f"({sorted(state_names)})"
+                f"initial_state {self.initial_state!r} is not in states ({sorted(state_names)})"
             )
         return self
 
@@ -120,9 +119,7 @@ class PipelineSpec(BaseModel):
                 duplicates.add(state.name)
             seen.add(state.name)
         if duplicates:
-            raise ValueError(
-                f"states declares duplicate names: {sorted(duplicates)}"
-            )
+            raise ValueError(f"states declares duplicate names: {sorted(duplicates)}")
         return self
 
     @model_validator(mode="after")
@@ -134,9 +131,7 @@ class PipelineSpec(BaseModel):
                 duplicates.add(pool.name)
             seen.add(pool.name)
         if duplicates:
-            raise ValueError(
-                f"pools declares duplicate names: {sorted(duplicates)}"
-            )
+            raise ValueError(f"pools declares duplicate names: {sorted(duplicates)}")
         return self
 
     @model_validator(mode="after")
@@ -146,13 +141,11 @@ class PipelineSpec(BaseModel):
         for edge in self.edges:
             if edge.from_state not in state_names:
                 raise ValueError(
-                    f"edge {edge.name!r} references unknown from_state "
-                    f"{edge.from_state!r}"
+                    f"edge {edge.name!r} references unknown from_state {edge.from_state!r}"
                 )
             if edge.target_state not in state_names:
                 raise ValueError(
-                    f"edge {edge.name!r} references unknown target_state "
-                    f"{edge.target_state!r}"
+                    f"edge {edge.name!r} references unknown target_state {edge.target_state!r}"
                 )
             if edge.from_state in terminal_names:
                 raise ValueError(
@@ -225,9 +218,7 @@ class PipelineSpec(BaseModel):
         phase2: dict[str, SchedulingQueryRef] = {}
         for state_name, query_ref in self.scheduling_queries.items():
             outgoing = self._outgoing_edges(state_name)
-            has_phase1 = any(
-                e.fires_on in {"job_succeeded", "job_failed"} for e in outgoing
-            )
+            has_phase1 = any(e.fires_on in {"job_succeeded", "job_failed"} for e in outgoing)
             if has_phase1:
                 phase1[state_name] = query_ref
             else:
@@ -256,9 +247,7 @@ class PipelineSpec(BaseModel):
         """Return the edges leaving ``state`` whose ``fires_on``
         matches ``fires_on``, in declaration order.
         """
-        return [
-            e for e in self.edges if e.from_state == state and e.fires_on == fires_on
-        ]
+        return [e for e in self.edges if e.from_state == state and e.fires_on == fires_on]
 
     def model_dump_for_inspection(self) -> dict[str, Any]:
         """JSON-friendly dump for telemetry / replay.

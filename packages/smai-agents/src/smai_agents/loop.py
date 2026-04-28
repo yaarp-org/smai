@@ -212,19 +212,15 @@ class AgentSession(BaseModel):
         (matching Anthropic's Messages-API convention).
         """
         # Mypy/Pyright: list-invariance — explicit cast at construction.
-        self.messages.append(
-            NormalizedMessage(role="user", content=list(results))
-        )
+        self.messages.append(NormalizedMessage(role="user", content=list(results)))
 
     def aggregate_usage(self, usage: TokenUsage) -> None:
         """Per §3.4: roll per-call usage into the session total."""
         self.usage_total = TokenUsage(
             input_tokens=self.usage_total.input_tokens + usage.input_tokens,
             output_tokens=self.usage_total.output_tokens + usage.output_tokens,
-            cache_read_tokens=self.usage_total.cache_read_tokens
-            + usage.cache_read_tokens,
-            cache_write_tokens=self.usage_total.cache_write_tokens
-            + usage.cache_write_tokens,
+            cache_read_tokens=self.usage_total.cache_read_tokens + usage.cache_read_tokens,
+            cache_write_tokens=self.usage_total.cache_write_tokens + usage.cache_write_tokens,
         )
 
 
@@ -263,16 +259,12 @@ async def run_loop(session: AgentSession) -> AgentOutcome:
         # ---- Pre-turn: between-turn deterministic logic (§3.2) ----
         if (
             session.config.truncation_check_every_turns > 0
-            and session.turn_count
-            % session.config.truncation_check_every_turns
-            == 0
+            and session.turn_count % session.config.truncation_check_every_turns == 0
         ):
             await between_turn.maybe_truncate_context(session)
         if (
             session.config.supervisor_nudge_check_every_turns > 0
-            and session.turn_count
-            % session.config.supervisor_nudge_check_every_turns
-            == 0
+            and session.turn_count % session.config.supervisor_nudge_check_every_turns == 0
         ):
             await between_turn.maybe_check_supervisor_nudge(session)
         if (
@@ -310,9 +302,7 @@ async def run_loop(session: AgentSession) -> AgentOutcome:
 
         # ``stop_reason == "tool_use"``
         session.append_assistant(response.message)
-        finish_payload, tool_results = await _execute_tool_uses(
-            response.message, session
-        )
+        finish_payload, tool_results = await _execute_tool_uses(response.message, session)
         session.append_user_with_tool_results(tool_results)
 
         if finish_tool_present and finish_payload is not None:
@@ -379,9 +369,7 @@ async def _execute_tool_uses(
             results.append(
                 ToolResultContent(
                     tool_use_id=block.id,
-                    content=(
-                        f"input validation failed for tool {block.name!r}: {exc}"
-                    ),
+                    content=(f"input validation failed for tool {block.name!r}: {exc}"),
                     is_error=True,
                 )
             )

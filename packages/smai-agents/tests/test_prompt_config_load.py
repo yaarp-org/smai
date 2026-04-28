@@ -83,9 +83,7 @@ def test_planner_paper_ingestion_variant() -> None:
 
 
 def test_contextual_evaluator_compare_to_baseline_variant() -> None:
-    config = load_prompt_config(
-        "contextual_evaluator", variant_name="compare_to_baseline"
-    )
+    config = load_prompt_config("contextual_evaluator", variant_name="compare_to_baseline")
     assert config.layer_chain == [
         "contextual_evaluator/base",
         "contextual_evaluator/compare_to_baseline",
@@ -93,9 +91,7 @@ def test_contextual_evaluator_compare_to_baseline_variant() -> None:
 
 
 def test_contextual_evaluator_compare_to_target_variant() -> None:
-    config = load_prompt_config(
-        "contextual_evaluator", variant_name="compare_to_target"
-    )
+    config = load_prompt_config("contextual_evaluator", variant_name="compare_to_target")
     assert config.layer_chain == [
         "contextual_evaluator/base",
         "contextual_evaluator/compare_to_target",

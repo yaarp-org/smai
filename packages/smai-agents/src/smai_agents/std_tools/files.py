@@ -144,8 +144,7 @@ async def _read_file_handler(
     """
     if not isinstance(parsed_input, ReadFileInput):
         raise TypeError(
-            f"read_file handler expected ReadFileInput, "
-            f"got {type(parsed_input).__name__}"
+            f"read_file handler expected ReadFileInput, got {type(parsed_input).__name__}"
         )
 
     try:
@@ -175,10 +174,7 @@ async def _read_file_handler(
     if len(lines) > MAX_READ_LINES:
         kept = lines[:MAX_READ_LINES]
         numbered = "\n".join(f"{i + 1}\t{line}" for i, line in enumerate(kept))
-        suffix = (
-            f"\n\n[truncated: showing first {MAX_READ_LINES} of "
-            f"{len(lines)} lines]"
-        )
+        suffix = f"\n\n[truncated: showing first {MAX_READ_LINES} of {len(lines)} lines]"
         return _ok_result(f"{numbered}{suffix}")
 
     numbered = "\n".join(f"{i + 1}\t{line}" for i, line in enumerate(lines))
@@ -239,8 +235,7 @@ async def _write_file_handler(
     """
     if not isinstance(parsed_input, WriteFileInput):
         raise TypeError(
-            f"write_file handler expected WriteFileInput, "
-            f"got {type(parsed_input).__name__}"
+            f"write_file handler expected WriteFileInput, got {type(parsed_input).__name__}"
         )
 
     try:
@@ -327,8 +322,7 @@ async def _edit_file_handler(
     """
     if not isinstance(parsed_input, EditFileInput):
         raise TypeError(
-            f"edit_file handler expected EditFileInput, "
-            f"got {type(parsed_input).__name__}"
+            f"edit_file handler expected EditFileInput, got {type(parsed_input).__name__}"
         )
 
     try:
@@ -353,8 +347,7 @@ async def _edit_file_handler(
     occurrences = content.count(parsed_input.old_string)
     if occurrences == 0:
         return _error_result(
-            f"old_string not found in {parsed_input.path!r}; "
-            f"check whitespace and indentation",
+            f"old_string not found in {parsed_input.path!r}; check whitespace and indentation",
         )
     if occurrences > 1:
         return _error_result(
@@ -421,8 +414,7 @@ class SearchInput(BaseModel):
     include: str | None = Field(
         default=None,
         description=(
-            "Glob pattern filtering which files to search "
-            "(e.g., '*.py'). Omit to search all files."
+            "Glob pattern filtering which files to search (e.g., '*.py'). Omit to search all files."
         ),
     )
 
@@ -439,10 +431,7 @@ async def _search_handler(
     is fast enough and keeps the tool runnable in any container.
     """
     if not isinstance(parsed_input, SearchInput):
-        raise TypeError(
-            f"search handler expected SearchInput, "
-            f"got {type(parsed_input).__name__}"
-        )
+        raise TypeError(f"search handler expected SearchInput, got {type(parsed_input).__name__}")
 
     try:
         compiled = re.compile(parsed_input.pattern)
@@ -459,8 +448,7 @@ async def _search_handler(
             return _error_result(f"path not found: {parsed_input.path}")
         if not base.is_dir():
             return _error_result(
-                f"{parsed_input.path!r} is a file, not a directory; "
-                f"search expects a directory",
+                f"{parsed_input.path!r} is a file, not a directory; search expects a directory",
             )
 
     workspace_resolved = context.workspace_path.resolve()
@@ -530,15 +518,13 @@ class ListFilesInput(BaseModel):
     path: str | None = Field(
         default=None,
         description=(
-            "Directory to list, relative to the workspace root. "
-            "Omit to list the workspace root."
+            "Directory to list, relative to the workspace root. Omit to list the workspace root."
         ),
     )
     glob: str | None = Field(
         default=None,
         description=(
-            "Glob pattern filtering listed file names "
-            "(e.g., '*.py'). Omit to list all files."
+            "Glob pattern filtering listed file names (e.g., '*.py'). Omit to list all files."
         ),
     )
     recursive: bool = Field(
@@ -554,8 +540,7 @@ async def _list_files_handler(
     """Handler for :func:`list_files`."""
     if not isinstance(parsed_input, ListFilesInput):
         raise TypeError(
-            f"list_files handler expected ListFilesInput, "
-            f"got {type(parsed_input).__name__}"
+            f"list_files handler expected ListFilesInput, got {type(parsed_input).__name__}"
         )
 
     base = context.workspace_path
@@ -639,9 +624,7 @@ def _walk_files(
             # Prune hidden / noise dirs in place so os.walk doesn't
             # descend into them.
             dirnames[:] = [
-                d
-                for d in dirnames
-                if not d.startswith(".") and d not in _LIST_HIDDEN_DIRS
+                d for d in dirnames if not d.startswith(".") and d not in _LIST_HIDDEN_DIRS
             ]
             root_path = Path(root)
             for name in sorted(filenames):

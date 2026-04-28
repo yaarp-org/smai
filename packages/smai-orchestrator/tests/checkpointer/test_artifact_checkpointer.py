@@ -47,9 +47,7 @@ async def test_default_prefix_addressing(localfs_store: LocalFsStore) -> None:
     tooling (manual debugging, S3 console queries) can find it."""
     cp = ArtifactStoreCheckpointer(localfs_store)
     key = CheckpointKey(thread_id="cg_42", step_id="step", input_hash="abc")
-    await cp.save(
-        Checkpoint(key=key, result=b"body", created_at=datetime(2026, 4, 28, tzinfo=UTC))
-    )
+    await cp.save(Checkpoint(key=key, result=b"body", created_at=datetime(2026, 4, 28, tzinfo=UTC)))
     expected_body_key = f"{DEFAULT_PREFIX}/cg_42/step/abc.bin"
     assert await localfs_store.exists(expected_body_key)
     expected_meta_key = f"{DEFAULT_PREFIX}/cg_42/step/abc.meta.json"
@@ -59,9 +57,7 @@ async def test_default_prefix_addressing(localfs_store: LocalFsStore) -> None:
 async def test_custom_prefix_round_trip(localfs_store: LocalFsStore) -> None:
     cp = ArtifactStoreCheckpointer(localfs_store, prefix="custom/path")
     key = CheckpointKey(thread_id="t", step_id="s", input_hash="h")
-    await cp.save(
-        Checkpoint(key=key, result=b"x", created_at=datetime(2026, 4, 28, tzinfo=UTC))
-    )
+    await cp.save(Checkpoint(key=key, result=b"x", created_at=datetime(2026, 4, 28, tzinfo=UTC)))
     assert await localfs_store.exists("custom/path/t/s/h.bin")
 
 
@@ -70,12 +66,10 @@ async def test_large_body_round_trip(localfs_store: LocalFsStore) -> None:
     — exercise the path with a 256 KiB body to confirm the binary
     pipeline doesn't silently truncate / re-encode."""
     cp = ArtifactStoreCheckpointer(localfs_store)
-    big = (b"\x00\x01\x02\x03" * (256 * 1024 // 4))
+    big = b"\x00\x01\x02\x03" * (256 * 1024 // 4)
     assert len(big) == 256 * 1024
     key = CheckpointKey(thread_id="cg_big", step_id="trace", input_hash="big")
-    await cp.save(
-        Checkpoint(key=key, result=big, created_at=datetime(2026, 4, 28, tzinfo=UTC))
-    )
+    await cp.save(Checkpoint(key=key, result=big, created_at=datetime(2026, 4, 28, tzinfo=UTC)))
     loaded = await cp.load(key)
     assert loaded is not None
     assert loaded.result == big
@@ -103,9 +97,7 @@ async def test_wall_clock_seam(localfs_store: LocalFsStore) -> None:
     fake_clock = FakeClock(start=datetime(2030, 1, 1, tzinfo=UTC))
     cp = ArtifactStoreCheckpointer(localfs_store, wall_clock=fake_clock)
     key = CheckpointKey(thread_id="t", step_id="s", input_hash="h")
-    await cp.save(
-        Checkpoint(key=key, result=b"x", created_at=datetime(2026, 4, 28, tzinfo=UTC))
-    )
+    await cp.save(Checkpoint(key=key, result=b"x", created_at=datetime(2026, 4, 28, tzinfo=UTC)))
     loaded = await cp.load(key)
     assert loaded is not None
     # The save-time created_at flows through verbatim, not derived from

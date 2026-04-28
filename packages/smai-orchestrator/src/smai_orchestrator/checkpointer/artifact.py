@@ -72,16 +72,10 @@ class ArtifactStoreCheckpointer:
         self._wall_clock = wall_clock
 
     def _body_key(self, key: CheckpointKey) -> str:
-        return (
-            f"{self._prefix}/{key.thread_id}/{key.step_id}/"
-            f"{key.input_hash}.bin"
-        )
+        return f"{self._prefix}/{key.thread_id}/{key.step_id}/{key.input_hash}.bin"
 
     def _meta_key(self, key: CheckpointKey) -> str:
-        return (
-            f"{self._prefix}/{key.thread_id}/{key.step_id}/"
-            f"{key.input_hash}.meta.json"
-        )
+        return f"{self._prefix}/{key.thread_id}/{key.step_id}/{key.input_hash}.meta.json"
 
     async def load(self, key: CheckpointKey) -> Checkpoint | None:
         try:

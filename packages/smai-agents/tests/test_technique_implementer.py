@@ -94,32 +94,38 @@ async def test_run_technique_implementer_session_produces_technique_module(
     canned = [
         # Turn 1: write techniques/<name>.py.
         model_response(
-            tool_uses=[(
-                "tu-w",
-                "write_file",
-                {
-                    "path": "techniques/cutout.py",
-                    "content": "def apply(config):\n    return {}\n",
-                },
-            )],
+            tool_uses=[
+                (
+                    "tu-w",
+                    "write_file",
+                    {
+                        "path": "techniques/cutout.py",
+                        "content": "def apply(config):\n    return {}\n",
+                    },
+                )
+            ],
             stop_reason="tool_use",
         ),
         # Turn 2: validate.
         model_response(
-            tool_uses=[(
-                "tu-run",
-                "run_experiment",
-                {"technique": "cutout", "seed": 42, "epochs": 1, "subset_fraction": 0.1},
-            )],
+            tool_uses=[
+                (
+                    "tu-run",
+                    "run_experiment",
+                    {"technique": "cutout", "seed": 42, "epochs": 1, "subset_fraction": 0.1},
+                )
+            ],
             stop_reason="tool_use",
         ),
         # Turn 3: finish.
         model_response(
-            tool_uses=[(
-                "tu-fin",
-                "finish",
-                {"success": True, "summary": "ok"},
-            )],
+            tool_uses=[
+                (
+                    "tu-fin",
+                    "finish",
+                    {"success": True, "summary": "ok"},
+                )
+            ],
             stop_reason="tool_use",
         ),
     ]
@@ -247,9 +253,7 @@ async def test_dispatch_technique_implementation_skips_additive_baseline(
     )
 
     artifact_store = StubArtifactStore()
-    contract_key = (
-        "comparison-groups/cg-1/entries/entry-baseline/technique_contract.json"
-    )
+    contract_key = "comparison-groups/cg-1/entries/entry-baseline/technique_contract.json"
     await artifact_store.put(
         contract_key,
         technique_contract.model_dump_json(indent=2).encode("utf-8"),
@@ -308,9 +312,7 @@ async def test_dispatch_technique_implementation_dispatches_substitutive_baselin
     )
 
     artifact_store = StubArtifactStore()
-    contract_key = (
-        "comparison-groups/cg-1/entries/entry-vgg/technique_contract.json"
-    )
+    contract_key = "comparison-groups/cg-1/entries/entry-vgg/technique_contract.json"
     await artifact_store.put(
         contract_key,
         technique_contract.model_dump_json(indent=2).encode("utf-8"),

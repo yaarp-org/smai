@@ -51,8 +51,7 @@ class ToolBinding(BaseModel):
     name: str = Field(
         ...,
         description=(
-            "Tool name as registered in the ToolRegistry "
-            "(e.g., 'read_file', 'run_experiment')."
+            "Tool name as registered in the ToolRegistry (e.g., 'read_file', 'run_experiment')."
         ),
     )
     enabled: bool = Field(
@@ -85,8 +84,7 @@ class StructuredOutputTool(BaseModel):
     name: str = Field(
         ...,
         description=(
-            "Tool name passed to the LlmProvider as the synthetic tool "
-            "(e.g., 'submit_review')."
+            "Tool name passed to the LlmProvider as the synthetic tool (e.g., 'submit_review')."
         ),
     )
     description: str = Field(

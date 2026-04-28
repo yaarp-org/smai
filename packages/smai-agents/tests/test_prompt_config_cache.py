@@ -31,9 +31,7 @@ def test_cache_distinguishes_variants() -> None:
     assert base is not variant
     # Both stay cached.
     assert load_prompt_config("harness_builder") is base
-    assert (
-        load_prompt_config("harness_builder", variant_name="lint_first") is variant
-    )
+    assert load_prompt_config("harness_builder", variant_name="lint_first") is variant
 
 
 def test_cache_distinguishes_roles() -> None:

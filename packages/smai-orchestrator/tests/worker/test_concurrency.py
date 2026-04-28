@@ -87,9 +87,7 @@ async def test_compute_pool_slots_single_pool() -> None:
         config=config,
     )
     assert len(slots) == 1
-    assert slots[0] == PoolSlot(
-        name="agents", limit=10, in_flight=2, available=8, priority=0
-    )
+    assert slots[0] == PoolSlot(name="agents", limit=10, in_flight=2, available=8, priority=0)
 
 
 async def test_compute_pool_slots_pool_overrides_apply() -> None:

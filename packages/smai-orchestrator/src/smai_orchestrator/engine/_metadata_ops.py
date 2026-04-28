@@ -31,9 +31,7 @@ from smai_orchestrator.entities.tracking import (
 
 # Union of state-driven record types. ``FactorModelRecord`` is excluded
 # per DEC-031 #5 (degenerate lifecycle; not state-driven).
-StateDrivenRecord = (
-    ComparisonGroupRecord | EntryRecord | RunRecord | ProposalRecord | PaperRecord
-)
+StateDrivenRecord = ComparisonGroupRecord | EntryRecord | RunRecord | ProposalRecord | PaperRecord
 
 
 def entity_id_for(record: StateDrivenRecord) -> str:
@@ -91,25 +89,17 @@ async def transition_state(
     state = cast(Any, target_state)
     match kind:
         case "cg":
-            return await store.transition_cg_state(
-                entity_id, expected_version, state, **fields
-            )
+            return await store.transition_cg_state(entity_id, expected_version, state, **fields)
         case "entry":
-            return await store.transition_entry_state(
-                entity_id, expected_version, state, **fields
-            )
+            return await store.transition_entry_state(entity_id, expected_version, state, **fields)
         case "run":
-            return await store.transition_run_state(
-                entity_id, expected_version, state, **fields
-            )
+            return await store.transition_run_state(entity_id, expected_version, state, **fields)
         case "proposal":
             return await store.transition_proposal_state(
                 entity_id, expected_version, state, **fields
             )
         case "paper":
-            return await store.transition_paper_state(
-                entity_id, expected_version, state, **fields
-            )
+            return await store.transition_paper_state(entity_id, expected_version, state, **fields)
 
 
 __all__ = ["StateDrivenRecord", "entity_id_for", "get_entity", "transition_state"]

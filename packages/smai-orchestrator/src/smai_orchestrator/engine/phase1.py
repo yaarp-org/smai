@@ -135,9 +135,7 @@ def _read_handle(record: StateDrivenRecord, handle_field: str) -> JobHandle | No
     if handle is None:
         return None
     if not isinstance(handle, JobHandle):
-        raise TypeError(
-            f"record.{handle_field} is not a JobHandle: got {type(handle).__name__}"
-        )
+        raise TypeError(f"record.{handle_field} is not a JobHandle: got {type(handle).__name__}")
     return handle
 
 

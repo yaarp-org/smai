@@ -234,9 +234,7 @@ async def test_memoized_wall_clock_pins_created_at() -> None:
     # Confirm the saved checkpoint carries the fake wall clock's now.
     from smai_orchestrator.checkpointer import CheckpointKey
 
-    key = CheckpointKey(
-        thread_id="cg_1", step_id="step_v1", input_hash=stable_hash(inputs)
-    )
+    key = CheckpointKey(thread_id="cg_1", step_id="step_v1", input_hash=stable_hash(inputs))
     loaded = await cp.load(key)
     assert loaded is not None
     assert loaded.created_at == datetime(2026, 1, 1, tzinfo=UTC)

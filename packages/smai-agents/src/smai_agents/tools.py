@@ -217,9 +217,7 @@ async def _finish_handler(
     """
     del context  # nothing to do
     if not isinstance(parsed_input, FinishInput):
-        raise TypeError(
-            f"finish handler expected FinishInput, got {type(parsed_input).__name__}"
-        )
+        raise TypeError(f"finish handler expected FinishInput, got {type(parsed_input).__name__}")
     return ToolResultContent(
         tool_use_id="",  # populated by the loop dispatcher
         content=f"finished (success={parsed_input.success}): {parsed_input.summary}",

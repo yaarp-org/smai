@@ -341,10 +341,7 @@ def make_dispatch_harness_build(
         except ValueError as exc:
             return DispatchOutcome(
                 submitted_handles=[],
-                error=(
-                    f"HarnessContract at {contract_key!r} failed Pydantic "
-                    f"validation: {exc}"
-                ),
+                error=(f"HarnessContract at {contract_key!r} failed Pydantic validation: {exc}"),
             )
 
         manifest_key = manifest_path_fn(cg_id)

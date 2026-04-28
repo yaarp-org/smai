@@ -42,10 +42,7 @@ class SpecNotRegisteredError(LookupError):
     def __init__(self, name: str, available: list[str]) -> None:
         self.name = name
         self.available = available
-        super().__init__(
-            f"no PipelineSpec registered as {name!r}; "
-            f"registered: {sorted(available)}"
-        )
+        super().__init__(f"no PipelineSpec registered as {name!r}; registered: {sorted(available)}")
 
 
 _lock = Lock()
@@ -61,9 +58,7 @@ def register_pipeline_spec(spec: PipelineSpec) -> None:
     """
     with _lock:
         if spec.name in _registry:
-            raise DuplicateSpecError(
-                f"PipelineSpec {spec.name!r} is already registered"
-            )
+            raise DuplicateSpecError(f"PipelineSpec {spec.name!r} is already registered")
         _registry[spec.name] = spec
 
 

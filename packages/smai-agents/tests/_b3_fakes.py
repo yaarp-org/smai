@@ -219,9 +219,7 @@ def make_minimal_manifest(
 
     manifest = HarnessAPIManifest(
         extension_points=ext_points,
-        integration_pattern_summary=(
-            "test fixture — additive optional / substitutive mandatory"
-        ),
+        integration_pattern_summary=("test fixture — additive optional / substitutive mandatory"),
         harness_version_hash=harness_version_hash,
         parent_harness_contract_hash=parent_harness_contract_hash,
         manifest_schema_version=MANIFEST_SCHEMA_VERSION,

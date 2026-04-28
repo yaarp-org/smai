@@ -24,9 +24,7 @@ class _EchoInput(BaseModel):
     text: str
 
 
-async def _echo_handler(
-    parsed_input: BaseModel, context: ToolContext
-) -> ToolResultContent:
+async def _echo_handler(parsed_input: BaseModel, context: ToolContext) -> ToolResultContent:
     del context
     if not isinstance(parsed_input, _EchoInput):
         raise TypeError("expected EchoInput")
@@ -41,9 +39,7 @@ class _RaisingInput(BaseModel):
     why: str
 
 
-async def _raising_handler(
-    parsed_input: BaseModel, context: ToolContext
-) -> ToolResultContent:
+async def _raising_handler(parsed_input: BaseModel, context: ToolContext) -> ToolResultContent:
     del context
     if not isinstance(parsed_input, _RaisingInput):
         raise TypeError("expected RaisingInput")
@@ -156,9 +152,7 @@ async def test_loop_exits_with_exhausted_turns_on_budget(tmp_path: Path) -> None
     # No finish tool — agent has no way to gracefully exit.
 
     config = AgentLoopConfig(max_turns=3, status_write_every_turns=0)
-    session = _build_session(
-        llm=llm, workspace=tmp_path, tools=registry, config=config
-    )
+    session = _build_session(llm=llm, workspace=tmp_path, tools=registry, config=config)
     outcome = await run_loop(session)
 
     assert outcome.kind == "exhausted_turns"

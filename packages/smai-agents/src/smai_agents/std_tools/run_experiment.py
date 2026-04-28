@@ -108,16 +108,12 @@ class RunExperimentInput(BaseModel):
     )
     epochs: int = Field(
         default=MAX_VALIDATION_EPOCHS,
-        description=(
-            f"Number of training epochs (capped at {MAX_VALIDATION_EPOCHS})."
-        ),
+        description=(f"Number of training epochs (capped at {MAX_VALIDATION_EPOCHS})."),
         ge=1,
     )
     subset_fraction: float = Field(
         default=MAX_VALIDATION_SUBSET,
-        description=(
-            f"Fraction of dataset to use (capped at {MAX_VALIDATION_SUBSET})."
-        ),
+        description=(f"Fraction of dataset to use (capped at {MAX_VALIDATION_SUBSET})."),
         gt=0.0,
         le=1.0,
     )
@@ -228,10 +224,7 @@ def make_run_experiment_tool(
         if epochs != parsed_input.epochs:
             capped.append(f"epochs capped from {parsed_input.epochs} to {epochs}")
         if subset != parsed_input.subset_fraction:
-            capped.append(
-                f"subset_fraction capped from "
-                f"{parsed_input.subset_fraction} to {subset}"
-            )
+            capped.append(f"subset_fraction capped from {parsed_input.subset_fraction} to {subset}")
 
         command = _build_command(
             technique=parsed_input.technique,
@@ -355,8 +348,7 @@ async def _harvest_result(
         metrics = _load_metrics(metrics_path)
         if metrics is None:
             failure_reason = (
-                f"metrics.json present but unreadable; substrate state="
-                f"{status.state!r}"
+                f"metrics.json present but unreadable; substrate state={status.state!r}"
             )
 
     validation_path = workspace / _VALIDATION_RESULTS_FILENAME
@@ -374,10 +366,7 @@ async def _harvest_result(
         # Append a snippet of validation_results.json on failure for
         # debugging — the agent may use it to decide whether to retry
         # with a different config or escalate.
-        failure_reason = (
-            f"{failure_reason}\n--- validation_results.json ---\n"
-            f"{validation_payload}"
-        )
+        failure_reason = f"{failure_reason}\n--- validation_results.json ---\n{validation_payload}"
 
     return RunExperimentResult(
         completed=succeeded,

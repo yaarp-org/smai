@@ -128,9 +128,7 @@ def _build_synthetic_spec(*, name: str, dispatch_handler) -> PipelineSpec:  # ty
         pools=[ConcurrencyPool(name="agents", limit=4)],
         scheduling_queries={
             "draft": SchedulingQueryRef(name="ready_harness", fn=_phase2_query),
-            "implementing": SchedulingQueryRef(
-                name="in_flight_harness", fn=_phase1_query
-            ),
+            "implementing": SchedulingQueryRef(name="in_flight_harness", fn=_phase1_query),
         },
     )
 
@@ -165,9 +163,7 @@ async def test_runtime_config_drives_synthetic_spec_to_completion(
         submitted_handles.append(handle.handle)
         # Pre-set the status the fake compute will report so phase-1
         # drives the entity to terminal on the next cycle.
-        fake_compute.set_status(
-            handle.handle, make_job_status("succeeded", exit_code=0)
-        )
+        fake_compute.set_status(handle.handle, make_job_status("succeeded", exit_code=0))
         out = DispatchOutcome()
         out.submitted_handles.append(handle)
         return out
@@ -269,9 +265,7 @@ async def test_runtime_config_with_overrides_for_all_four_plugins(
         out.submitted_handles.append(handle)
         return out
 
-    spec = _build_synthetic_spec(
-        name="all_override_spec", dispatch_handler=_handler
-    )
+    spec = _build_synthetic_spec(name="all_override_spec", dispatch_handler=_handler)
     register_pipeline_spec(spec)
 
     # Use real SqliteStore + LocalFsStore via overrides (constructed

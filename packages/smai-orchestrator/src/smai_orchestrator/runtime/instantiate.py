@@ -112,9 +112,7 @@ class PluginInstantiationError(RuntimeError):
     full traceback while the runtime carries the plugin identity.
     """
 
-    def __init__(
-        self, *, group: str, name: str, cause: BaseException
-    ) -> None:
+    def __init__(self, *, group: str, name: str, cause: BaseException) -> None:
         self.group = group
         self.name = name
         self.__cause__ = cause
@@ -223,16 +221,12 @@ def _load_entry_point(group: str, name: str) -> type:
     try:
         cls = ep.load()
     except Exception as exc:  # noqa: BLE001 — surface as typed wrapper
-        raise PluginInstantiationError(
-            group=group, name=name, cause=exc
-        ) from exc
+        raise PluginInstantiationError(group=group, name=name, cause=exc) from exc
     if not isinstance(cls, type):
         raise PluginInstantiationError(
             group=group,
             name=name,
-            cause=TypeError(
-                f"entry point {ep.name!r} resolved to {cls!r}, expected a class"
-            ),
+            cause=TypeError(f"entry point {ep.name!r} resolved to {cls!r}, expected a class"),
         )
     return cls
 
@@ -251,30 +245,22 @@ def list_discovered_plugins() -> dict[str, list[str]]:
     return out
 
 
-def _construct_with_kwargs(
-    cls: type, *, group: str, name: str, kwargs: dict[str, Any]
-) -> Any:
+def _construct_with_kwargs(cls: type, *, group: str, name: str, kwargs: dict[str, Any]) -> Any:
     """Call ``cls(**kwargs)`` — wrapping any exception in
     :class:`PluginInstantiationError`.
     """
     try:
         return cls(**kwargs)
     except Exception as exc:  # noqa: BLE001 — typed wrapper
-        raise PluginInstantiationError(
-            group=group, name=name, cause=exc
-        ) from exc
+        raise PluginInstantiationError(group=group, name=name, cause=exc) from exc
 
 
-def _check_protocol(
-    instance: object, *, group: str, name: str, interface: type
-) -> None:
+def _check_protocol(instance: object, *, group: str, name: str, interface: type) -> None:
     """Runtime ``isinstance`` smoke-check (per `07` §3.2 — attribute
     presence only).
     """
     if not isinstance(instance, interface):
-        raise PluginConformanceError(
-            group=group, name=name, interface=interface
-        )
+        raise PluginConformanceError(group=group, name=name, interface=interface)
 
 
 # === Lifecycle hooks (duck-typed) ===========================================
@@ -325,9 +311,7 @@ async def _construct_metadata_store(
         name=selection.metadata_store,
         kwargs=selection.metadata_store_config,
     )
-    _check_protocol(
-        instance, group=group, name=selection.metadata_store, interface=MetadataStore
-    )
+    _check_protocol(instance, group=group, name=selection.metadata_store, interface=MetadataStore)
     await _maybe_migrate(instance)
     stack.push_async_callback(_maybe_dispose, instance)
     return instance
@@ -344,17 +328,13 @@ async def _construct_artifact_store(
         name=selection.artifact_store,
         kwargs=selection.artifact_store_config,
     )
-    _check_protocol(
-        instance, group=group, name=selection.artifact_store, interface=ArtifactStore
-    )
+    _check_protocol(instance, group=group, name=selection.artifact_store, interface=ArtifactStore)
     await _maybe_migrate(instance)
     stack.push_async_callback(_maybe_dispose, instance)
     return instance
 
 
-async def _construct_compute(
-    selection: PluginSelection, stack: AsyncExitStack
-) -> Compute:
+async def _construct_compute(selection: PluginSelection, stack: AsyncExitStack) -> Compute:
     group = "smai.computes"
     cls = _load_entry_point(group, selection.compute)
     instance = _construct_with_kwargs(
@@ -363,9 +343,7 @@ async def _construct_compute(
         name=selection.compute,
         kwargs=selection.compute_config,
     )
-    _check_protocol(
-        instance, group=group, name=selection.compute, interface=Compute
-    )
+    _check_protocol(instance, group=group, name=selection.compute, interface=Compute)
     await _maybe_migrate(instance)
     stack.push_async_callback(_maybe_dispose, instance)
     return instance
@@ -427,9 +405,7 @@ async def _construct_llm_providers(
         name=selection.llm_provider,
         kwargs=selection.llm_provider_config,
     )
-    _check_protocol(
-        instance, group=group, name=selection.llm_provider, interface=LlmProvider
-    )
+    _check_protocol(instance, group=group, name=selection.llm_provider, interface=LlmProvider)
     await _maybe_migrate(instance)
     stack.push_async_callback(_maybe_dispose, instance)
     return {role: instance for role in DEFAULT_TASK_ROLES}

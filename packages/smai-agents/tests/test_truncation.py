@@ -98,9 +98,7 @@ def test_should_truncate_fires_when_estimated_tokens_cross_threshold() -> None:
     )
     big = "x" * 20_000  # ~5K tokens via the 4-char heuristic
     messages = [_msg("user", big) for _ in range(35)]  # ~175K tokens
-    assert should_truncate(
-        messages=messages, capabilities=capabilities, policy=TruncationPolicy()
-    )
+    assert should_truncate(messages=messages, capabilities=capabilities, policy=TruncationPolicy())
 
 
 def test_should_truncate_includes_system_prompt_overhead() -> None:

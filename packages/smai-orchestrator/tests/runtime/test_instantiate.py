@@ -140,9 +140,7 @@ async def test_instantiate_real_plugins_e2e(tmp_path: Path) -> None:
         assert set(plugins.llm_providers.keys()) == set(DEFAULT_TASK_ROLES)
         unique_providers = {id(p) for p in plugins.llm_providers.values()}
         assert len(unique_providers) == 1
-        assert isinstance(
-            next(iter(plugins.llm_providers.values())), BedrockProvider
-        )
+        assert isinstance(next(iter(plugins.llm_providers.values())), BedrockProvider)
 
         # Protocol smoke-checks pass.
         assert isinstance(plugins.metadata_store, MetadataStore)
@@ -357,9 +355,7 @@ async def test_overrides_short_circuit_discovery() -> None:
         assert plugins.artifact_store is overrides.artifact_store
         assert plugins.compute is overrides.compute
         # llm_providers came from discovery (no override for it).
-        assert isinstance(
-            next(iter(plugins.llm_providers.values())), BedrockProvider
-        )
+        assert isinstance(next(iter(plugins.llm_providers.values())), BedrockProvider)
 
 
 async def test_overrides_with_llm_providers_short_circuits() -> None:

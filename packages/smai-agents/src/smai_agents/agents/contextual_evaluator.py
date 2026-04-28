@@ -125,9 +125,13 @@ async def run_contextual_evaluation(
     :class:`smai_agents.StructuredCallFailed` on second-attempt
     failure (no silent fallback).
     """
-    cfg = prompt_config if prompt_config is not None else load_prompt_config(
-        role="contextual_evaluator",
-        variant_name=input.comparison_rule,
+    cfg = (
+        prompt_config
+        if prompt_config is not None
+        else load_prompt_config(
+            role="contextual_evaluator",
+            variant_name=input.comparison_rule,
+        )
     )
     sot = cfg.structured_output_tool
     if sot is None:
