@@ -1,0 +1,119 @@
+# Worked Example 3a (continuous-valued additive factor): pruning sparsity sweep on
+# ResNet-50 / CIFAR-10. Transcribed from `Yaarp/dev/smai_design/02-example-experiments.md`.
+# Demonstrates `NumericValue` on Levels and a single technique parameterized
+# differently across treatment levels.
+kind: experiment
+experiment:
+  id: pruning_sparsity_sweep_resnet50_cifar10
+  hypothesis: |
+    Top-1 accuracy on CIFAR-10 decreases monotonically with weight
+    pruning sparsity, using the RigL pruning method with otherwise
+    identical training conditions.
+  factor_model_id: null
+
+  factors:
+    - name: pruning_sparsity
+      type: additive
+      description: |
+        Weight pruning applied during training (RigL method). Baseline
+        is dense (no pruning); treatment levels are at progressively
+        higher sparsity ratios on the same continuous axis.
+
+  controlled_conditions:
+    dataset:
+      name: cifar10
+      split: standard_50k_train_10k_test
+    architecture:
+      name: resnet50
+    optimization:
+      optimizer: adamw
+      learning_rate: 0.001
+      weight_decay: 0.0001
+      batch_size: 128
+      epochs: 100
+    seeds: [42, 1337, 2024, 9999, 55]
+    pruning_method: rigl
+
+  entries:
+    - id: dense_baseline
+      is_baseline: true
+      level:
+        factor: pruning_sparsity
+        name: dense
+        technique_id: null
+
+    - id: sparsity_50
+      is_baseline: false
+      level:
+        factor: pruning_sparsity
+        name: half_sparse
+        technique_id: tech_rigl
+        technique_params:
+          sparsity: 0.5
+        value:
+          value: 0.5
+          kind: continuous
+          unit: fraction
+          min: 0.0
+          max: 1.0
+
+    - id: sparsity_70
+      is_baseline: false
+      level:
+        factor: pruning_sparsity
+        name: 70_sparse
+        technique_id: tech_rigl
+        technique_params:
+          sparsity: 0.7
+        value:
+          value: 0.7
+          kind: continuous
+          unit: fraction
+          min: 0.0
+          max: 1.0
+
+    - id: sparsity_90
+      is_baseline: false
+      level:
+        factor: pruning_sparsity
+        name: 90_sparse
+        technique_id: tech_rigl
+        technique_params:
+          sparsity: 0.9
+        value:
+          value: 0.9
+          kind: continuous
+          unit: fraction
+          min: 0.0
+          max: 1.0
+
+    - id: sparsity_99
+      is_baseline: false
+      level:
+        factor: pruning_sparsity
+        name: 99_sparse
+        technique_id: tech_rigl
+        technique_params:
+          sparsity: 0.99
+        value:
+          value: 0.99
+          kind: continuous
+          unit: fraction
+          min: 0.0
+          max: 1.0
+
+  validation:
+    metric:
+      kind: atomic
+      ref: top_1_accuracy
+    direction: higher_is_better
+    aggregation:
+      method: mean
+    comparison:
+      rule: compare_to_baseline
+      threshold: 0.01
+    seed_count_required: 5
+    rationale: |
+      Standard CIFAR-10 metric. Threshold of 1pp is the conventional
+      degradation budget for "small enough to not matter" in pruning
+      literature.

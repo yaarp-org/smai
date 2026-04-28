@@ -1,0 +1,187 @@
+# Worked Example 4 (Factor Model multi-CG grouping): ResNet-50 architectural
+# improvements on ImageNet. Transcribed from
+# `Yaarp/dev/smai_design/02-example-experiments.md` Example 4.
+# Three independent single-factor CGs share a research question and shared
+# controlled conditions. Each CG is independently runnable and verifiable;
+# the FactorModel just groups them per DEC-014.
+kind: factor_model
+factor_model:
+  id: resnet50_imagenet_arch_improvements_2024
+  research_question: |
+    Which architectural / training modifications most improve ResNet-50's
+    top-1 accuracy on ImageNet under matched conditions? Investigated
+    independently as three single-factor comparisons.
+  shared_conditions:
+    dataset:
+      name: imagenet
+      split: standard_train_val
+    architecture:
+      name: resnet50_skeleton
+    optimization:
+      optimizer: adamw
+      learning_rate: 0.001
+      weight_decay: 0.0001
+      batch_size: 256
+      epochs: 90
+    seeds: [42, 1337, 2024, 9999, 55]
+  comparison_group_ids:
+    - cg_activation_function
+    - cg_normalization_layer
+    - cg_training_augmentation
+
+experiments:
+  - id: cg_activation_function
+    hypothesis: |
+      Modern activations (GELU, SiLU) outperform ReLU for ResNet-50 on ImageNet.
+    factor_model_id: resnet50_imagenet_arch_improvements_2024
+    factors:
+      - name: activation_function
+        type: substitutive
+        description: Activation function in the residual blocks.
+    controlled_conditions:
+      dataset:
+        name: imagenet
+        split: standard_train_val
+      architecture:
+        name: resnet50_skeleton
+      optimization:
+        optimizer: adamw
+        learning_rate: 0.001
+        weight_decay: 0.0001
+        batch_size: 256
+        epochs: 90
+      seeds: [42, 1337, 2024, 9999, 55]
+    entries:
+      - id: relu_reference
+        is_baseline: true
+        level:
+          factor: activation_function
+          name: ReLU
+          technique_id: tech_relu
+      - id: gelu
+        is_baseline: false
+        level:
+          factor: activation_function
+          name: GELU
+          technique_id: tech_gelu
+      - id: silu
+        is_baseline: false
+        level:
+          factor: activation_function
+          name: SiLU
+          technique_id: tech_silu
+    validation:
+      metric:
+        kind: atomic
+        ref: top_1_accuracy
+      direction: higher_is_better
+      aggregation:
+        method: mean
+      comparison:
+        rule: compare_to_baseline
+        threshold: 0.003
+      seed_count_required: 5
+
+  - id: cg_normalization_layer
+    hypothesis: |
+      LayerNorm or GroupNorm matches BatchNorm for ResNet-50 on ImageNet
+      while removing the batch-size dependency.
+    factor_model_id: resnet50_imagenet_arch_improvements_2024
+    factors:
+      - name: normalization_layer
+        type: substitutive
+        description: Normalization layer in residual blocks.
+    controlled_conditions:
+      dataset:
+        name: imagenet
+        split: standard_train_val
+      architecture:
+        name: resnet50_skeleton
+      optimization:
+        optimizer: adamw
+        learning_rate: 0.001
+        weight_decay: 0.0001
+        batch_size: 256
+        epochs: 90
+      seeds: [42, 1337, 2024, 9999, 55]
+    entries:
+      - id: bn_reference
+        is_baseline: true
+        level:
+          factor: normalization_layer
+          name: BatchNorm
+          technique_id: tech_batchnorm
+      - id: layernorm
+        is_baseline: false
+        level:
+          factor: normalization_layer
+          name: LayerNorm
+          technique_id: tech_layernorm
+      - id: groupnorm
+        is_baseline: false
+        level:
+          factor: normalization_layer
+          name: GroupNorm
+          technique_id: tech_groupnorm
+    validation:
+      metric:
+        kind: atomic
+        ref: top_1_accuracy
+      direction: higher_is_better
+      aggregation:
+        method: mean
+      comparison:
+        rule: compare_to_baseline
+        threshold: 0.003
+      seed_count_required: 5
+
+  - id: cg_training_augmentation
+    hypothesis: |
+      Mixup augmentation improves ResNet-50 top-1 accuracy on ImageNet
+      vs. baseline standard-augmentation training.
+    factor_model_id: resnet50_imagenet_arch_improvements_2024
+    factors:
+      - name: mixup_augmentation
+        type: additive
+        description: Mixup data augmentation.
+    controlled_conditions:
+      dataset:
+        name: imagenet
+        split: standard_train_val
+      architecture:
+        name: resnet50_skeleton
+      optimization:
+        optimizer: adamw
+        learning_rate: 0.001
+        weight_decay: 0.0001
+        batch_size: 256
+        epochs: 90
+      seeds: [42, 1337, 2024, 9999, 55]
+      activation_function: relu
+      normalization_layer: batchnorm
+    entries:
+      - id: no_mixup_baseline
+        is_baseline: true
+        level:
+          factor: mixup_augmentation
+          name: absent
+          technique_id: null
+      - id: mixup_treatment
+        is_baseline: false
+        level:
+          factor: mixup_augmentation
+          name: present
+          technique_id: tech_mixup
+          technique_params:
+            alpha: 0.2
+    validation:
+      metric:
+        kind: atomic
+        ref: top_1_accuracy
+      direction: higher_is_better
+      aggregation:
+        method: mean
+      comparison:
+        rule: compare_to_baseline
+        threshold: 0.003
+      seed_count_required: 5

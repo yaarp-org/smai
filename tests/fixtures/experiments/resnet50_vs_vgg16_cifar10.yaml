@@ -1,0 +1,64 @@
+# Worked Example 1 (substitutive single-factor): ResNet-50 vs VGG-16 on CIFAR-10.
+# Transcribed from `Yaarp/dev/smai_design/02-example-experiments.md` Example 1.
+# Wrapped in the v2 DSL document discriminator (`kind: experiment`) per
+# `Yaarp/designs/smai/02-dsl-and-contracts.md` §2.2.
+kind: experiment
+experiment:
+  id: arch_resnet_vs_vgg_cifar10
+  hypothesis: |
+    ResNet-50 achieves higher top-1 accuracy than VGG-16 on CIFAR-10
+    image classification under matched training conditions.
+  factor_model_id: null
+
+  factors:
+    - name: architecture
+      type: substitutive
+      description: Image classifier backbone architecture.
+
+  controlled_conditions:
+    dataset:
+      name: cifar10
+      split: standard_50k_train_10k_test
+    optimization:
+      optimizer: adamw
+      learning_rate: 0.001
+      weight_decay: 0.0001
+      batch_size: 128
+      epochs: 100
+    seeds: [42, 1337, 2024, 9999, 55]
+
+  entries:
+    - id: vgg16_reference
+      is_baseline: true
+      level:
+        factor: architecture
+        name: VGG-16
+        technique_id: tech_vgg16_cifar10
+
+    - id: resnet50_treatment
+      is_baseline: false
+      level:
+        factor: architecture
+        name: ResNet-50
+        technique_id: tech_resnet50_cifar10
+
+  validation:
+    metric:
+      kind: atomic
+      ref: top_1_accuracy
+    direction: higher_is_better
+    aggregation:
+      method: mean
+    comparison:
+      rule: compare_to_baseline
+      threshold: 0.005
+    seed_count_required: 5
+    rationale: |
+      Top-1 accuracy is the canonical CIFAR-10 image classification metric.
+      Threshold of 0.5pp matches the typical reporting precision in
+      published comparisons.
+    optional_telemetry:
+      - kind: atomic
+        ref: training_loss_curve
+      - kind: atomic
+        ref: peak_gpu_memory

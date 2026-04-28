@@ -1,0 +1,64 @@
+# Worked Example 2 (additive single-factor): Cutout augmentation present vs absent on CIFAR-10.
+# Transcribed from `Yaarp/dev/smai_design/02-example-experiments.md` Example 2.
+# Architecture (the factor in Example 1) is now a controlled variable.
+kind: experiment
+experiment:
+  id: aug_cutout_vs_none_cifar10
+  hypothesis: |
+    Cutout augmentation (size=16) improves CIFAR-10 top-1 accuracy
+    over an identical training pipeline with no augmentation, holding
+    architecture and optimizer fixed.
+  factor_model_id: null
+
+  factors:
+    - name: cutout_augmentation
+      type: additive
+      description: |
+        Cutout regularization applied to training images. Random square
+        patches are masked out at training time only.
+
+  controlled_conditions:
+    dataset:
+      name: cifar10
+      split: standard_50k_train_10k_test
+    architecture:
+      name: resnet50
+    optimization:
+      optimizer: adamw
+      learning_rate: 0.001
+      weight_decay: 0.0001
+      batch_size: 128
+      epochs: 100
+    seeds: [42, 1337, 2024, 9999, 55]
+
+  entries:
+    - id: no_aug_baseline
+      is_baseline: true
+      level:
+        factor: cutout_augmentation
+        name: absent
+        technique_id: null
+
+    - id: cutout_treatment
+      is_baseline: false
+      level:
+        factor: cutout_augmentation
+        name: present
+        technique_id: tech_cutout
+        technique_params:
+          patch_size: 16
+
+  validation:
+    metric:
+      kind: atomic
+      ref: top_1_accuracy
+    direction: higher_is_better
+    aggregation:
+      method: mean
+    comparison:
+      rule: compare_to_baseline
+      threshold: 0.003
+    seed_count_required: 5
+    rationale: |
+      Standard CIFAR-10 image classification metric. Threshold of 0.3pp
+      is calibrated for typical augmentation effect sizes.

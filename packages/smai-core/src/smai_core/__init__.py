@@ -7,6 +7,13 @@ imports of pipeline packages are mechanically forbidden by
 ``tools/check_deps.py``.
 """
 
+from smai_core.dsl import (
+    DslDocument,
+    DslDocumentAdapter,
+    ExperimentDocument,
+    FactorModelDocument,
+    load_dsl_document_from_json,
+)
 from smai_core.entities import (
     AggregationRule,
     AtomicMetricEntry,
@@ -53,10 +60,14 @@ __all__ = [
     "AtomicMetricRef",
     "ComparisonRule",
     "ControlledConditions",
+    "DslDocument",
+    "DslDocumentAdapter",
     "Entry",
     "ExperimentDefinition",
+    "ExperimentDocument",
     "Factor",
     "FactorModel",
+    "FactorModelDocument",
     "FactorTypePlugin",
     "FactorTypePluginError",
     "FidelityAnchor",
@@ -81,4 +92,5 @@ __all__ = [
     "ValidationError",
     "VerifiedExperimentDefinition",
     "load_builtin_factor_type_plugins",
+    "load_dsl_document_from_json",
 ]

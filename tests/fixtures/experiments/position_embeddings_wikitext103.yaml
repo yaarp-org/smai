@@ -1,0 +1,80 @@
+# Worked Example 3b (heterogeneous flat substitutive): position embeddings on
+# WikiText-103. Transcribed from `Yaarp/dev/smai_design/02-example-experiments.md`.
+# Heterogeneous techniques — the runtime wiring contract is owned by the
+# pipeline-layer `HarnessAPIManifest`, not by the methodology contract.
+kind: experiment
+experiment:
+  id: pos_embedding_strategy_gpt2_wikitext103
+  hypothesis: |
+    The choice of position-encoding strategy materially affects
+    perplexity on WikiText-103 language modeling, holding the
+    underlying transformer architecture and training conditions fixed.
+  factor_model_id: null
+
+  factors:
+    - name: position_strategy
+      type: substitutive
+      description: |
+        How positional information is incorporated into transformer
+        attention. Heterogeneous techniques: some modify token embeddings
+        (absolute PE), some modify the attention computation (RoPE,
+        ALiBi), and one provides no positional information at all.
+
+  controlled_conditions:
+    dataset:
+      name: wikitext_103
+      split: standard
+    architecture:
+      name: gpt2_small_skeleton
+    optimization:
+      optimizer: adamw
+      learning_rate: 0.0003
+      weight_decay: 0.01
+      batch_size: 64
+      train_steps: 100000
+    seeds: [42, 1337, 2024, 9999, 55]
+
+  entries:
+    - id: no_pe_reference
+      is_baseline: true
+      level:
+        factor: position_strategy
+        name: none
+        technique_id: tech_no_position_embedding
+
+    - id: absolute_pe
+      is_baseline: false
+      level:
+        factor: position_strategy
+        name: absolute
+        technique_id: tech_absolute_pe
+
+    - id: rope
+      is_baseline: false
+      level:
+        factor: position_strategy
+        name: rope
+        technique_id: tech_rope
+
+    - id: alibi
+      is_baseline: false
+      level:
+        factor: position_strategy
+        name: alibi
+        technique_id: tech_alibi
+
+  validation:
+    metric:
+      kind: atomic
+      ref: perplexity
+    direction: lower_is_better
+    aggregation:
+      method: mean
+    comparison:
+      rule: compare_to_baseline
+      threshold: 0.5
+    seed_count_required: 5
+    rationale: |
+      Perplexity is the canonical language-modeling metric.
+      Lower-is-better; threshold of 0.5 in absolute perplexity is
+      the typical reporting precision for WikiText-103.
