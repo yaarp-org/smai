@@ -1,0 +1,22 @@
+# DO NOT MODIFY — fixed template injected by smai-runtime.
+# Per designs/smai/10-runtime-and-templates.md §2 / §3 / §7.
+#
+# This file is hash-checked at run start (§7). Modifications cause the
+# run to fail with NoGoZoneHashError("hash_mismatch").
+"""Fixed-template loader — techniques/__init__.py."""
+
+from __future__ import annotations
+
+import importlib
+from typing import Any, Callable
+
+
+def load_technique(name: str) -> Callable[[dict[str, Any]], dict[str, Any]]:
+    """Resolve a technique-module name to its `apply()` callable."""
+    module = importlib.import_module(f"techniques.{name}")
+    apply_fn = getattr(module, "apply", None)
+    if apply_fn is None or not callable(apply_fn):
+        raise RuntimeError(
+            f"techniques/{name}.py does not export a callable apply()"
+        )
+    return apply_fn  # type: ignore[no-any-return]

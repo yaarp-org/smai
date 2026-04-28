@@ -1,13 +1,26 @@
 [project]
 name = "smai-runtime"
 version = "0.1.0"
-description = "Harness/technique Python runtime and fixed templates."
+description = "Harness/technique Python runtime, fixed templates, HarnessAPIManifest. Per 10-runtime-and-templates.md."
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "smai-core",
+    "pydantic>=2.0",
+]
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.uv.sources]
+smai-core = { workspace = true }
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/smai_runtime"]
+
+# Fixed-template files ship as resources (not Python modules) so they are
+# byte-stable on disk and pyright does not type-check them as part of
+# smai-runtime sources. Per 10-runtime-and-templates.md §3.3.
+[tool.hatch.build.targets.wheel.force-include]
+"src/smai_runtime/templates/_files/experiment.py.template" = "smai_runtime/templates/_files/experiment.py.template"
+"src/smai_runtime/templates/_files/techniques_init.py.template" = "smai_runtime/templates/_files/techniques_init.py.template"

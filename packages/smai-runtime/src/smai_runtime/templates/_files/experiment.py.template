@@ -1,0 +1,15 @@
+# DO NOT MODIFY — fixed template injected by smai-runtime.
+# Per designs/smai/10-runtime-and-templates.md §2 / §3 / §7.
+#
+# This file is hash-checked at run start (§7). Modifications cause the
+# run to fail with NoGoZoneHashError("hash_mismatch"). The substantive
+# logic lives in `smai_runtime.runner.run`; this template is a thin
+# entry point so the byte-stable hashed surface stays narrow.
+"""Fixed-template entry point — experiment.py."""
+
+from __future__ import annotations
+
+from smai_runtime.runner import run
+
+if __name__ == "__main__":
+    raise SystemExit(run())
