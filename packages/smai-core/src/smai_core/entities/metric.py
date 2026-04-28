@@ -7,9 +7,21 @@ sub-decision #1.
 
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+
+
+class MetricRefNotRegistered(KeyError):
+    """Raised by :meth:`MetricRegistry.lookup` when a ``MetricRef`` is not in the registry.
+
+    The canonical ``get_atomic`` / ``get_family`` helpers (per ``01-data-model.md``
+    §3.8.1) return ``None`` so verification rules (Task 1.5) can emit a
+    structured ``ValidationError`` rather than catching exceptions.
+    ``lookup(ref)`` is the *runtime* / Tier B convenience that raises — useful
+    when a missing ref should propagate as a programming error rather than a
+    user-facing rule failure.
+    """
 
 
 class AtomicMetricRef(BaseModel):
@@ -113,3 +125,30 @@ class MetricRegistry(BaseModel):
     def get_family(self, family_name: str) -> ParametricFamily | None:
         """Return the parametric family by name, or ``None`` if absent."""
         return self.parametric.get(family_name)
+
+    def lookup(self, ref: MetricRef) -> AtomicMetricEntry | ParametricFamily:
+        """Resolve a typed ``MetricRef`` to its registry entry; raise on miss.
+
+        Discriminates on ``ref.kind``: atomic refs resolve via ``get_atomic``;
+        parametric refs resolve to the family entry (parameter-value membership
+        is checked separately by Task 1.5's verification rules, not here).
+        Raises :class:`MetricRefNotRegistered` if the ref's name is not in the
+        corresponding registry side.
+        """
+        if isinstance(ref, AtomicMetricRef):
+            entry = self.atomic.get(ref.ref)
+            if entry is None:
+                raise MetricRefNotRegistered(
+                    f"atomic metric {ref.ref!r} is not in the v1 metric registry"
+                )
+            return entry
+        family = self.parametric.get(ref.family)
+        if family is None:
+            raise MetricRefNotRegistered(
+                f"parametric family {ref.family!r} is not in the v1 metric registry"
+            )
+        return family
+
+
+MetricRegistryEntry: TypeAlias = AtomicMetricEntry | ParametricFamily
+"""Either kind of registered metric entry — atomic or parametric family."""

@@ -7,6 +7,8 @@ imports of pipeline packages are mechanically forbidden by
 ``tools/check_deps.py``.
 """
 
+from smai_core.data import load_metric_registry
+from smai_core.defaults import load_default_registries
 from smai_core.dsl import (
     DslDocument,
     DslDocumentAdapter,
@@ -29,7 +31,9 @@ from smai_core.entities import (
     Level,
     MetricRef,
     MetricRefAdapter,
+    MetricRefNotRegistered,
     MetricRegistry,
+    MetricRegistryEntry,
     NumericValue,
     PaperFidelityAnchor,
     ParametricFamily,
@@ -45,6 +49,16 @@ from smai_core.entities import (
     ValidationError,
     VerifiedExperimentDefinition,
 )
+from smai_core.evaluation import (
+    AGGREGATION_RULE_REGISTRY,
+    COMPARISON_RULE_REGISTRY,
+    AggregationFunction,
+    AggregationRuleNotRegistered,
+    ComparisonFunction,
+    ComparisonRuleNotRegistered,
+    get_aggregation_rule,
+    get_comparison_rule,
+)
 from smai_core.factor_types import (
     AdditivePlugin,
     FactorTypePlugin,
@@ -54,11 +68,17 @@ from smai_core.factor_types import (
 )
 
 __all__ = [
+    "AGGREGATION_RULE_REGISTRY",
     "AdditivePlugin",
+    "AggregationFunction",
     "AggregationRule",
+    "AggregationRuleNotRegistered",
     "AtomicMetricEntry",
     "AtomicMetricRef",
+    "COMPARISON_RULE_REGISTRY",
+    "ComparisonFunction",
     "ComparisonRule",
+    "ComparisonRuleNotRegistered",
     "ControlledConditions",
     "DslDocument",
     "DslDocumentAdapter",
@@ -75,7 +95,9 @@ __all__ = [
     "Level",
     "MetricRef",
     "MetricRefAdapter",
+    "MetricRefNotRegistered",
     "MetricRegistry",
+    "MetricRegistryEntry",
     "NumericValue",
     "PaperFidelityAnchor",
     "ParametricFamily",
@@ -91,6 +113,10 @@ __all__ = [
     "ValidationCriteria",
     "ValidationError",
     "VerifiedExperimentDefinition",
+    "get_aggregation_rule",
+    "get_comparison_rule",
     "load_builtin_factor_type_plugins",
+    "load_default_registries",
     "load_dsl_document_from_json",
+    "load_metric_registry",
 ]

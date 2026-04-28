@@ -44,8 +44,10 @@ experiment:
 
   validation:
     metric:
-      kind: atomic
-      ref: top_1_accuracy
+      kind: parametric
+      family: top_k_accuracy
+      parameters:
+        k: 1
     direction: higher_is_better
     aggregation:
       method: mean

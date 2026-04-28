@@ -1,0 +1,704 @@
+{
+  "schema_version": "v1",
+  "atomic": [
+    {
+      "canonical_name": "accuracy",
+      "aliases": ["Accuracy", "Accuracy (%)", "Acc", "Overall Accuracy", "1:1 Accuracy", "Average Accuracy", "Mean Accuracy", "Validation Accuracy", "Percentage correct"],
+      "task_types": ["Skeleton Based Action Recognition", "Node Classification", "Few-Shot Image Classification", "Graph Classification", "Image Classification"],
+      "direction": "higher_is_better",
+      "input_shape": "class_probs",
+      "frequency": 32161,
+      "category": "quality"
+    },
+    {
+      "canonical_name": "map",
+      "aliases": ["mAP", "AP", "box AP", "box mAP", "mask AP", "Average mAP", "Mean Average Precision"],
+      "task_types": ["Object Detection", "3D Object Detection", "Face Detection", "Weakly Supervised Object Detection", "Few-Shot Object Detection"],
+      "direction": "higher_is_better",
+      "input_shape": "bounding_boxes",
+      "frequency": 17435,
+      "category": "quality",
+      "notes": "Bare 'AP' / 'mAP' is folded here because in CV usage it conventionally means COCO AP@[0.5:0.95] (the mean over IoU thresholds) — not a parametric variant. Parametric variants (AP50, AP75, AP-S/M/L) live in the average_precision_at_iou family."
+    },
+    {
+      "canonical_name": "miou",
+      "aliases": ["mIoU", "Mean IoU", "Validation mIoU", "mIOU", "mIoU (%)"],
+      "task_types": ["Semantic Segmentation", "Few-Shot Semantic Segmentation", "Semi-Supervised Semantic Segmentation", "Synthetic-to-Real Translation", "Weakly-Supervised Semantic Segmentation"],
+      "direction": "higher_is_better",
+      "input_shape": "segmentation_mask",
+      "frequency": 10900,
+      "category": "quality"
+    },
+    {
+      "canonical_name": "psnr",
+      "aliases": ["PSNR", "PSNR (sRGB)", "PSNR (Raw)", "Average PSNR", "PSNR (dB)"],
+      "task_types": ["Image Super-Resolution", "Video Super-Resolution", "Deblurring", "Color Image Denoising", "Image Deblurring"],
+      "direction": "higher_is_better",
+      "input_shape": "image_pair",
+      "frequency": 9917,
+      "category": "quality"
+    },
+    {
+      "canonical_name": "ssim",
+      "aliases": ["SSIM", "SSIM (sRGB)", "SSIM (Raw)"],
+      "task_types": ["Image Super-Resolution", "Video Super-Resolution", "Deblurring", "Image Deblurring", "Image Denoising"],
+      "direction": "higher_is_better",
+      "input_shape": "image_pair",
+      "frequency": 7885,
+      "category": "quality"
+    },
+    {
+      "canonical_name": "f1",
+      "aliases": ["F1", "F1 score", "F1-score", "F1 (%)"],
+      "task_types": ["Question Answering", "Named Entity Recognition (NER)", "Relation Extraction", "Lane Detection", "Aspect-Based Sentiment Analysis (ABSA)"],
+      "direction": "higher_is_better",
+      "input_shape": "class_predictions",
+      "frequency": 6605,
+      "category": "quality",
+      "notes": "Bare F1 is binary or unspecified-averaging F1. Macro/Micro/Weighted live in f1_variant family."
+    },
+    {
+      "canonical_name": "f_measure",
+      "aliases": ["F-measure", "F-Measure", "max F-Measure", "weighted F-measure", "F-measure (Mean)", "FB-IoU", "F-score", "f-Score"],
+      "task_types": ["Salient Object Detection", "Edge Detection", "Boundary Detection", "Image Manipulation Detection"],
+      "direction": "higher_is_better",
+      "input_shape": "class_predictions",
+      "frequency": 6420,
+      "category": "quality",
+      "notes": "Distinct from `f1` in usage — F-measure is the saliency/segmentation community's term and is often reported as max-over-thresholds. Treated separately because callers tend to report it differently."
+    },
+    {
+      "canonical_name": "auc",
+      "aliases": ["AUC", "AUC-ROC", "AUROC", "ROC-AUC", "ROC AUC", "AU-ROC"],
+      "task_types": ["Image Manipulation Detection", "Within-Session Motor Imagery", "Within-Session ERP", "3D Human Pose Estimation"],
+      "direction": "higher_is_better",
+      "input_shape": "class_probs",
+      "frequency": 6301,
+      "category": "quality"
+    },
+    {
+      "canonical_name": "mae",
+      "aliases": ["MAE", "Mean absolute error", "Average MAE", "Mean Abs Error"],
+      "task_types": ["RGB Salient Object Detection", "Video Salient Object Detection", "Time Series Forecasting", "Dichotomous Image Segmentation", "Age Estimation"],
+      "direction": "lower_is_better",
+      "input_shape": "scalar_float",
+      "frequency": 6202,
+      "category": "quality"
+    },
+    {
+      "canonical_name": "score",
+      "aliases": ["Score"],
+      "task_types": ["Atari Games", "Continuous Control", "Machine Translation", "SNES Games"],
+      "direction": "ambiguous",
+      "input_shape": "scalar_float",
+      "frequency": 5166,
+      "category": "quality",
+      "notes": "`Score` is overloaded. In RL leaderboards (~96% of occurrences here), higher is better and the unit is task-specific (game return, episodic reward). On non-RL leaderboards the column is genuinely ambiguous — direction must come from the leaderboard's task definition, not from the metric name. SMAI should require an explicit `direction` field on any task that uses this metric."
+    },
+    {
+      "canonical_name": "params",
+      "aliases": ["Params", "Parameters", "#Params", "Number of params", "Number of Params", "Params (M)", "Parameters (Billions)", "Param count", "Model size"],
+      "task_types": ["Image Classification", "Math Word Problem Solving", "Self-Supervised Image Classification", "Semantic Segmentation"],
+      "direction": "lower_is_better",
+      "input_shape": "scalar_int",
+      "frequency": 4784,
+      "category": "cost",
+      "notes": "Cost metric, not a quality metric. Direction is 'lower better' only as a Pareto co-axis with a quality metric."
+    },
+    {
+      "canonical_name": "s_measure",
+      "aliases": ["S-Measure", "S-measure", "S measure", "Smeasure"],
+      "task_types": ["Video Salient Object Detection", "Dichotomous Image Segmentation", "RGB Salient Object Detection", "RGB-D Salient Object Detection"],
+      "direction": "higher_is_better",
+      "input_shape": "segmentation_mask",
+      "frequency": 3202,
+      "category": "quality"
+    },
+    {
+      "canonical_name": "fid",
+      "aliases": ["FID", "Frechet Inception Distance", "FID (RadDino)", "FID (SwAV)"],
+      "task_types": ["Image Generation", "Text-to-Image Generation", "Motion Synthesis", "Image-to-Image Translation"],
+      "direction": "lower_is_better",
+      "input_shape": "image_distribution_pair",
+      "frequency": 3112,
+      "category": "quality"
+    },
+    {
+      "canonical_name": "nds",
+      "aliases": ["NDS", "NDS (val)"],
+      "task_types": ["3D Object Detection", "Monocular 3D Object Detection"],
+      "direction": "higher_is_better",
+      "input_shape": "bounding_boxes_3d",
+      "frequency": 2514,
+      "category": "quality",
+      "notes": "nuScenes detection score — composite of mAP and the nuScenes true-positive metrics (mATE/mASE/mAOE/mAVE/mAAE)."
+    },
+    {
+      "canonical_name": "mpjpe",
+      "aliases": ["MPJPE", "Average MPJPE (mm)", "MPJPE (mm)", "Mean Per-Joint Position Error", "MPJPE (CS)"],
+      "task_types": ["3D Human Pose Estimation", "3D Hand Pose Estimation", "Monocular 3D Human Pose Estimation"],
+      "direction": "lower_is_better",
+      "input_shape": "keypoints_3d",
+      "frequency": 2462,
+      "category": "quality"
+    },
+    {
+      "canonical_name": "jaccard",
+      "aliases": ["Jaccard", "Jaccard Index", "Jaccard (Mean)", "Jaccard (Seen)", "Jaccard (Recall)", "Jaccard (Unseen)"],
+      "task_types": ["Semi-Supervised Video Object Segmentation", "Video Object Segmentation", "Unsupervised Video Object Segmentation", "Visual Object Tracking"],
+      "direction": "higher_is_better",
+      "input_shape": "segmentation_mask",
+      "frequency": 1919,
+      "category": "quality"
+    },
+    {
+      "canonical_name": "e_measure",
+      "aliases": ["E-measure", "E-Measure", "max E-measure", "E-measure (Mean)"],
+      "task_types": ["Video Salient Object Detection", "Dichotomous Image Segmentation", "RGB-D Salient Object Detection", "Co-Salient Object Detection"],
+      "direction": "higher_is_better",
+      "input_shape": "segmentation_mask",
+      "frequency": 1895,
+      "category": "quality"
+    },
+    {
+      "canonical_name": "nme",
+      "aliases": ["NME", "NME (inter-ocular)", "NME_inter-ocular", "Normalized Mean Error", "NME (inter-pupil)"],
+      "task_types": ["Face Alignment", "Unsupervised Facial Landmark Detection", "Facial Landmark Detection"],
+      "direction": "lower_is_better",
+      "input_shape": "keypoints_2d",
+      "frequency": 1878,
+      "category": "quality"
+    },
+    {
+      "canonical_name": "mse",
+      "aliases": ["MSE", "Mean Squared Error", "MSE (10^-3)"],
+      "task_types": ["Time Series Forecasting", "Multivariate Time Series Forecasting", "Video Prediction"],
+      "direction": "lower_is_better",
+      "input_shape": "scalar_float",
+      "frequency": 1755,
+      "category": "quality"
+    },
+    {
+      "canonical_name": "lpips",
+      "aliases": ["LPIPS", "LPIPS (S1)", "LPIPS (S2)", "LPIPS (S3)"],
+      "task_types": ["Video Super-Resolution", "Image Super-Resolution", "Shadow Removal", "Video Prediction"],
+      "direction": "lower_is_better",
+      "input_shape": "image_pair",
+      "frequency": 1534,
+      "category": "quality"
+    },
+    {
+      "canonical_name": "pa_mpjpe",
+      "aliases": ["PA-MPJPE", "PA-MPJPE (mm)", "Procrustes-Aligned MPJPE", "P-MPJPE"],
+      "task_types": ["3D Human Pose Estimation", "3D Hand Pose Estimation", "Egocentric Pose Estimation"],
+      "direction": "lower_is_better",
+      "input_shape": "keypoints_3d",
+      "frequency": 1459,
+      "category": "quality"
+    },
+    {
+      "canonical_name": "flops",
+      "aliases": ["FLOPs", "GFLOPs", "MFLOPs", "TFLOPs", "FLOPS"],
+      "task_types": ["Image Classification", "Neural Architecture Search", "Action Recognition", "Semantic Segmentation"],
+      "direction": "lower_is_better",
+      "input_shape": "scalar_float",
+      "frequency": 1445,
+      "category": "cost",
+      "notes": "Cost metric. Pareto co-axis only."
+    },
+    {
+      "canonical_name": "rmse",
+      "aliases": ["RMSE", "Root mean square error", "RMSE(test)"],
+      "task_types": ["Monocular Depth Estimation", "Shadow Removal", "Molecular Property Prediction", "Recommendation Systems"],
+      "direction": "lower_is_better",
+      "input_shape": "scalar_float",
+      "frequency": 1413,
+      "category": "quality"
+    },
+    {
+      "canonical_name": "recall",
+      "aliases": ["Recall", "Recall (%)"],
+      "task_types": ["Point Cloud Registration", "Multiview Detection", "Scene Text Detection", "Multimodal Recommendation"],
+      "direction": "higher_is_better",
+      "input_shape": "class_predictions",
+      "frequency": 1403,
+      "category": "quality",
+      "notes": "Bare Recall (no @k). Recall@k variants are in the recall_at_k family."
+    },
+    {
+      "canonical_name": "precision",
+      "aliases": ["Precision"],
+      "task_types": ["Visual Object Tracking", "Scene Text Detection", "Rgb-T Tracking", "Video Object Tracking"],
+      "direction": "higher_is_better",
+      "input_shape": "class_predictions",
+      "frequency": 1268,
+      "category": "quality",
+      "notes": "Bare Precision (no @k). Precision@k variants are in the precision_at_k family."
+    },
+    {
+      "canonical_name": "error_rate",
+      "aliases": ["Error Rate", "Err", "Error rate (%)"],
+      "task_types": ["Long-tail Learning", "3D Point Cloud Classification", "Facial Attribute Classification", "Face Alignment"],
+      "direction": "lower_is_better",
+      "input_shape": "class_probs",
+      "frequency": 1186,
+      "category": "quality"
+    },
+    {
+      "canonical_name": "exact_match",
+      "aliases": ["EM", "Exact Match", "Exact Match (EM)"],
+      "task_types": ["Question Answering", "Open-Domain Question Answering", "Common Sense Reasoning"],
+      "direction": "higher_is_better",
+      "input_shape": "text_pair",
+      "frequency": 1183,
+      "category": "quality"
+    },
+    {
+      "canonical_name": "iou",
+      "aliases": ["IoU", "IOU", "Intersection over Union", "IoU (%)"],
+      "task_types": ["Image Manipulation Detection", "Semantic Segmentation", "Change Detection", "CAD Reconstruction"],
+      "direction": "higher_is_better",
+      "input_shape": "segmentation_mask",
+      "frequency": 1159,
+      "category": "quality",
+      "notes": "Single-class IoU, distinct from mIoU (mean over classes)."
+    },
+    {
+      "canonical_name": "latency",
+      "aliases": ["FPS", "Inference Time", "FPS (V100, b=1)", "Inference Time (ms)"],
+      "task_types": ["Video Super-Resolution", "Real-Time Object Detection", "Semi-Supervised Video Object Segmentation", "Anomaly Detection"],
+      "direction": "ambiguous",
+      "input_shape": "scalar_float",
+      "frequency": 1128,
+      "category": "cost",
+      "notes": "FPS is higher-better; inference time (ms/s) is lower-better. These are opposite signs of the same underlying quantity but PWC conflates them under one column. SMAI should split this into `fps` (higher_is_better) and `inference_time` (lower_is_better) when implemented; aliases here document the conflation. Tagged `cost` per 02-dsl-and-contracts.md §6.6 (treated as a co-axis when used)."
+    },
+    {
+      "canonical_name": "meteor",
+      "aliases": ["METEOR", "Meteor"],
+      "task_types": ["Image Captioning", "KG-to-Text Generation", "Visual Storytelling", "Data-to-Text Generation"],
+      "direction": "higher_is_better",
+      "input_shape": "text_pair",
+      "frequency": 1110,
+      "category": "quality"
+    },
+    {
+      "canonical_name": "j_and_f",
+      "aliases": ["J&F", "J&F Mean", "J&F (Mean)"],
+      "task_types": ["Semi-Supervised Video Object Segmentation", "Referring Video Object Segmentation", "Referring Expression Segmentation", "Video Object Segmentation"],
+      "direction": "higher_is_better",
+      "input_shape": "segmentation_mask",
+      "frequency": 1008,
+      "category": "quality",
+      "notes": "DAVIS-style mean of region (J = Jaccard) and contour (F) accuracy."
+    },
+    {
+      "canonical_name": "cider",
+      "aliases": ["CIDEr", "CIDER", "CIDEr-D"],
+      "task_types": ["Image Captioning", "Visual Storytelling", "Video Captioning", "Image-guided Story Ending Generation"],
+      "direction": "higher_is_better",
+      "input_shape": "text_pair",
+      "frequency": 882,
+      "category": "quality"
+    },
+    {
+      "canonical_name": "bleu",
+      "aliases": ["BLEU", "Bleu", "BLEU (EN-DE)", "BLEU (Test set)"],
+      "task_types": ["Data-to-Text Generation", "KG-to-Text Generation", "Text Simplification", "Machine Translation", "Table-to-Text Generation"],
+      "direction": "higher_is_better",
+      "input_shape": "text_pair",
+      "frequency": 834,
+      "category": "quality",
+      "notes": "Bare BLEU (typically BLEU-4 default). BLEU-N variants are in bleu_n family."
+    },
+    {
+      "canonical_name": "plcc",
+      "aliases": ["PLCC", "Pearson LCC", "Linear Correlation"],
+      "task_types": ["Video Quality Assessment", "No-Reference Image Quality Assessment", "Full reference image quality assessment", "Face Image Quality Assessment"],
+      "direction": "higher_is_better",
+      "input_shape": "scalar_float_pair",
+      "frequency": 692,
+      "category": "quality"
+    },
+    {
+      "canonical_name": "panoptic_quality",
+      "aliases": ["PQ", "Panoptic Quality", "PQ (with stuff)", "PQ (test)"],
+      "task_types": ["Panoptic Segmentation", "Unsupervised Panoptic Segmentation", "Open Vocabulary Panoptic Segmentation", "Multi-tissue Nucleus Segmentation"],
+      "direction": "higher_is_better",
+      "input_shape": "segmentation_mask",
+      "frequency": 678,
+      "category": "quality"
+    },
+    {
+      "canonical_name": "is",
+      "aliases": ["IS", "Inception Score", "Inception score"],
+      "task_types": ["Text-to-Image Generation", "Conditional Image Generation", "Video Generation", "Image Generation"],
+      "direction": "higher_is_better",
+      "input_shape": "image_distribution_pair",
+      "frequency": 649,
+      "category": "quality"
+    },
+    {
+      "canonical_name": "sdr",
+      "aliases": ["SDR", "SDR (drums)", "SDR (bass)", "SDR (vocals)", "SDR (avg)", "Signal to Distortion Ratio"],
+      "task_types": ["Music Source Separation", "Speech Enhancement", "Speech Separation", "Audio Source Separation"],
+      "direction": "higher_is_better",
+      "input_shape": "audio_pair",
+      "frequency": 637,
+      "category": "quality"
+    },
+    {
+      "canonical_name": "mota",
+      "aliases": ["MOTA", "Multiple Object Tracking Accuracy"],
+      "task_types": ["Multi-Object Tracking", "Online Multi-Object Tracking", "Multiple Object Tracking"],
+      "direction": "higher_is_better",
+      "input_shape": "bounding_box_tracks",
+      "frequency": 595,
+      "category": "quality"
+    },
+    {
+      "canonical_name": "wer",
+      "aliases": ["WER", "WER (%)", "Word Error Rate", "Word Error Rate (WER)"],
+      "task_types": ["Speech Recognition", "Lipreading", "Automatic Lyrics Transcription", "Sign Language Recognition"],
+      "direction": "lower_is_better",
+      "input_shape": "text_pair",
+      "frequency": 585,
+      "category": "quality"
+    },
+    {
+      "canonical_name": "pck",
+      "aliases": ["PCK", "PCK (weak)", "Percentage of Correct Keypoints"],
+      "task_types": ["3D Human Pose Estimation", "Semantic correspondence", "Pose Estimation", "Weakly-supervised 3D Human Pose Estimation"],
+      "direction": "higher_is_better",
+      "input_shape": "keypoints_2d",
+      "frequency": 534,
+      "category": "quality"
+    },
+    {
+      "canonical_name": "balanced_accuracy",
+      "aliases": ["Balanced Accuracy", "Bal Acc"],
+      "task_types": ["Image Manipulation Detection", "Long-tail Learning", "Patient Phenotyping", "Skin Lesion Classification"],
+      "direction": "higher_is_better",
+      "input_shape": "class_probs",
+      "frequency": 530,
+      "category": "quality"
+    },
+    {
+      "canonical_name": "spice",
+      "aliases": ["SPICE"],
+      "task_types": ["Image Captioning", "Visual Storytelling", "Audio captioning"],
+      "direction": "higher_is_better",
+      "input_shape": "text_pair",
+      "frequency": 462,
+      "category": "quality"
+    },
+    {
+      "canonical_name": "dice",
+      "aliases": ["Dice", "Dice Score", "DSC", "Dice Coefficient"],
+      "task_types": ["Medical Image Segmentation", "Retinal Vessel Segmentation", "Video Polyp Segmentation", "Lesion Segmentation"],
+      "direction": "higher_is_better",
+      "input_shape": "segmentation_mask",
+      "frequency": 454,
+      "category": "quality"
+    },
+    {
+      "canonical_name": "spearman",
+      "aliases": ["Spearman Correlation", "Spearman's Rho", "Spearman Correlation Coefficient"],
+      "task_types": ["Semantic Textual Similarity", "Supervised Video Summarization", "Neural Architecture Search", "Action Quality Assessment"],
+      "direction": "higher_is_better",
+      "input_shape": "scalar_float_pair",
+      "frequency": 417,
+      "category": "quality"
+    },
+    {
+      "canonical_name": "ndcg",
+      "aliases": ["NDCG", "nDCG", "NDCG (x 100)"],
+      "task_types": ["Recommendation Systems", "Multi-Label Text Classification", "Sequential Recommendation", "Text Retrieval"],
+      "direction": "higher_is_better",
+      "input_shape": "ranked_list",
+      "frequency": 285,
+      "category": "quality",
+      "notes": "Bare NDCG (no @k). NDCG@k variants are in the ndcg_at_k family."
+    },
+    {
+      "canonical_name": "pearson",
+      "aliases": ["Pearson Correlation", "Pearson Correlation Coefficient", "PCC"],
+      "task_types": ["PPG heart rate estimation", "Sentence Embeddings For Biomedical Texts", "Semantic Similarity", "Semantic Textual Similarity"],
+      "direction": "higher_is_better",
+      "input_shape": "scalar_float_pair",
+      "frequency": 252,
+      "category": "quality"
+    },
+    {
+      "canonical_name": "srocc",
+      "aliases": ["SROCC", "Spearman RCC"],
+      "task_types": ["Image Quality Assessment", "Video Quality Assessment"],
+      "direction": "higher_is_better",
+      "input_shape": "scalar_float_pair",
+      "frequency": 186,
+      "category": "quality"
+    },
+    {
+      "canonical_name": "rouge",
+      "aliases": ["ROUGE", "ROUGE (geometric mean of 1/2/L)"],
+      "task_types": ["KG-to-Text Generation", "3D Question Answering (3D-QA)", "Table-to-Text Generation", "Long-Form Narrative Summarization"],
+      "direction": "higher_is_better",
+      "input_shape": "text_pair",
+      "frequency": 172,
+      "category": "quality",
+      "notes": "Bare ROUGE. ROUGE-N / ROUGE-L are in rouge_n family."
+    },
+    {
+      "canonical_name": "pesq",
+      "aliases": ["PESQ", "PESQ (wb)"],
+      "task_types": ["Speech Enhancement", "Speech Synthesis", "Speaker-Specific Lip to Speech Synthesis", "Speech Dereverberation"],
+      "direction": "higher_is_better",
+      "input_shape": "audio_pair",
+      "frequency": 162,
+      "category": "quality"
+    },
+    {
+      "canonical_name": "perplexity",
+      "aliases": ["Perplexity", "PPL"],
+      "task_types": ["Language Modelling", "Dialogue Generation", "Protein Design"],
+      "direction": "lower_is_better",
+      "input_shape": "text_logprobs",
+      "frequency": 117,
+      "category": "quality"
+    },
+    {
+      "canonical_name": "cer",
+      "aliases": ["CER", "CER (%)", "Character Error Rate", "Character Error Rate (CER)"],
+      "task_types": ["Handwritten Text Recognition", "Lipreading", "Sign Language Recognition", "Handwriting Recognition"],
+      "direction": "lower_is_better",
+      "input_shape": "text_pair",
+      "frequency": 113,
+      "category": "quality"
+    },
+    {
+      "canonical_name": "stoi",
+      "aliases": ["STOI"],
+      "task_types": ["Speech Enhancement", "Speech Dereverberation"],
+      "direction": "higher_is_better",
+      "input_shape": "audio_pair",
+      "frequency": 87,
+      "category": "quality"
+    },
+    {
+      "canonical_name": "lsd",
+      "aliases": ["LSD", "Log-Spectral Distance"],
+      "task_types": ["Speech Synthesis", "Speech Enhancement"],
+      "direction": "lower_is_better",
+      "input_shape": "audio_pair",
+      "frequency": 40,
+      "category": "quality"
+    },
+    {
+      "canonical_name": "chrf",
+      "aliases": ["chrF", "chrF++", "ChrF++"],
+      "task_types": ["Machine Translation"],
+      "direction": "higher_is_better",
+      "input_shape": "text_pair",
+      "frequency": 35,
+      "category": "quality"
+    },
+    {
+      "canonical_name": "kid",
+      "aliases": ["KID"],
+      "task_types": ["Image Generation", "Text-to-Image Generation"],
+      "direction": "lower_is_better",
+      "input_shape": "image_distribution_pair",
+      "frequency": 34,
+      "category": "quality"
+    },
+    {
+      "canonical_name": "ter",
+      "aliases": ["TER", "Translation Error Rate"],
+      "task_types": ["Machine Translation"],
+      "direction": "lower_is_better",
+      "input_shape": "text_pair",
+      "frequency": 16,
+      "category": "quality"
+    },
+    {
+      "canonical_name": "ece",
+      "aliases": ["ECE", "Expected Calibration Error"],
+      "task_types": ["Calibration", "Classification"],
+      "direction": "lower_is_better",
+      "input_shape": "class_probs",
+      "frequency": 10,
+      "category": "quality"
+    },
+    {
+      "canonical_name": "ate",
+      "aliases": ["ATE", "Absolute Trajectory Error"],
+      "task_types": ["SLAM", "Visual Odometry", "Trajectory Estimation"],
+      "direction": "lower_is_better",
+      "input_shape": "trajectory",
+      "frequency": 9,
+      "category": "quality"
+    }
+  ],
+  "parametric": [
+    {
+      "family_name": "average_precision_at_iou",
+      "parameter": "iou_or_area",
+      "parameter_values_seen": ["50", "75", "0.5", "0.75", "0.5:0.95", "S", "M", "L", "small", "medium", "large"],
+      "parameter_type": "enum",
+      "task_types": ["Object Detection", "Temporal Action Localization", "3D Object Detection", "Weakly Supervised Action Localization", "Pose Estimation"],
+      "direction": "higher_is_better",
+      "frequency": 15849,
+      "category": "quality",
+      "notes": "Examples seen: AP50, AP75, AP-S, AP-M, AP-L, AP@.5, AP@.5:.95, mAP@0.5, mAP IOU@0.5, box AP50, mask AP75. The parameter is heterogeneous — IoU threshold (int 50/75 or float 0.5/0.75) or area bucket (S/M/L). SMAI should canonicalize to either an `iou_threshold: float | (low, high)` field or an `area_bucket: enum {S,M,L}` field — never both at once. Bare 'AP' / 'mAP' goes to the atomic `map` entry above (COCO default)."
+    },
+    {
+      "family_name": "nuscenes_true_positive_metric",
+      "parameter": "error_dim",
+      "parameter_values_seen": ["ATE", "ASE", "AOE", "AVE", "AAE"],
+      "parameter_type": "enum",
+      "task_types": ["3D Object Detection", "3D Object Detection From Monocular Images"],
+      "direction": "lower_is_better",
+      "frequency": 11050,
+      "category": "quality",
+      "notes": "nuScenes-specific. Translation/Scale/Orientation/Velocity/Attribute error. All five appear together with NDS on every nuScenes detection leaderboard. Treated as a family because the five names are a fixed enum and share the lower-better direction and per-class semantics."
+    },
+    {
+      "family_name": "recall_at_k",
+      "parameter": "k",
+      "parameter_values_seen": [1, 5, 10, 20, 50, 100],
+      "parameter_type": "int",
+      "task_types": ["Video Retrieval", "Cross-Modal Retrieval", "Visual Dialog", "Unsupervised Domain Adaptation"],
+      "direction": "higher_is_better",
+      "frequency": 9037,
+      "category": "quality",
+      "notes": "Aliases include direction-prefixed forms — e.g. 'text-to-video R@1', 'video-to-text R@5'. These are the same family with an additional `direction` qualifier; SMAI should expose `direction` as an optional sub-parameter for retrieval tasks."
+    },
+    {
+      "family_name": "top_k_accuracy",
+      "parameter": "k",
+      "parameter_values_seen": [1, 3, 5, 10, 20, 50],
+      "parameter_type": "int",
+      "task_types": ["Image Classification", "Long-tail Learning", "Action Recognition", "Person Re-Identification", "Unsupervised Domain Adaptation"],
+      "direction": "higher_is_better",
+      "frequency": 7812,
+      "category": "quality",
+      "notes": "Folds in 'Rank-N' (re-ID convention; same notion). Top-1 (k=1) dominates; Top-5 is a distant second."
+    },
+    {
+      "family_name": "min_traj_error_at_k",
+      "parameter": ["error_kind", "k"],
+      "parameter_values_seen": {
+        "error_kind": ["minADE", "minFDE", "MR", "DAC", "brier-minFDE"],
+        "k": [1, 6]
+      },
+      "parameter_type": "enum + int",
+      "task_types": ["Motion Forecasting", "Trajectory Prediction"],
+      "direction": {
+        "minADE": "lower_is_better",
+        "minFDE": "lower_is_better",
+        "brier-minFDE": "lower_is_better",
+        "MR": "lower_is_better",
+        "DAC": "higher_is_better"
+      },
+      "frequency": 7184,
+      "category": "quality",
+      "notes": "Argoverse / Waymo motion-forecasting metrics, all reported with K (number of predicted modes; K=1 is unimodal best, K=6 is best-of-6). DAC = Drivable Area Compliance (higher_is_better)."
+    },
+    {
+      "family_name": "compute_cost",
+      "parameter": "resource_kind",
+      "parameter_values_seen": ["training time (s)", "CO2 Emission (g)", "Hardware Burden", "Operations per network pass"],
+      "parameter_type": "enum",
+      "task_types": ["Object Detection", "Within-Session Motor Imagery", "Within-Session ERP", "Image Classification"],
+      "direction": "lower_is_better",
+      "frequency": 5854,
+      "category": "cost",
+      "notes": "Cost/resource side metrics (compute, energy, training time). All lower-is-better. Pareto co-axes — never the primary verdict metric on their own."
+    },
+    {
+      "family_name": "rouge_n",
+      "parameter": "n",
+      "parameter_values_seen": ["L", "1", "2", "3"],
+      "parameter_type": "enum",
+      "task_types": ["Text Summarization", "Abstractive Text Summarization", "Image Captioning", "Document Summarization", "Visual Storytelling"],
+      "direction": "higher_is_better",
+      "frequency": 2575,
+      "category": "quality",
+      "notes": "n is enum (int '1'/'2'/'3' or 'L' / 'Lsum')."
+    },
+    {
+      "family_name": "hits_at_k",
+      "parameter": "k",
+      "parameter_values_seen": [1, 3, 5, 10, 20, 100],
+      "parameter_type": "int",
+      "task_types": ["Link Prediction", "Entity Alignment", "Multi-modal Entity Alignment", "Question Answering", "Cross-Modal Retrieval"],
+      "direction": "higher_is_better",
+      "frequency": 1485,
+      "category": "quality"
+    },
+    {
+      "family_name": "bleu_n",
+      "parameter": "n",
+      "parameter_values_seen": [1, 2, 3, 4, 5],
+      "parameter_type": "int",
+      "task_types": ["Visual Storytelling", "Image Captioning", "Video Captioning", "Molecule Captioning"],
+      "direction": "higher_is_better",
+      "frequency": 1094,
+      "category": "quality",
+      "notes": "BLEU-4 dominates; BLEU-1..3 are sub-cumulants reported alongside."
+    },
+    {
+      "family_name": "mrr_at_k",
+      "parameter": "k",
+      "parameter_values_seen": [2, 10, 20, 50, "none"],
+      "parameter_type": "int_or_none",
+      "task_types": ["Link Prediction", "Visual Dialog", "Question Answering", "Hypernym Discovery", "Knowledge Graphs"],
+      "direction": "higher_is_better",
+      "frequency": 882,
+      "category": "quality",
+      "notes": "Bare 'MRR' (no k) is captured here with parameter='none' (string sentinel) — by convention this means 'over the full ranked list.' Encoded as a string in the registry to keep `parameter_values_seen` typed as `list[str | int | float]`."
+    },
+    {
+      "family_name": "ndcg_at_k",
+      "parameter": "k",
+      "parameter_values_seen": [1, 3, 5, 10, 20, 100],
+      "parameter_type": "int",
+      "task_types": ["Recommendation Systems", "Multi-Label Text Classification", "Sequential Recommendation", "Text Retrieval", "Collaborative Filtering"],
+      "direction": "higher_is_better",
+      "frequency": 438,
+      "category": "quality"
+    },
+    {
+      "family_name": "precision_at_k",
+      "parameter": "k",
+      "parameter_values_seen": [1, 3, 5, 8, 15, 20],
+      "parameter_type": "int",
+      "task_types": ["Medical Code Prediction", "Multi-Label Text Classification", "Hypernym Discovery", "Question Answering"],
+      "direction": "higher_is_better",
+      "frequency": 429,
+      "category": "quality"
+    },
+    {
+      "family_name": "average_recall_at_k",
+      "parameter": "k_proposals",
+      "parameter_values_seen": [1, 10, 50, 75, 100, 1000],
+      "parameter_type": "int",
+      "task_types": ["Video Instance Segmentation", "Temporal Action Proposal Generation", "Keypoint Detection", "Pose Estimation", "3D Place Recognition"],
+      "direction": "higher_is_better",
+      "frequency": 413,
+      "category": "quality",
+      "notes": "AR@k where k is a proposal-count budget (Detectron/COCO convention)."
+    },
+    {
+      "family_name": "f1_variant",
+      "parameter": "averaging",
+      "parameter_values_seen": ["Macro", "Micro", "Weighted", "Samples"],
+      "parameter_type": "enum",
+      "task_types": ["Medical Code Prediction", "Continual Learning", "Image Classification", "Text Classification", "Human Activity Recognition"],
+      "direction": "higher_is_better",
+      "frequency": 194,
+      "category": "quality",
+      "notes": "Distinct from atomic `f1` — these specify the multi-class averaging strategy."
+    }
+  ]
+}
