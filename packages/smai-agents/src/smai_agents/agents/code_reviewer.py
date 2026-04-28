@@ -28,10 +28,7 @@ from pydantic import BaseModel, ConfigDict
 from smai_core.artifacts import HarnessContract, TechniqueContract
 from smai_core.plugins import LlmProvider
 
-from smai_agents.agents._prompt_config import (
-    DEFAULT_CODE_REVIEW_PROMPT_CONFIG,
-    PromptConfig,
-)
+from smai_agents.prompts import PromptConfig, load_prompt_config
 from smai_agents.schemas.code_review import CodeReviewResult
 from smai_agents.structured_call import structured_call
 
@@ -83,9 +80,6 @@ class CodeReviewerInput(BaseModel):
     entries: list[EntryUnderReview]
 
 
-_TOOL_NAME = "submit_review"
-
-
 async def run_code_review(
     *,
     llm: LlmProvider,
@@ -98,11 +92,14 @@ async def run_code_review(
     multi-turn loop. The function is purely a wrapper:
 
     1. Assemble the user message from ``input``.
-    2. Resolve ``prompt_config`` (caller-supplied or
-       :data:`DEFAULT_CODE_REVIEW_PROMPT_CONFIG`).
-    3. Call :func:`structured_call` with
-       ``output_schema=CodeReviewResult`` and ``tool_name='submit_review'``.
-    4. Return the parsed verdict.
+    2. Resolve ``prompt_config`` — caller-supplied or, when ``None``,
+       :func:`smai_agents.prompts.load_prompt_config` for the
+       ``code_reviewer`` role (per ``04-agents.md`` §10).
+    3. Read the structured-output tool's ``name`` + ``description``
+       from :attr:`PromptConfig.structured_output_tool` (§10.2).
+    4. Call :func:`structured_call` with
+       ``output_schema=CodeReviewResult``.
+    5. Return the parsed verdict.
 
     The function inherits :func:`structured_call`'s discipline:
     retry-once-on-text-or-schema-invalid response per DEC-018, and
@@ -111,7 +108,15 @@ async def run_code_review(
     :class:`smai_agents.schemas.code_review.CodeReviewResult` validator
     enforces the ``overall_pass`` ↔ critical-findings invariant.
     """
-    cfg = prompt_config or DEFAULT_CODE_REVIEW_PROMPT_CONFIG
+    cfg = prompt_config if prompt_config is not None else load_prompt_config(
+        role="code_reviewer",
+    )
+    sot = cfg.structured_output_tool
+    if sot is None:
+        raise ValueError(
+            "code_reviewer prompt config is missing structured_output_tool; "
+            "single-call agents require it per 04-agents.md §10.2"
+        )
     user_message = _build_user_message(input)
 
     return await structured_call(
@@ -119,8 +124,8 @@ async def run_code_review(
         system=cfg.system_prompt,
         user_message=user_message,
         output_schema=CodeReviewResult,
-        tool_name=_TOOL_NAME,
-        tool_description=cfg.tool_description,
+        tool_name=sot.name,
+        tool_description=sot.description,
     )
 
 

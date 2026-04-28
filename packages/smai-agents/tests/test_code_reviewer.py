@@ -1,9 +1,14 @@
 """:func:`smai_agents.run_code_review` — Task 2.B4 acceptance.
 
-Per ``04-agents.md`` §2.4 / §11 / §6 and DEC-016 / DEC-017 / DEC-018.
-The wrapper is exercised with the :class:`StubLlmProvider` from
-``_agent_fakes`` (queue-driven canned responses); the user-message
-shape is asserted via the ``calls[]`` snapshot the stub records.
+Per ``04-agents.md`` §2.4 / §11 / §6 / §10 and
+DEC-016 / DEC-017 / DEC-018. The wrapper is exercised with the
+:class:`StubLlmProvider` from ``_agent_fakes`` (queue-driven canned
+responses); the user-message shape is asserted via the ``calls[]``
+snapshot the stub records.
+
+After the 2.B2/2.B4 reconciliation, the wrapper resolves prompt config
+via :func:`smai_agents.prompts.load_prompt_config` (loader-driven YAML
+substrate per §10) when ``prompt_config`` is ``None``.
 """
 
 from __future__ import annotations
@@ -18,9 +23,19 @@ from _role_fakes import (  # type: ignore[import-not-found]
 from smai_agents import (
     CodeReviewerInput,
     EntryUnderReview,
+    PromptConfig,
     StructuredCallFailed,
+    StructuredOutputTool,
+    clear_prompt_config_cache,
     run_code_review,
 )
+from smai_agents.agents import code_reviewer as _code_reviewer_module
+
+
+@pytest.fixture(autouse=True)
+def _clear_prompt_config_cache() -> None:
+    """Each test starts with a clean process-local prompt-config cache."""
+    clear_prompt_config_cache()
 
 
 def _baseline_entry_additive() -> EntryUnderReview:
@@ -271,6 +286,92 @@ async def test_code_review_uses_single_call_cache_defaults() -> None:
     cache_config = llm.calls[0]["cache_config"]
     assert isinstance(cache_config, dict)
     assert cache_config["rolling_cache_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_code_review_calls_loader_when_prompt_config_is_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """§10 / 2.B2-2.B4 reconciliation: ``prompt_config=None`` resolves
+    config via :func:`smai_agents.prompts.load_prompt_config` keyed on
+    ``role='code_reviewer'`` (no variant — the code reviewer's
+    factor-type framing lives in the user message per DEC-017)."""
+    captured: dict[str, object] = {}
+
+    def _fake_loader(*, role: str, variant_name: str | None = None) -> PromptConfig:
+        captured["role"] = role
+        captured["variant_name"] = variant_name
+        return PromptConfig(
+            role="code_reviewer",
+            system_prompt="STUB SYSTEM PROMPT",
+            initial_user_message_template="(unused at single-call site)",
+            tools=[],
+            structured_output_tool=StructuredOutputTool(
+                name="submit_review",
+                description="Submit the review.",
+                schema_module=(
+                    "smai_agents.schemas.code_review:CodeReviewResult"
+                ),
+            ),
+            layer_chain=["code_reviewer/base", "code_reviewer/stub"],
+        )
+
+    monkeypatch.setattr(_code_reviewer_module, "load_prompt_config", _fake_loader)
+
+    canned = model_response(
+        tool_uses=[
+            ("tu-loader", "submit_review", {"findings": [], "overall_pass": True})
+        ],
+        stop_reason="tool_use",
+    )
+    llm = StubLlmProvider([canned])
+    await run_code_review(llm=llm, input=_additive_input())
+
+    assert captured == {"role": "code_reviewer", "variant_name": None}
+    assert llm.calls[0]["system"] == "STUB SYSTEM PROMPT"
+
+
+@pytest.mark.asyncio
+async def test_code_review_skips_loader_when_prompt_config_supplied(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the caller supplies a :class:`PromptConfig`, the loader
+    must NOT be called — the caller's config is used verbatim."""
+
+    def _exploding_loader(*, role: str, variant_name: str | None = None) -> PromptConfig:
+        raise AssertionError(
+            "load_prompt_config must not be called when prompt_config is supplied"
+        )
+
+    monkeypatch.setattr(_code_reviewer_module, "load_prompt_config", _exploding_loader)
+
+    cfg = PromptConfig(
+        role="code_reviewer",
+        system_prompt="CALLER-PROVIDED SYSTEM PROMPT",
+        initial_user_message_template="(unused at single-call site)",
+        tools=[],
+        structured_output_tool=StructuredOutputTool(
+            name="submit_review",
+            description="caller's tool description",
+            schema_module="smai_agents.schemas.code_review:CodeReviewResult",
+        ),
+        layer_chain=["test/inline"],
+    )
+
+    canned = model_response(
+        tool_uses=[
+            ("tu-supplied", "submit_review", {"findings": [], "overall_pass": True})
+        ],
+        stop_reason="tool_use",
+    )
+    llm = StubLlmProvider([canned])
+    await run_code_review(llm=llm, input=_additive_input(), prompt_config=cfg)
+
+    assert llm.calls[0]["system"] == "CALLER-PROVIDED SYSTEM PROMPT"
+    tools = llm.calls[0]["tools"]
+    assert isinstance(tools, list)
+    assert tools[0]["name"] == "submit_review"
+    assert tools[0]["description"] == "caller's tool description"
 
 
 def _last_user_text(llm: StubLlmProvider) -> str:

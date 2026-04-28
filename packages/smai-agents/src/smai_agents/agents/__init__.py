@@ -3,9 +3,10 @@
 Per ``04-agents.md`` §2.4 / §2.5: the single-call agents (code reviewer,
 contextual evaluator, supervisor) bypass the multi-turn loop and call
 :func:`smai_agents.structured_call` directly. Each role here owns the
-user-message assembly + prompt-config defaults +
-``output_schema``/``tool_name`` selection; the structured-call substrate
-itself is role-agnostic per §6.
+user-message assembly + ``output_schema`` selection; the structured-call
+substrate itself is role-agnostic per §6, and the prompt-config surface
+(system prompt + structured-output tool name/description) is loaded from
+:mod:`smai_agents.prompts` per §10.
 
 Two of three single-call agents ship in 2.B4:
 
@@ -15,11 +16,6 @@ Two of three single-call agents ship in 2.B4:
 The third (supervisor, §2.6) lands in Task 3.G4.
 """
 
-from smai_agents.agents._prompt_config import (
-    DEFAULT_CODE_REVIEW_PROMPT_CONFIG,
-    DEFAULT_CONTEXTUAL_EVALUATOR_PROMPT_CONFIGS,
-    PromptConfig,
-)
 from smai_agents.agents.code_reviewer import (
     CodeReviewerInput,
     EntryUnderReview,
@@ -33,14 +29,11 @@ from smai_agents.agents.contextual_evaluator import (
 )
 
 __all__ = [
-    "DEFAULT_CODE_REVIEW_PROMPT_CONFIG",
-    "DEFAULT_CONTEXTUAL_EVALUATOR_PROMPT_CONFIGS",
     "CGMetadata",
     "CodeReviewerInput",
     "ContextualEvaluatorEntry",
     "ContextualEvaluatorInput",
     "EntryUnderReview",
-    "PromptConfig",
     "run_code_review",
     "run_contextual_evaluation",
 ]

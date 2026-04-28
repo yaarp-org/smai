@@ -17,11 +17,10 @@ The shape exposed here:
 * Prompt-config surface (2.B2) — YAML-on-disk + Pydantic-in-process —
   under :mod:`smai_agents.prompts`. Public entry points
   :func:`load_prompt_config`, :func:`render_initial_user_message`,
-  :class:`PromptLayer`, :class:`ToolBinding`,
-  :class:`StructuredOutputTool`. The full layered ``PromptConfig`` is
-  reachable as :class:`smai_agents.prompts.PromptConfig` (the
-  top-level :class:`PromptConfig` symbol is the narrower 2.B4 inline
-  shape pending reconciliation).
+  :class:`PromptConfig`, :class:`PromptLayer`, :class:`ToolBinding`,
+  :class:`StructuredOutputTool`. Top-level :class:`PromptConfig` is
+  bound to :class:`smai_agents.prompts.PromptConfig` (full layered
+  surface — base + variant + override).
 * Single-call structured output (:func:`structured_call`,
   :class:`StructuredCallFailed`).
 * Truncation policy (:class:`TruncationPolicy`).
@@ -37,14 +36,11 @@ The shape exposed here:
 """
 
 from smai_agents.agents import (
-    DEFAULT_CODE_REVIEW_PROMPT_CONFIG,
-    DEFAULT_CONTEXTUAL_EVALUATOR_PROMPT_CONFIGS,
     CGMetadata,
     CodeReviewerInput,
     ContextualEvaluatorEntry,
     ContextualEvaluatorInput,
     EntryUnderReview,
-    PromptConfig,
     run_code_review,
     run_contextual_evaluation,
 )
@@ -71,6 +67,7 @@ from smai_agents.model_selection import (
     get_model_for_task,
 )
 from smai_agents.prompts import (
+    PromptConfig,
     PromptConfigError,
     PromptConfigNotFound,
     PromptConfigValidationError,
@@ -141,8 +138,6 @@ from smai_agents.truncation import TruncationPolicy
 
 __all__ = [
     "DEFAULT_CACHE_CONFIG",
-    "DEFAULT_CODE_REVIEW_PROMPT_CONFIG",
-    "DEFAULT_CONTEXTUAL_EVALUATOR_PROMPT_CONFIGS",
     "EDIT_FILE_TOOL_NAME",
     "EXECUTE_DEFAULT_TIMEOUT_SECONDS",
     "EXECUTE_MAX_LINES",

@@ -1,14 +1,17 @@
 """:func:`smai_agents.run_contextual_evaluation` — Task 2.B4 acceptance.
 
-Per ``04-agents.md`` §2.5 / §6 and DEC-031 / DEC-034 #2 / DEC-018.
+Per ``04-agents.md`` §2.5 / §6 / §10 and DEC-031 / DEC-034 #2 / DEC-018.
 The wrapper is exercised with the :class:`StubLlmProvider` from
 ``_agent_fakes`` (queue-driven canned responses); the user-message
 shape is asserted via the ``calls[]`` snapshot the stub records.
 
 Per §2.5 the schema is rule-agnostic; only the prompt-config variant
 differs between ``compare_to_baseline`` and ``compare_to_target`` CGs.
-We verify that selection by inspecting the system prompt the wrapper
-forwards to :func:`structured_call`.
+After the 2.B2/2.B4 reconciliation, the wrapper resolves prompt config
+via :func:`smai_agents.prompts.load_prompt_config` (loader-driven YAML
+substrate per §10) when ``prompt_config`` is ``None``; we verify
+variant selection by inspecting the system prompt the wrapper forwards
+to :func:`structured_call`.
 """
 
 from __future__ import annotations
@@ -21,9 +24,19 @@ from smai_agents import (
     CGMetadata,
     ContextualEvaluatorEntry,
     ContextualEvaluatorInput,
+    PromptConfig,
     StructuredCallFailed,
+    StructuredOutputTool,
+    clear_prompt_config_cache,
     run_contextual_evaluation,
 )
+from smai_agents.agents import contextual_evaluator as _contextual_evaluator_module
+
+
+@pytest.fixture(autouse=True)
+def _clear_prompt_config_cache() -> None:
+    """Each test starts with a clean process-local prompt-config cache."""
+    clear_prompt_config_cache()
 
 
 def _cg_metadata() -> CGMetadata:
@@ -135,29 +148,35 @@ async def test_contextual_evaluation_tool_name_matches_v1_convention() -> None:
 
 @pytest.mark.asyncio
 async def test_contextual_evaluation_baseline_variant_uses_baseline_framing() -> None:
-    """§2.5 / DEC-031 #8: ``compare_to_baseline`` selects the
-    treatment-vs-baseline narrative variant."""
+    """§2.5 / DEC-031 #8 / §10: ``compare_to_baseline`` selects the
+    treatment-vs-baseline narrative variant.
+
+    The system prompt is sourced from
+    ``prompts/contextual_evaluator/variants/compare_to_baseline.yaml``
+    via :func:`load_prompt_config`; we assert against the variant's
+    framing line, not the (orthogonal) target-variant framing.
+    """
     llm = StubLlmProvider([_canned_verdict_response("tu-3")])  # type: ignore[list-item]
     await run_contextual_evaluation(llm=llm, input=_baseline_input())
 
     system_prompt = llm.calls[0]["system"]
     assert isinstance(system_prompt, str)
     # Baseline framing line is present; target framing line is not.
-    assert "Did this technique beat the baseline meaningfully" in system_prompt
-    assert "Did we reproduce the published target" not in system_prompt
+    assert "treatment vs no-treatment" in system_prompt
+    assert "proposed-technique vs reference-technique" not in system_prompt
 
 
 @pytest.mark.asyncio
 async def test_contextual_evaluation_target_variant_uses_target_framing() -> None:
-    """§2.5 / DEC-031 #8: ``compare_to_target`` selects the
+    """§2.5 / DEC-031 #8 / §10: ``compare_to_target`` selects the
     treatment-vs-target narrative variant."""
     llm = StubLlmProvider([_canned_verdict_response("tu-4")])  # type: ignore[list-item]
     await run_contextual_evaluation(llm=llm, input=_target_input())
 
     system_prompt = llm.calls[0]["system"]
     assert isinstance(system_prompt, str)
-    assert "Did we reproduce the published target" in system_prompt
-    assert "Did this technique beat the baseline meaningfully" not in system_prompt
+    assert "proposed-technique vs reference-technique" in system_prompt
+    assert "treatment vs no-treatment" not in system_prompt
 
 
 @pytest.mark.asyncio
@@ -220,6 +239,91 @@ async def test_contextual_evaluation_raises_after_two_failed_attempts() -> None:
     with pytest.raises(StructuredCallFailed) as exc_info:
         await run_contextual_evaluation(llm=llm, input=_baseline_input())
     assert exc_info.value.tool_name == "submit_evaluation"
+
+
+@pytest.mark.asyncio
+async def test_contextual_evaluation_calls_loader_when_prompt_config_is_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """§10 / 2.B2-2.B4 reconciliation: ``prompt_config=None`` resolves
+    config via :func:`smai_agents.prompts.load_prompt_config` keyed on
+    ``role='contextual_evaluator'`` and ``variant_name=comparison_rule``
+    (per §2.5 / DEC-031 #8)."""
+    captured: dict[str, object] = {}
+
+    def _fake_loader(*, role: str, variant_name: str | None = None) -> PromptConfig:
+        captured["role"] = role
+        captured["variant_name"] = variant_name
+        return PromptConfig(
+            role="contextual_evaluator",
+            system_prompt="STUB SYSTEM PROMPT",
+            initial_user_message_template="(unused at single-call site)",
+            tools=[],
+            structured_output_tool=StructuredOutputTool(
+                name="submit_evaluation",
+                description="Submit the evaluation.",
+                schema_module=(
+                    "smai_agents.schemas.contextual_verdict:ContextualVerdict"
+                ),
+            ),
+            layer_chain=["contextual_evaluator/base", "contextual_evaluator/stub"],
+        )
+
+    monkeypatch.setattr(
+        _contextual_evaluator_module, "load_prompt_config", _fake_loader
+    )
+
+    llm = StubLlmProvider([_canned_verdict_response("tu-loader")])  # type: ignore[list-item]
+    await run_contextual_evaluation(llm=llm, input=_baseline_input())
+
+    assert captured == {
+        "role": "contextual_evaluator",
+        "variant_name": "compare_to_baseline",
+    }
+    assert llm.calls[0]["system"] == "STUB SYSTEM PROMPT"
+
+
+@pytest.mark.asyncio
+async def test_contextual_evaluation_skips_loader_when_prompt_config_supplied(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the caller supplies a :class:`PromptConfig`, the loader
+    must NOT be called — the caller's config is used verbatim."""
+
+    def _exploding_loader(*, role: str, variant_name: str | None = None) -> PromptConfig:
+        raise AssertionError(
+            "load_prompt_config must not be called when prompt_config is supplied"
+        )
+
+    monkeypatch.setattr(
+        _contextual_evaluator_module, "load_prompt_config", _exploding_loader
+    )
+
+    cfg = PromptConfig(
+        role="contextual_evaluator",
+        system_prompt="CALLER-PROVIDED SYSTEM PROMPT",
+        initial_user_message_template="(unused at single-call site)",
+        tools=[],
+        structured_output_tool=StructuredOutputTool(
+            name="submit_evaluation",
+            description="caller's tool description",
+            schema_module=(
+                "smai_agents.schemas.contextual_verdict:ContextualVerdict"
+            ),
+        ),
+        layer_chain=["test/inline"],
+    )
+
+    llm = StubLlmProvider([_canned_verdict_response("tu-supplied")])  # type: ignore[list-item]
+    await run_contextual_evaluation(
+        llm=llm, input=_baseline_input(), prompt_config=cfg
+    )
+
+    assert llm.calls[0]["system"] == "CALLER-PROVIDED SYSTEM PROMPT"
+    tools = llm.calls[0]["tools"]
+    assert isinstance(tools, list)
+    assert tools[0]["name"] == "submit_evaluation"
+    assert tools[0]["description"] == "caller's tool description"
 
 
 def _last_user_text(llm: StubLlmProvider) -> str:

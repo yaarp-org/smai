@@ -26,10 +26,7 @@ from pydantic import BaseModel, ConfigDict
 from smai_core.evaluation import EvaluationResult
 from smai_core.plugins import LlmProvider
 
-from smai_agents.agents._prompt_config import (
-    DEFAULT_CONTEXTUAL_EVALUATOR_PROMPT_CONFIGS,
-    PromptConfig,
-)
+from smai_agents.prompts import PromptConfig, load_prompt_config
 from smai_agents.schemas.contextual_verdict import ContextualVerdict
 from smai_agents.structured_call import structured_call
 
@@ -99,9 +96,6 @@ class ContextualEvaluatorInput(BaseModel):
     intent."""
 
 
-_TOOL_NAME = "submit_evaluation"
-
-
 async def run_contextual_evaluation(
     *,
     llm: LlmProvider,
@@ -114,24 +108,33 @@ async def run_contextual_evaluation(
     multi-turn loop. Steps:
 
     1. Resolve ``prompt_config`` — caller-supplied if present,
-       otherwise the per-rule default selected from
-       :data:`DEFAULT_CONTEXTUAL_EVALUATOR_PROMPT_CONFIGS`. Per §2.5
-       the ``compare_to_baseline`` and ``compare_to_target`` variants
-       differ only in the system prompt.
-    2. Render the user message from ``input``.
-    3. Call :func:`structured_call` with
-       ``output_schema=ContextualVerdict`` and
-       ``tool_name='submit_evaluation'``.
-    4. Return the parsed verdict.
+       otherwise :func:`smai_agents.prompts.load_prompt_config` is
+       called with ``role="contextual_evaluator"`` and
+       ``variant_name=input.comparison_rule`` (per ``04-agents.md``
+       §2.5 / DEC-031 #8: variant selection is keyed by comparison
+       rule; the schema is rule-agnostic).
+    2. Read the structured-output tool's ``name`` + ``description``
+       from :attr:`PromptConfig.structured_output_tool` (§10.2).
+    3. Render the user message from ``input``.
+    4. Call :func:`structured_call` with
+       ``output_schema=ContextualVerdict``.
+    5. Return the parsed verdict.
 
     The function inherits :func:`structured_call`'s discipline:
     retry-once-on-text-or-schema-invalid response per DEC-018, and
     :class:`smai_agents.StructuredCallFailed` on second-attempt
     failure (no silent fallback).
     """
-    cfg = prompt_config or DEFAULT_CONTEXTUAL_EVALUATOR_PROMPT_CONFIGS[
-        input.comparison_rule
-    ]
+    cfg = prompt_config if prompt_config is not None else load_prompt_config(
+        role="contextual_evaluator",
+        variant_name=input.comparison_rule,
+    )
+    sot = cfg.structured_output_tool
+    if sot is None:
+        raise ValueError(
+            "contextual_evaluator prompt config is missing structured_output_tool; "
+            "single-call agents require it per 04-agents.md §10.2"
+        )
     user_message = _build_user_message(input)
 
     return await structured_call(
@@ -139,8 +142,8 @@ async def run_contextual_evaluation(
         system=cfg.system_prompt,
         user_message=user_message,
         output_schema=ContextualVerdict,
-        tool_name=_TOOL_NAME,
-        tool_description=cfg.tool_description,
+        tool_name=sot.name,
+        tool_description=sot.description,
     )
 
 
