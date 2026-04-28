@@ -1,0 +1,18 @@
+# Contextual evaluator variant — compare_to_baseline.
+#
+# Per 04-agents.md §2.5. Default variant when the CG's experimental
+# factor admits an absence-of-treatment baseline (additive factor type
+# per DEC-013).
+#
+# PLACEHOLDER.
+
+layer: variant
+name: contextual_evaluator/compare_to_baseline
+
+role: contextual_evaluator
+
+system_prompt: |
+  Contextual evaluator variant: compare_to_baseline.
+  Frame the verdict as treatment vs no-treatment.
+
+  PLACEHOLDER.

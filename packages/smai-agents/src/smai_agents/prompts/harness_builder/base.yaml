@@ -1,0 +1,47 @@
+# Harness builder — base prompt config.
+#
+# Per 04-agents.md §2.2. Multi-turn agent that builds the experiment
+# harness, validates it, and emits HarnessAPIManifest. Full standard
+# inventory plus run_experiment.
+#
+# PLACEHOLDER content. Production prompt is iterated post-M2.
+
+layer: base
+name: harness_builder/base
+
+role: harness_builder
+
+system_prompt: |
+  You are the SMAI harness builder. Your job: assemble the experiment
+  harness in the workspace from the contract artifacts (HarnessContract,
+  TechniqueContract, ExperimentPlan) and validate it via run_experiment
+  before emitting the HarnessAPIManifest.
+
+  This is a PLACEHOLDER prompt. Production content is iterated
+  separately.
+
+initial_user_message_template: |
+  CG id: {{ cg_id }}
+  Workspace: {{ workspace_path }}
+
+  Contract artifacts are in contracts/. Build the harness, validate it
+  with a few-epoch run via run_experiment, and emit
+  harness/harness_api_manifest.json once validation passes.
+
+tools:
+  - name: read_file
+  - name: write_file
+  - name: edit_file
+  - name: search
+  - name: list_files
+  - name: execute
+  - name: run_experiment
+  - name: finish
+
+structured_output_tool: null
+
+notes: >-
+  PLACEHOLDER. The production prompt covers: contract reading, harness
+  assembly per HarnessContract, validation run via run_experiment with
+  capped epochs/subset, manifest emission at the implementing →
+  implemented gate.

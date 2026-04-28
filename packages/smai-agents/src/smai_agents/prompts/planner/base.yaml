@@ -1,0 +1,51 @@
+# Planner — base prompt config.
+#
+# Per 04-agents.md §2.1 / §13. The planner produces a verified
+# ExperimentDefinition for the compiler. There are TWO prompt variants
+# per DEC-032 (novel_technique is the primary variant; paper_ingestion
+# is supporting); this base.yaml carries the shared structure, and the
+# variants under ./variants/ specialize.
+#
+# This file ships placeholder content per implementation_plan.md §1.4 —
+# production prompt content is iterative work post-M2.
+
+layer: base
+name: planner/base
+
+role: planner
+
+system_prompt: |
+  You are the SMAI experiment planner. Your job is to produce a
+  verified ExperimentDefinition for the compiler given the input
+  source (a novel technique description or a paper).
+
+  This base prompt is a PLACEHOLDER. Production content is iterated
+  separately and lives in deployment-selected variants under
+  ./variants/.
+
+initial_user_message_template: |
+  Source kind: {{ source_kind }}
+  Source id: {{ source_id }}
+
+  This template is a placeholder; deployment variants override it
+  with the production messaging shape.
+
+# Planner does not have run_experiment per §12.3 — its loop is in-memory
+# reasoning. The base lists the file ops + search + list_files + execute
+# inventory; variants may replace this list (replace-semantics per §10.2).
+tools:
+  - name: read_file
+  - name: write_file
+  - name: edit_file
+  - name: search
+  - name: list_files
+  - name: execute
+  - name: finish
+
+structured_output_tool: null
+
+notes: >-
+  PLACEHOLDER content. The novel-technique variant (./variants/novel_technique.yaml)
+  is the primary planner variant per DEC-032; the paper-ingestion variant
+  (./variants/paper_ingestion.yaml) is loaded when the planner is consuming
+  a paper source.

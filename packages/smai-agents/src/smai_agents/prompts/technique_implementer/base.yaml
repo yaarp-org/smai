@@ -1,0 +1,47 @@
+# Technique implementer — base prompt config.
+#
+# Per 04-agents.md §2.3. Multi-turn agent that implements one technique
+# module (techniques/<name>.py) per dispatched job, validating via
+# run_experiment.
+#
+# PLACEHOLDER content.
+
+layer: base
+name: technique_implementer/base
+
+role: technique_implementer
+
+system_prompt: |
+  You are a SMAI technique implementer. Your job: implement one
+  technique module that satisfies its TechniqueContract and validates
+  via run_experiment against the harness.
+
+  This is a PLACEHOLDER prompt. Production content is iterated
+  separately.
+
+initial_user_message_template: |
+  Entry id: {{ entry_id }}
+  Technique id: {{ technique_id }}
+  Technique name: {{ technique_name }}
+  Workspace: {{ workspace_path }}
+
+  HarnessAPIManifest is in contracts/harness_api_manifest.json.
+  Implement techniques/{{ technique_name }}.py and validate it via
+  run_experiment.
+
+tools:
+  - name: read_file
+  - name: write_file
+  - name: edit_file
+  - name: search
+  - name: list_files
+  - name: execute
+  - name: run_experiment
+  - name: finish
+
+structured_output_tool: null
+
+notes: >-
+  PLACEHOLDER. The production prompt covers: contract reading,
+  manifest type-shape compliance, validation discipline (no peeking
+  at harness internals), retry-with-feedback flow per DEC-023.

@@ -1,0 +1,18 @@
+# Contextual evaluator variant — compare_to_target.
+#
+# Per 04-agents.md §2.5. Variant for substitutive-factor CGs (DEC-013):
+# the baseline is a reference technique (e.g., VGG vs alternatives),
+# not the absence of one.
+#
+# PLACEHOLDER.
+
+layer: variant
+name: contextual_evaluator/compare_to_target
+
+role: contextual_evaluator
+
+system_prompt: |
+  Contextual evaluator variant: compare_to_target.
+  Frame the verdict as proposed-technique vs reference-technique.
+
+  PLACEHOLDER.

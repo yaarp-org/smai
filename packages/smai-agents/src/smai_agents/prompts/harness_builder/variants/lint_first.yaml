@@ -1,0 +1,25 @@
+# Harness builder variant — example variant exercising replace-semantics
+# on tools (§10.2). Demonstrates that a variant can drop a tool from
+# the inventory without redefining the prompt content.
+#
+# This variant is for the test fixture set; production deployments
+# may define their own variants.
+
+layer: variant
+name: harness_builder/lint_first
+
+role: harness_builder
+
+system_prompt: |
+  Harness builder variant: lint-first iteration.
+  Lint after every write before moving to the next file.
+
+# Demonstrates replace-semantics — drops `execute` from the base list.
+tools:
+  - name: read_file
+  - name: write_file
+  - name: edit_file
+  - name: search
+  - name: list_files
+  - name: run_experiment
+  - name: finish

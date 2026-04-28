@@ -6,6 +6,15 @@ requires-python = ">=3.11"
 dependencies = [
     "smai-core",
     "pydantic>=2.0",
+    # YAML on disk + Pydantic in process per 04-agents.md §10.1.
+    # Prompt configs ship as YAML and validate on load; pyyaml is the
+    # standard Python YAML parser.
+    "pyyaml>=6.0",
+    # Jinja2 — the template engine 04-agents.md §10.1 commits to
+    # explicitly so variants don't accidentally introduce a different
+    # one. Used to render initial_user_message_template at session
+    # start with task-specific variables.
+    "jinja2>=3.1",
 ]
 
 [tool.uv.sources]
@@ -27,3 +36,11 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/smai_agents"]
+
+# Prompt-config YAML files ship as package resources so
+# importlib.resources.files() can read them at load time, per
+# 04-agents.md §10. Hatchling defaults include them via the package
+# directive above, but force-include keeps them robust against future
+# default changes (mirrors smai-runtime's templates handling).
+[tool.hatch.build.targets.wheel.force-include]
+"src/smai_agents/prompts" = "smai_agents/prompts"

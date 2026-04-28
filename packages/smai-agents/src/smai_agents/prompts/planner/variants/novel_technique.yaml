@@ -1,0 +1,26 @@
+# Planner variant — novel-technique input path.
+#
+# Per DEC-032: the primary input path. The planner ingests a novel-
+# technique description (user-provided), surveys the technique pool,
+# and produces an ExperimentDefinition.
+#
+# PLACEHOLDER content. Production prompt is iterated post-M2.
+
+layer: variant
+name: planner/novel_technique
+
+role: planner
+
+system_prompt: |
+  You are the SMAI experiment planner, variant: novel_technique.
+
+  Input: a description of a novel technique to evaluate.
+  Output: a verified ExperimentDefinition that compiles cleanly.
+
+  This is a PLACEHOLDER prompt. The production prompt iterates over
+  the technique-pool snapshot and produces a single-factor experimental
+  factor design; see designs/yaarp/novel_technique_experiment_design.md
+  for the v1 reference.
+
+# Inherits initial_user_message_template, tools, structured_output_tool
+# from the base layer.

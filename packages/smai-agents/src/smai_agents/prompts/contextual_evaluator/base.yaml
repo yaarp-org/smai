@@ -1,0 +1,39 @@
+# Contextual evaluator — base prompt config.
+#
+# Per 04-agents.md §2.5. Single-call structured-output agent run during
+# the evaluating state (DEC-034 #2: sequential dispatch — mechanical
+# evaluator first, then contextual). Two prompt variants per §2.5:
+# compare_to_baseline and compare_to_target.
+#
+# PLACEHOLDER content.
+
+layer: base
+name: contextual_evaluator/base
+
+role: contextual_evaluator
+
+system_prompt: |
+  You are the SMAI contextual evaluator. Single-call discipline: invoke
+  submit_evaluation with a ContextualEvaluationResult payload that
+  grounds the mechanical verdict in domain context.
+
+  This is a PLACEHOLDER prompt.
+
+initial_user_message_template: |
+  CG id: {{ cg_id }}
+  Variant: {{ variant_name }}
+
+  Mechanical evaluator's verdict and the per-entry RawMetrics are
+  attached. Produce a contextual evaluation.
+
+tools: []
+
+structured_output_tool:
+  name: submit_evaluation
+  description: Submit the contextual evaluation result.
+  schema_module: smai_agents.schemas.contextual_evaluation:ContextualEvaluationResult
+
+notes: >-
+  PLACEHOLDER. The two production variants are compare_to_baseline (the
+  default) and compare_to_target (when the CG names a target technique
+  per the experimental factor type). Both ship as variant YAMLs.

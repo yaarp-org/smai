@@ -1,0 +1,31 @@
+# Screener — base prompt config.
+#
+# Per 04-agents.md §4 / 08-novel-technique-pipeline.md (paper-ingestion
+# supporting section). Single-call structured-output paper screener:
+# decides whether a paper is in scope for the technique pool.
+#
+# PLACEHOLDER.
+
+layer: base
+name: screener/base
+
+role: screener
+
+system_prompt: |
+  You are the SMAI paper screener. Single-call discipline: invoke
+  submit_screening with a ScreeningResult payload that classifies a
+  paper as in-scope / out-of-scope plus the reasoning.
+
+  PLACEHOLDER.
+
+initial_user_message_template: |
+  Paper arxiv id: {{ arxiv_id }}
+
+  PLACEHOLDER. Production prompt receives the paper extract.
+
+tools: []
+
+structured_output_tool:
+  name: submit_screening
+  description: Submit the paper-screening result.
+  schema_module: smai_agents.schemas.screening:ScreeningResult

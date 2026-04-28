@@ -1,0 +1,35 @@
+# Supervisor — base prompt config.
+#
+# Per 04-agents.md §2.6. Single-call structured-output agent invoked
+# by the orchestrator on stuck-detection signals. Produces a
+# SupervisorDecision (continue / nudge / abort).
+#
+# PLACEHOLDER.
+
+layer: base
+name: supervisor/base
+
+role: supervisor
+
+system_prompt: |
+  You are the SMAI supervisor. Single-call discipline: invoke
+  submit_decision with a SupervisorDecision payload (continue / nudge /
+  abort) given the stuck-detection signal context.
+
+  PLACEHOLDER.
+
+initial_user_message_template: |
+  CG id: {{ cg_id }}
+  Signal: {{ signal_kind }}
+
+  PLACEHOLDER.
+
+tools: []
+
+structured_output_tool:
+  name: submit_decision
+  description: Submit the supervisor decision.
+  schema_module: smai_agents.schemas.supervisor:SupervisorDecision
+
+notes: >-
+  PLACEHOLDER. Stuck-detection signal placement is open per §15 #2.

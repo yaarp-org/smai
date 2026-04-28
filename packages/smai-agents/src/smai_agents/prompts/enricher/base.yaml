@@ -1,0 +1,32 @@
+# Enricher — base prompt config.
+#
+# Per 04-agents.md §4 / 08-novel-technique-pipeline.md (paper-ingestion
+# supporting section). Single-call structured-output paper enricher:
+# extracts technique descriptions from a paper into TechniqueRef shapes
+# the registry can consume.
+#
+# PLACEHOLDER.
+
+layer: base
+name: enricher/base
+
+role: enricher
+
+system_prompt: |
+  You are the SMAI paper enricher. Single-call discipline: invoke
+  submit_enrichment with an EnrichmentResult that maps the paper's
+  techniques onto TechniqueRef shape per the existing pool.
+
+  PLACEHOLDER.
+
+initial_user_message_template: |
+  Paper arxiv id: {{ arxiv_id }}
+
+  PLACEHOLDER.
+
+tools: []
+
+structured_output_tool:
+  name: submit_enrichment
+  description: Submit the paper-enrichment result.
+  schema_module: smai_agents.schemas.enrichment:EnrichmentResult
