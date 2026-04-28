@@ -7,6 +7,12 @@ dependencies = [
     "pydantic>=2.0",
 ]
 
+# Factor-type plugin registration per 02-dsl-and-contracts.md §3.5 / DEC-026.
+# vN may register additional types via this group without forking smai-core.
+[project.entry-points."smai.factor_types"]
+additive = "smai_core.factor_types.additive:plugin"
+substitutive = "smai_core.factor_types.substitutive:plugin"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

@@ -61,13 +61,14 @@ def test_registries_validates() -> None:
     assert reg.metric_registry.get_atomic("accuracy") is not None
 
 
-def test_registries_admits_arbitrary_factor_type_plugins() -> None:
-    class _StubPlugin:
-        name = "additive"
+def test_registries_admits_protocol_conforming_plugins() -> None:
+    """Any object that satisfies ``FactorTypePlugin`` is admitted (Task 1.3)."""
+    from smai_core import AdditivePlugin
 
+    plugin = AdditivePlugin()
     reg = Registries(
         technique_registry={},
         metric_registry=_registry(),
-        factor_type_plugins={"additive": _StubPlugin()},
+        factor_type_plugins={"additive": plugin},
     )
-    assert isinstance(reg.factor_type_plugins["additive"], _StubPlugin)
+    assert isinstance(reg.factor_type_plugins["additive"], AdditivePlugin)

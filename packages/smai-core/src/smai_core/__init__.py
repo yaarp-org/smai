@@ -35,10 +35,19 @@ from smai_core.entities import (
     TechniqueRef,
     TrendCheck,
     ValidationCriteria,
+    ValidationError,
     VerifiedExperimentDefinition,
+)
+from smai_core.factor_types import (
+    AdditivePlugin,
+    FactorTypePlugin,
+    FactorTypePluginError,
+    SubstitutivePlugin,
+    load_builtin_factor_type_plugins,
 )
 
 __all__ = [
+    "AdditivePlugin",
     "AggregationRule",
     "AtomicMetricEntry",
     "AtomicMetricRef",
@@ -48,6 +57,8 @@ __all__ = [
     "ExperimentDefinition",
     "Factor",
     "FactorModel",
+    "FactorTypePlugin",
+    "FactorTypePluginError",
     "FidelityAnchor",
     "FidelityAnchorAdapter",
     "Level",
@@ -61,10 +72,13 @@ __all__ = [
     "ProposalFidelityAnchor",
     "Registries",
     "ReviewerAttestedFidelityAnchor",
+    "SubstitutivePlugin",
     "TechniqueParamValue",
     "TechniqueParams",
     "TechniqueRef",
     "TrendCheck",
     "ValidationCriteria",
+    "ValidationError",
     "VerifiedExperimentDefinition",
+    "load_builtin_factor_type_plugins",
 ]

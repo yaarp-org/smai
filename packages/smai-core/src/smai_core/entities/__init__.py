@@ -39,6 +39,7 @@ from smai_core.entities.validation import (
     TrendCheck,
     ValidationCriteria,
 )
+from smai_core.entities.validation_report import ValidationError
 
 __all__ = [
     "AggregationRule",
@@ -68,5 +69,6 @@ __all__ = [
     "TechniqueRef",
     "TrendCheck",
     "ValidationCriteria",
+    "ValidationError",
     "VerifiedExperimentDefinition",
 ]
