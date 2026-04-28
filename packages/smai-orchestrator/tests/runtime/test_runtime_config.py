@@ -1,0 +1,129 @@
+"""Tests for :class:`RuntimeConfig` + :class:`PluginSelection`.
+
+Per ``09-cli.md`` §3 — the typed model the CLI's config-layering
+pipeline produces. The layering itself is Task 2.D2; this module
+covers shape, defaults, and the small ``with_overrides`` helper.
+"""
+
+from __future__ import annotations
+
+import pytest
+from pydantic import ValidationError
+from smai_orchestrator.engine import EngineConfig
+from smai_orchestrator.runtime import PluginSelection, RuntimeConfig
+
+
+def _minimal_selection() -> PluginSelection:
+    return PluginSelection(
+        llm_provider="bedrock",
+        metadata_store="sqlite",
+        artifact_store="localfs",
+        compute="localgpu",
+    )
+
+
+def test_minimal_runtime_config_constructs() -> None:
+    cfg = RuntimeConfig(
+        engine=EngineConfig(),
+        plugins=_minimal_selection(),
+        pipelines=["smai_cg_execution"],
+    )
+    assert cfg.plugins.llm_provider == "bedrock"
+    assert cfg.engine.poll_interval_seconds == 30
+    assert cfg.pipelines == ["smai_cg_execution"]
+
+
+def test_plugin_selection_config_dicts_default_empty() -> None:
+    sel = _minimal_selection()
+    assert sel.llm_provider_config == {}
+    assert sel.metadata_store_config == {}
+    assert sel.artifact_store_config == {}
+    assert sel.compute_config == {}
+
+
+def test_plugin_selection_passes_through_config_dicts() -> None:
+    sel = PluginSelection(
+        llm_provider="bedrock",
+        metadata_store="sqlite",
+        artifact_store="localfs",
+        compute="localgpu",
+        llm_provider_config={"region": "us-east-1", "model_id": "test"},
+        metadata_store_config={"uri": "sqlite+aiosqlite:///:memory:"},
+        artifact_store_config={"root": "/tmp/test"},
+        compute_config={"skip_preflight": True},
+    )
+    assert sel.llm_provider_config["region"] == "us-east-1"
+    assert sel.metadata_store_config["uri"] == "sqlite+aiosqlite:///:memory:"
+    assert sel.compute_config["skip_preflight"] is True
+
+
+def test_extra_fields_rejected_on_plugin_selection() -> None:
+    with pytest.raises(ValidationError):
+        PluginSelection(
+            llm_provider="bedrock",
+            metadata_store="sqlite",
+            artifact_store="localfs",
+            compute="localgpu",
+            unknown="oops",  # type: ignore[call-arg]
+        )
+
+
+def test_extra_fields_rejected_on_runtime_config() -> None:
+    with pytest.raises(ValidationError):
+        RuntimeConfig(
+            engine=EngineConfig(),
+            plugins=_minimal_selection(),
+            pipelines=["x"],
+            dashboard={},  # type: ignore[call-arg] — DashboardConfig not yet shipped
+        )
+
+
+def test_pipelines_must_be_list() -> None:
+    """The plural ``pipelines`` shape per `09` §3 — single-spec
+    deployments pass a one-element list, not a bare string."""
+    with pytest.raises(ValidationError):
+        RuntimeConfig(
+            engine=EngineConfig(),
+            plugins=_minimal_selection(),
+            pipelines="not_a_list",  # type: ignore[arg-type]
+        )
+
+
+def test_engine_and_plugins_are_orthogonal() -> None:
+    """DEC-028 / `09` §3: changing engine config doesn't affect plugin
+    selection and vice-versa.
+    """
+    cfg = RuntimeConfig(
+        engine=EngineConfig(poll_interval_seconds=10, fair_scheduling="round_robin"),
+        plugins=_minimal_selection(),
+        pipelines=["x"],
+    )
+    flipped_engine = cfg.with_overrides(
+        engine=EngineConfig(poll_interval_seconds=60, fair_scheduling="off")
+    )
+    assert flipped_engine.plugins == cfg.plugins  # same selection
+    assert flipped_engine.engine.poll_interval_seconds == 60
+
+    flipped_plugins = cfg.with_overrides(
+        plugins=PluginSelection(
+            llm_provider="anthropic",
+            metadata_store="postgres",
+            artifact_store="s3",
+            compute="modal",
+        )
+    )
+    assert flipped_plugins.engine == cfg.engine  # same engine config
+    assert flipped_plugins.plugins.metadata_store == "postgres"
+
+
+def test_with_overrides_is_immutable() -> None:
+    """``with_overrides`` returns a new instance; the original is
+    unchanged (Pydantic's ``model_copy`` semantics)."""
+    cfg = RuntimeConfig(
+        engine=EngineConfig(poll_interval_seconds=10),
+        plugins=_minimal_selection(),
+        pipelines=["x"],
+    )
+    cfg2 = cfg.with_overrides(pipelines=["y"])
+    assert cfg.pipelines == ["x"]
+    assert cfg2.pipelines == ["y"]
