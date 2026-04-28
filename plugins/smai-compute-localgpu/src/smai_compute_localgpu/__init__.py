@@ -1,9 +1,29 @@
-"""Compute plugin: local Docker GPU implementation."""
+"""Compute plugin: local Docker reference implementation.
 
+Per ``07-plugin-interfaces.md`` §7 / §7.4 / §7.5 and the Task 2.A4 brief
+in ``designs/smai/implementation_plan.md`` §3.3. Substrate is **Docker**
+per commit a9e57bd; compatible OCI runtimes (Podman, Apple ``container``,
+containerd via ``nerdctl``) typically alias the ``docker`` binary on
+``$PATH`` and work transparently.
 
-class LocalGpuCompute:
-    def __init__(self, *args, **kwargs):
-        raise NotImplementedError(
-            "LocalGpuCompute is a Phase 0 stub for entry-point discovery; "
-            "real implementation lands in Task 2.A4."
-        )
+Registered via the ``smai.computes`` entry-point group::
+
+    [project.entry-points."smai.computes"]
+    localgpu = "smai_compute_localgpu:LocalGpuCompute"
+
+Tier A integrators (the in-tree CLI / hosted backend) instantiate the
+plugin through the entry-point discovery flow owned by ``smai-cli`` (see
+Task 2.C3); Tier B integrators import :class:`LocalGpuCompute` directly.
+"""
+
+from smai_compute_localgpu._compute import (
+    DEFAULT_AGENT_IMAGE,
+    DEFAULT_RUNTIME_IMAGE,
+    LocalGpuCompute,
+)
+
+__all__ = [
+    "DEFAULT_AGENT_IMAGE",
+    "DEFAULT_RUNTIME_IMAGE",
+    "LocalGpuCompute",
+]

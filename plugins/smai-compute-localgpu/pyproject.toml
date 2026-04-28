@@ -3,7 +3,19 @@ name = "smai-compute-localgpu"
 version = "0.1.0"
 description = "Compute plugin: local Docker GPU implementation."
 requires-python = ">=3.11"
-dependencies = []
+# The plugin shells out to the ``docker`` CLI rather than depending on
+# the Python Docker SDK — see _docker.py and Task 2.A4 report. This
+# keeps the runtime dep set to ``smai-core`` only and trivially
+# satisfies tools/check_deps.py Rule 3.
+dependencies = [
+    "smai-core",
+]
+
+# Pytest is required to subclass the conformance bases shipped under
+# ``smai_core.plugins.conformance``. Conformance is opt-in; users who
+# only consume the plugin don't need it.
+[project.optional-dependencies]
+conformance = ["smai-core[conformance]"]
 
 [project.entry-points."smai.computes"]
 localgpu = "smai_compute_localgpu:LocalGpuCompute"
@@ -12,5 +24,18 @@ localgpu = "smai_compute_localgpu:LocalGpuCompute"
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.uv.sources]
+smai-core = { workspace = true }
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/smai_compute_localgpu"]
+
+# The two reference Dockerfiles ship in the wheel as plugin-package
+# data so users can locate them via ``importlib.resources`` from a
+# pip-installed plugin (e.g., for documentation tooling). Per
+# ``10-runtime-and-templates.md`` §8.5 the build invocation expects
+# the files at ``dockerfiles/`` next to the package; mirroring the
+# layout in the wheel keeps both invocations consistent.
+[tool.hatch.build.targets.wheel.force-include]
+"dockerfiles/agent.Dockerfile" = "smai_compute_localgpu/dockerfiles/agent.Dockerfile"
+"dockerfiles/runtime.Dockerfile" = "smai_compute_localgpu/dockerfiles/runtime.Dockerfile"
