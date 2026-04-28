@@ -39,5 +39,8 @@ jobs:
       - name: Pyright
         run: pyright
 
+      - name: Dependency allowlist
+        run: python tools/check_deps.py --verbose
+
       - name: Pytest
         run: pytest
