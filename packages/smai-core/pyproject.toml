@@ -8,6 +8,20 @@ dependencies = [
     "jsonschema>=4.0",
 ]
 
+# Optional dep groups. Per Task 1.9 and DEC-029: the conformance test base
+# classes shipped under ``smai_core.plugins.conformance`` import :mod:`pytest`
+# at module load time (``@pytest.fixture`` / ``@pytest.mark.parametrize``
+# decorators reference it at class-definition time). Pytest is NOT on
+# smai-core's runtime allowlist (only Pydantic + jsonschema + stdlib per
+# DEC-029); the ``conformance`` extra exists so plugin authors who want to
+# subclass the bases can pull pytest in explicitly:
+#     pip install smai-core[conformance]
+# ``tools/check_deps.py`` rule 1 walks ``[project] dependencies`` only and
+# ignores ``[project.optional-dependencies]``, so this group does not affect
+# the dep-allowlist lint.
+[project.optional-dependencies]
+conformance = ["pytest>=8.0"]
+
 # Factor-type plugin registration per 02-dsl-and-contracts.md §3.5 / DEC-026.
 # vN may register additional types via this group without forking smai-core.
 [project.entry-points."smai.factor_types"]
