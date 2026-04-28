@@ -24,6 +24,15 @@
       ]
     },
     {
+      "root": "packages/smai-agents",
+      "reportMissingImports": "error",
+      "extraPaths": [
+        "packages/smai-agents/src",
+        "packages/smai-core/src",
+        "plugins/smai-llm-bedrock/src"
+      ]
+    },
+    {
       "root": "plugins/smai-llm-bedrock",
       "reportMissingImports": "error",
       "extraPaths": [
@@ -53,6 +62,7 @@
   "strict": [
     "packages/smai-core/src",
     "packages/smai-orchestrator/src",
+    "packages/smai-agents/src",
     "plugins/smai-llm-bedrock/src",
     "plugins/smai-store-sqlite/src",
     "plugins/smai-compute-localgpu/src"

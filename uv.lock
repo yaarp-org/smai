@@ -649,6 +649,24 @@ source = { editable = "packages/smai" }
 name = "smai-agents"
 version = "0.1.0"
 source = { editable = "packages/smai-agents" }
+dependencies = [
+    { name = "pydantic" },
+    { name = "smai-core" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "smai-llm-bedrock" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "pydantic", specifier = ">=2.0" },
+    { name = "smai-core", editable = "packages/smai-core" },
+]
+
+[package.metadata.requires-dev]
+dev = [{ name = "smai-llm-bedrock", editable = "plugins/smai-llm-bedrock" }]
 
 [[package]]
 name = "smai-artifacts-localfs"

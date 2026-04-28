@@ -3,7 +3,23 @@ name = "smai-agents"
 version = "0.1.0"
 description = "Custom Bedrock-Converse-style agent loop, prompt-config surface, fleet roles."
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "smai-core",
+    "pydantic>=2.0",
+]
+
+[tool.uv.sources]
+smai-core = { workspace = true }
+smai-llm-bedrock = { workspace = true }
+
+[dependency-groups]
+dev = [
+    # Bedrock plugin powers the integration test (Task 2.B1 brief: end-to-end
+    # multi-turn loop via BedrockProvider + FakeBedrockClient). It is NOT a
+    # runtime dep — production users construct LlmProviders externally and
+    # pass them into AgentSession.
+    "smai-llm-bedrock",
+]
 
 [build-system]
 requires = ["hatchling"]
