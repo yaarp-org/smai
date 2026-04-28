@@ -87,24 +87,6 @@ def _make_cg(cg_id: str, state: str = "draft") -> ComparisonGroupRecord:
     )
 
 
-async def _list_cgs_with_handle(
-    store: SqliteStore, *, state: str, has_handle: bool
-) -> list[ComparisonGroupRecord]:
-    """State-filter + handle-presence filter; same workaround the
-    test_loop.py module uses for the SqliteStore JSON-null bug."""
-    from smai_store_sqlite._schema import cgs_table  # type: ignore[import-not-found]
-    from smai_store_sqlite._serde import row_to_record  # type: ignore[import-not-found]
-    from sqlalchemy import select
-
-    async with store._engine.connect() as conn:  # type: ignore[attr-defined]
-        result = await conn.execute(select(cgs_table).where(cgs_table.c.state == state))
-        rows = result.mappings().all()
-    items = [row_to_record(ComparisonGroupRecord, row) for row in rows]
-    if has_handle:
-        return [c for c in items if c.harness_job_handle is not None]
-    return [c for c in items if c.harness_job_handle is None]
-
-
 # ===== End-to-end memoized-dispatch integration =============================
 
 
@@ -323,10 +305,12 @@ def _build_spec(*, handler):  # type: ignore[no-untyped-def]
     )
 
     async def _phase1_query(store):  # type: ignore[no-untyped-def]
-        return await _list_cgs_with_handle(store, state="implementing", has_handle=True)
+        page = await store.get_in_flight_harness_build(limit=100, cursor=None)
+        return list(page.items)
 
     async def _phase2_query(store):  # type: ignore[no-untyped-def]
-        return await _list_cgs_with_handle(store, state="draft", has_handle=False)
+        page = await store.get_ready_for_harness_build(limit=100, cursor=None)
+        return list(page.items)
 
     return EngineSpec(
         entity_kind="cg",
@@ -361,10 +345,12 @@ def _build_spec(*, handler):  # type: ignore[no-untyped-def]
         ],
         pools=[ConcurrencyPool(name="agents", limit=10)],
         phase1_queries={
-            "implementing": SchedulingQueryRef(name="custom_in_flight", fn=_phase1_query),
+            "implementing": SchedulingQueryRef(
+                name="get_in_flight_harness_build", fn=_phase1_query
+            ),
         },
         phase2_queries={
-            "draft": SchedulingQueryRef(name="custom_ready", fn=_phase2_query),
+            "draft": SchedulingQueryRef(name="get_ready_for_harness_build", fn=_phase2_query),
         },
     )
 

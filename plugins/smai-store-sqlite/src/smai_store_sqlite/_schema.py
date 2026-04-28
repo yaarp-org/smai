@@ -82,8 +82,13 @@ cgs_table: Table = Table(
     Column("validation_config_hash", String(64), nullable=True),
     # State
     Column("state", String(32), nullable=False),
-    # Job handle (JSON blob — JobHandle.{plugin, handle, metadata})
-    Column("harness_job_handle", JSON, nullable=True),
+    # Job handle (JSON blob — JobHandle.{plugin, handle, metadata}).
+    # ``none_as_null=True`` maps Python ``None`` to SQL ``NULL`` rather
+    # than the JSON literal ``'null'`` — required so that
+    # ``IS NULL`` / ``IS NOT NULL`` predicates in the scheduling
+    # queries (``get_ready_for_*`` / ``get_in_flight_*``) match
+    # correctly on absent / present handles.
+    Column("harness_job_handle", JSON(none_as_null=True), nullable=True),
     # Code-review state (DEC-016)
     Column("code_review_attempt", Integer, nullable=False, default=0),
     Column("code_review_result_hash", String(64), nullable=True),
@@ -119,8 +124,8 @@ entries_table: Table = Table(
     Column("harness_api_manifest_hash", String(64), nullable=True),
     # State
     Column("state", String(32), nullable=False),
-    # Job handle
-    Column("implementation_job_handle", JSON, nullable=True),
+    # Job handle (``none_as_null=True`` per the harness-handle note above).
+    Column("implementation_job_handle", JSON(none_as_null=True), nullable=True),
     # Implementation retry counter
     Column("implementation_attempt", Integer, nullable=False, default=0),
     # Common
@@ -149,8 +154,8 @@ runs_table: Table = Table(
     Column("seed", Integer, nullable=False),
     # State
     Column("state", String(32), nullable=False),
-    # Job handle
-    Column("compute_job_handle", JSON, nullable=True),
+    # Job handle (``none_as_null=True`` per the harness-handle note above).
+    Column("compute_job_handle", JSON(none_as_null=True), nullable=True),
     # Telemetry
     Column("raw_metrics_artifact_key", String(512), nullable=True),
     Column("duration_seconds", Float(), nullable=True),
@@ -187,8 +192,9 @@ proposals_table: Table = Table(
     Column("reproduce_paper_arxiv_id", String(64), nullable=True),
     # State
     Column("state", String(32), nullable=False),
-    # Designing-stage agent state
-    Column("planner_job_handle", JSON, nullable=True),
+    # Designing-stage agent state (``none_as_null=True`` per the
+    # harness-handle note on ``cgs.harness_job_handle``).
+    Column("planner_job_handle", JSON(none_as_null=True), nullable=True),
     Column("design_plan_artifact_key", String(512), nullable=True),
     Column("error_context_artifact_key", String(512), nullable=True),
     # Retry counters
@@ -220,10 +226,13 @@ papers_table: Table = Table(
     Column("arxiv_id", String(64), primary_key=True),
     # Bibliographic metadata (DEC-009)
     Column("title", Text, nullable=True),
-    Column("authors", JSON, nullable=True),  # list[str]
+    # ``none_as_null=True`` for every nullable JSON column on this table
+    # (and the others) — Python ``None`` must serialize to SQL ``NULL``,
+    # not the JSON literal ``'null'``, so ``IS NULL`` predicates match.
+    Column("authors", JSON(none_as_null=True), nullable=True),  # list[str]
     Column("abstract", Text, nullable=True),
     Column("published_date", DateTime(timezone=True), nullable=True),
-    Column("categories", JSON, nullable=True),  # list[str]
+    Column("categories", JSON(none_as_null=True), nullable=True),  # list[str]
     # Artifact pointers
     Column("latex_bundle_artifact_key", String(512), nullable=True),
     Column("expanded_tex_artifact_key", String(512), nullable=True),
@@ -235,9 +244,9 @@ papers_table: Table = Table(
     # State
     Column("state", String(32), nullable=False),
     # Per-stage job handles
-    Column("fetcher_job_handle", JSON, nullable=True),
-    Column("screener_job_handle", JSON, nullable=True),
-    Column("planner_job_handle", JSON, nullable=True),
+    Column("fetcher_job_handle", JSON(none_as_null=True), nullable=True),
+    Column("screener_job_handle", JSON(none_as_null=True), nullable=True),
+    Column("planner_job_handle", JSON(none_as_null=True), nullable=True),
     # Per-stage artifact pointers
     Column("technique_buffer_artifact_key", String(512), nullable=True),
     Column("error_context_artifact_key", String(512), nullable=True),
@@ -297,12 +306,12 @@ techniques_table: Table = Table(
     Column("standard", Boolean, nullable=False, default=False),
     # Denormalized for ``list_techniques_for_paper`` query — duplicated
     # from ``fidelity_anchor`` JSON when the anchor is a paper.
-    Column("fidelity_anchor", JSON, nullable=True),
+    Column("fidelity_anchor", JSON(none_as_null=True), nullable=True),
     Column("fidelity_anchor_kind", String(32), nullable=True),
     Column("fidelity_anchor_arxiv_id", String(64), nullable=True, index=True),
     Column("affects_extension_points", JSON, nullable=False),  # list[str]
     Column("implies_controlled", JSON, nullable=False),  # list[str]
-    Column("parameter_schema", JSON, nullable=True),
+    Column("parameter_schema", JSON(none_as_null=True), nullable=True),
 )
 
 

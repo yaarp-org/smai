@@ -86,8 +86,8 @@ def _basic_spec(
     """Synthetic 4-state CG spec: draft → implementing →
     {implemented, implementation_failed} (terminal).
 
-    Phase-2 query: CGs in ``draft``.
-    Phase-1 query: CGs in ``implementing`` with non-null harness_job_handle.
+    Phase-2 query binds to :meth:`MetadataStore.get_ready_for_harness_build`;
+    phase-1 query binds to :meth:`MetadataStore.get_in_flight_harness_build`.
     """
     in_progress = StateDef(
         name="implementing",
@@ -133,70 +133,28 @@ def _basic_spec(
         phase1_queries={
             "implementing": SchedulingQueryRef(
                 name="get_in_flight_harness_build",
-                fn=_make_phase1_query(),
+                fn=_in_flight_harness_build,
             ),
         },
         phase2_queries={
             "draft": SchedulingQueryRef(
                 name="get_ready_for_harness_build",
-                fn=_make_phase2_query(),
+                fn=_ready_for_harness_build,
             ),
         },
     )
 
 
-def _make_phase1_query(state: str = "implementing"):
-    """Return a callable that lists CGs in ``state`` with a non-null
-    ``harness_job_handle``.
-
-    Implemented via a state-only filter rather than the SMAI plugin's
-    :meth:`get_in_flight_harness_build` because that method's
-    ``IS NOT NULL`` predicate doesn't match the JSON-encoded ``"null"``
-    string the SqliteStore writes for None handles (Task 2.C2 surfaced
-    bug). The post-filter on ``harness_job_handle`` matches the literal
-    Python value to side-step the issue. The worker stays
-    plugin-agnostic — this is a per-spec concern of the test fixture.
-    """
-
-    async def _query(store):  # type: ignore[no-untyped-def]
-        return await _list_cgs_with_handle(store, state=state, has_handle=True)
-
-    return _query
+async def _in_flight_harness_build(store):  # type: ignore[no-untyped-def]
+    """Adapter: drain the cursor page into the list shape that
+    :class:`SchedulingQueryRef.fn` expects."""
+    page = await store.get_in_flight_harness_build(limit=100, cursor=None)
+    return list(page.items)
 
 
-def _make_phase2_query(state: str = "draft"):
-    """Return a callable that lists CGs in ``state`` with a null handle."""
-
-    async def _query(store):  # type: ignore[no-untyped-def]
-        return await _list_cgs_with_handle(store, state=state, has_handle=False)
-
-    return _query
-
-
-async def _list_cgs_with_handle(
-    store: SqliteStore, *, state: str, has_handle: bool
-) -> list[ComparisonGroupRecord]:
-    """Helper: state-filter + handle-presence filter using raw ``cgs_table``
-    rows, then post-filter on the materialized record's
-    ``harness_job_handle`` Python value.
-
-    Raw-SQL access into :attr:`SqliteStore._engine` is acceptable here
-    because this is a test-fixture helper, not production code. The
-    workaround target is the plugin's JSON-null-vs-SQL-NULL handling
-    in :meth:`get_in_flight_harness_build` /
-    :meth:`get_ready_for_harness_build`.
-    """
-    from smai_store_sqlite._schema import cgs_table  # type: ignore[import-not-found]
-    from smai_store_sqlite._serde import row_to_record  # type: ignore[import-not-found]
-    from sqlalchemy import select
-
-    async with store._engine.connect() as conn:  # type: ignore[attr-defined]
-        result = await conn.execute(select(cgs_table).where(cgs_table.c.state == state))
-        rows = result.mappings().all()
-    items = [row_to_record(ComparisonGroupRecord, row) for row in rows]
-    if has_handle:
-        return [c for c in items if c.harness_job_handle is not None]
-    return [c for c in items if c.harness_job_handle is None]
+async def _ready_for_harness_build(store):  # type: ignore[no-untyped-def]
+    page = await store.get_ready_for_harness_build(limit=100, cursor=None)
+    return list(page.items)
 
 
 # ===== Phase-1 / phase-2 / phase-3 round-trip ================================
@@ -583,7 +541,7 @@ async def test_phase2_query_pointing_at_terminal_state_raises(
     # Misconfigure: phase-2 query keyed on a terminal state.
     bad_spec.phase2_queries = {
         "implemented": SchedulingQueryRef(
-            name="bogus", fn=_make_phase2_query()
+            name="bogus", fn=_ready_for_harness_build
         ),
     }
     with pytest.raises(ValueError, match="terminal"):
@@ -605,7 +563,7 @@ async def test_phase1_query_unregistered_state_raises(
     bad_spec = _basic_spec(dispatch_handler=make_dispatch(handle=make_job_handle("h")))
     bad_spec.phase1_queries = {
         "no_such_state": SchedulingQueryRef(
-            name="bogus", fn=_make_phase1_query()
+            name="bogus", fn=_in_flight_harness_build
         ),
     }
     with pytest.raises(LookupError, match="no_such_state"):

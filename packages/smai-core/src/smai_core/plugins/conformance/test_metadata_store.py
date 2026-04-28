@@ -60,6 +60,7 @@ from smai_core.plugins import (
     ConflictError,
     CursorPage,
     EntityKind,
+    JobHandle,
     LeaseLostError,
     LeaseToken,
     MetadataStore,
@@ -291,6 +292,238 @@ class MetadataStoreConformance:
         pytest.fail(
             f"{method_name}: did not terminate after {max_pages} pages — "
             "cursor pagination contract violated."
+        )
+
+    # ---- Handle-aware filter correctness (regression for JSON null bug) ----
+    #
+    # Several scheduling queries filter on ``<entity>_job_handle IS NULL``
+    # (ready) or ``IS NOT NULL`` (in-flight). Plugins backing JSON-typed
+    # nullable columns must serialize Python ``None`` to SQL ``NULL`` —
+    # not to the JSON literal ``'null'``. A plugin that writes the JSON
+    # literal would pass the existing ``test_scheduling_query_*`` shape
+    # tests yet silently return wrong results from the handle-aware
+    # filters (every record matches ``IS NOT NULL``; no record matches
+    # ``IS NULL``). The fixtures below seed the null/non-null partition
+    # explicitly so any such plugin fails loudly here.
+
+    async def test_filter_correctness_harness_build_handle(
+        self, store: MetadataStore
+    ) -> None:
+        """``get_in_flight_harness_build`` and ``get_ready_for_harness_build``
+        partition CGs correctly by ``harness_job_handle`` null-ness.
+
+        Seeds two ``implementing`` CGs (one with handle, one without) and
+        two ``draft`` CGs (one with handle, one without). The in-flight
+        query must return only the implementing+handle pair; the ready
+        query must return only the draft+no-handle pair.
+        """
+        handle = JobHandle(plugin="test", handle="job-cg", metadata={})
+        await store.create_cg(
+            make_record(
+                ComparisonGroupRecord,
+                id="cg_filter_inflight_real",
+                state="implementing",
+                version=1,
+                harness_job_handle=handle,
+            )
+        )
+        await store.create_cg(
+            make_record(
+                ComparisonGroupRecord,
+                id="cg_filter_inflight_null",
+                state="implementing",
+                version=1,
+                harness_job_handle=None,
+            )
+        )
+        await store.create_cg(
+            make_record(
+                ComparisonGroupRecord,
+                id="cg_filter_ready_null",
+                state="draft",
+                version=1,
+                harness_job_handle=None,
+            )
+        )
+        await store.create_cg(
+            make_record(
+                ComparisonGroupRecord,
+                id="cg_filter_ready_real",
+                state="draft",
+                version=1,
+                harness_job_handle=handle,
+            )
+        )
+        in_flight = await store.get_in_flight_harness_build(limit=100, cursor=None)
+        ready = await store.get_ready_for_harness_build(limit=100, cursor=None)
+        in_flight_ids = {r.id for r in in_flight.items}
+        ready_ids = {r.id for r in ready.items}
+        assert "cg_filter_inflight_real" in in_flight_ids
+        assert "cg_filter_inflight_null" not in in_flight_ids, (
+            "in-flight query returned a CG with NULL harness_job_handle — "
+            "JSON-typed null may have been written as the literal 'null' "
+            "rather than SQL NULL"
+        )
+        assert "cg_filter_ready_null" in ready_ids
+        assert "cg_filter_ready_real" not in ready_ids, (
+            "ready query returned a CG with a non-null harness_job_handle — "
+            "the IS NULL predicate is not matching correctly"
+        )
+
+    async def test_filter_correctness_proposal_design_handle(
+        self, store: MetadataStore
+    ) -> None:
+        """``get_in_flight_proposal_design`` and ``get_ready_for_proposal_design``
+        partition proposals correctly by ``planner_job_handle`` null-ness."""
+        handle = JobHandle(plugin="test", handle="job-prop", metadata={})
+        await store.create_proposal(
+            make_record(
+                ProposalRecord,
+                id="prop_filter_inflight_real",
+                state="designing",
+                version=1,
+                planner_job_handle=handle,
+            )
+        )
+        await store.create_proposal(
+            make_record(
+                ProposalRecord,
+                id="prop_filter_inflight_null",
+                state="designing",
+                version=1,
+                planner_job_handle=None,
+            )
+        )
+        await store.create_proposal(
+            make_record(
+                ProposalRecord,
+                id="prop_filter_ready_null",
+                state="proposal_submitted",
+                version=1,
+                planner_job_handle=None,
+            )
+        )
+        await store.create_proposal(
+            make_record(
+                ProposalRecord,
+                id="prop_filter_ready_real",
+                state="proposal_submitted",
+                version=1,
+                planner_job_handle=handle,
+            )
+        )
+        in_flight = await store.get_in_flight_proposal_design(limit=100, cursor=None)
+        ready = await store.get_ready_for_proposal_design(limit=100, cursor=None)
+        in_flight_ids = {r.id for r in in_flight.items}
+        ready_ids = {r.id for r in ready.items}
+        assert "prop_filter_inflight_real" in in_flight_ids
+        assert "prop_filter_inflight_null" not in in_flight_ids
+        assert "prop_filter_ready_null" in ready_ids
+        assert "prop_filter_ready_real" not in ready_ids
+
+    async def test_filter_correctness_paper_fetch_handle(
+        self, store: MetadataStore
+    ) -> None:
+        """``get_in_flight_paper_fetch`` and ``get_ready_for_paper_fetch``
+        partition papers correctly by ``fetcher_job_handle`` null-ness."""
+        handle = JobHandle(plugin="test", handle="job-pap", metadata={})
+        await store.create_paper(
+            make_record(
+                PaperRecord,
+                arxiv_id="2601.10001",
+                state="fetching",
+                version=1,
+                fetcher_job_handle=handle,
+            )
+        )
+        await store.create_paper(
+            make_record(
+                PaperRecord,
+                arxiv_id="2601.10002",
+                state="fetching",
+                version=1,
+                fetcher_job_handle=None,
+            )
+        )
+        await store.create_paper(
+            make_record(
+                PaperRecord,
+                arxiv_id="2601.10003",
+                state="submitted",
+                version=1,
+                fetcher_job_handle=None,
+            )
+        )
+        await store.create_paper(
+            make_record(
+                PaperRecord,
+                arxiv_id="2601.10004",
+                state="submitted",
+                version=1,
+                fetcher_job_handle=handle,
+            )
+        )
+        in_flight = await store.get_in_flight_paper_fetch(limit=100, cursor=None)
+        ready = await store.get_ready_for_paper_fetch(limit=100, cursor=None)
+        in_flight_ids = {r.arxiv_id for r in in_flight.items}
+        ready_ids = {r.arxiv_id for r in ready.items}
+        assert "2601.10001" in in_flight_ids
+        assert "2601.10002" not in in_flight_ids
+        assert "2601.10003" in ready_ids
+        assert "2601.10004" not in ready_ids
+
+    async def test_filter_correctness_run_handle(self, store: MetadataStore) -> None:
+        """``get_in_flight_runs`` filters by ``compute_job_handle`` null-ness
+        within the dispatch state set."""
+        handle = JobHandle(plugin="test", handle="job-run", metadata={})
+        # Parent CG + entry are required by FK. They are otherwise irrelevant
+        # to this filter — only seed enough to satisfy the FK constraint.
+        await store.create_cg(
+            make_record(
+                ComparisonGroupRecord,
+                id="cg_for_run_filter",
+                state="running",
+                version=1,
+            )
+        )
+        await store.create_entry(
+            make_record(
+                EntryRecord,
+                id="entry_for_run_filter",
+                cg_id="cg_for_run_filter",
+                state="implemented",
+                version=1,
+            )
+        )
+        await store.create_run(
+            make_record(
+                RunRecord,
+                id="run_filter_inflight_real",
+                cg_id="cg_for_run_filter",
+                entry_id="entry_for_run_filter",
+                seed=0,
+                state="running",
+                version=1,
+                compute_job_handle=handle,
+            )
+        )
+        await store.create_run(
+            make_record(
+                RunRecord,
+                id="run_filter_inflight_null",
+                cg_id="cg_for_run_filter",
+                entry_id="entry_for_run_filter",
+                seed=1,
+                state="running",
+                version=1,
+                compute_job_handle=None,
+            )
+        )
+        in_flight = await store.get_in_flight_runs(limit=100, cursor=None)
+        in_flight_ids = {r.id for r in in_flight.items}
+        assert "run_filter_inflight_real" in in_flight_ids
+        assert "run_filter_inflight_null" not in in_flight_ids, (
+            "in-flight runs query returned a run with NULL compute_job_handle"
         )
 
     # ---- In-flight count correctness ---------------------------------------
