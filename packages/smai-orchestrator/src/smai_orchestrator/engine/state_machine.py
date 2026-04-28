@@ -1,0 +1,173 @@
+"""State-machine driver — edge evaluation and phase-3 dispatch.
+
+Per ``designs/smai/05-orchestrator.md`` §1.1 / §1.2 / §3.3. Given an
+entity in a state, evaluate the outgoing edges in declaration order;
+the first edge whose gate rule returns ``advance=True`` wins; if the
+target state's :class:`StateDef.on_entry_dispatch` is non-``None`` the
+engine fires it under write-first ordering (see :mod:`dispatch`).
+
+This module ships the substrate primitives (`drive_entity_phase3`,
+`evaluate_outgoing_edges`); Task 2.C2's worker loop wraps them in the
+three-phase poll cycle (complete / discover / dispatch).
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Literal
+
+from smai_core.plugins import (
+    ArtifactStore,
+    Compute,
+    LlmProvider,
+    MetadataStore,
+)
+
+from smai_orchestrator.engine._metadata_ops import StateDrivenRecord, entity_id_for
+from smai_orchestrator.engine.config import EngineConfig
+from smai_orchestrator.engine.dispatch import DispatchOutcomeWire, run_dispatch
+from smai_orchestrator.engine.types import (
+    EdgeDef,
+    EngineSpec,
+    GateContext,
+    PhaseTrigger,
+)
+
+
+@dataclass
+class DriveOutcome:
+    """Result of one phase-3 drive of a single entity (`05` §3.3).
+
+    The variants match the four ways the cycle can end for an entity:
+
+    * ``no_match`` — every outgoing edge's gate returned
+      ``advance=False``; the entity stays in its current state for the
+      next cycle.
+    * ``advanced`` — an edge fired and the entity transitioned to the
+      edge's target state. If the new state had an on-entry dispatch,
+      :attr:`dispatch_outcome` carries its result; otherwise ``None``.
+    * ``conflict`` — another worker won the CAS race during the
+      transition or rollback; this worker bails for this cycle.
+    * ``dispatch_failed_rolled_back`` — the dispatch handler returned
+      :class:`DispatchOutcome` with ``error`` non-None (or raised);
+      the engine rolled the entity back to the edge's ``from_state``.
+
+    The :attr:`status` field discriminates and the optional fields
+    carry the per-variant payload.
+    """
+
+    status: Literal[
+        "no_match",
+        "advanced",
+        "conflict",
+        "dispatch_failed_rolled_back",
+    ]
+    fired_edge: EdgeDef | None = None
+    dispatch_outcome: DispatchOutcomeWire | None = None
+    error: str | None = None
+
+
+async def evaluate_outgoing_edges(
+    *,
+    spec: EngineSpec,
+    entity_state: str,
+    phase: PhaseTrigger,
+    gate_context: GateContext,
+) -> EdgeDef | None:
+    """Evaluate the outgoing edges from ``entity_state`` for ``phase``,
+    in declaration order; return the first one whose gate rule returns
+    ``advance=True`` or ``None`` if none pass (`05` §1.2).
+
+    The edges are filtered to those whose ``fires_on`` matches
+    ``phase`` (phase-keyed evaluation per §1.2). Phase-3 callers pass
+    ``"dispatch_time"``; phase-1 callers pass ``"job_succeeded"`` or
+    ``"job_failed"`` (which one depends on the observed
+    :class:`JobStatus`).
+    """
+    edges = spec.edges_from(entity_state, fires_on=phase)
+    for edge in edges:
+        outcome = await edge.gate_rule(gate_context)
+        if outcome.advance:
+            return edge
+    return None
+
+
+async def drive_entity_phase3(
+    *,
+    spec: EngineSpec,
+    metadata_store: MetadataStore,
+    artifact_store: ArtifactStore,
+    compute: Compute,
+    llm: LlmProvider | None,
+    config: EngineConfig,
+    record: StateDrivenRecord,
+) -> DriveOutcome:
+    """Run one phase-3 evaluate-and-dispatch step against ``record``
+    (`05` §3.3).
+
+    Steps:
+
+    1. Evaluate outgoing ``dispatch_time`` edges in declaration order;
+       if none pass, return :class:`DriveOutcome` with
+       ``status="no_match"``.
+    2. The winning edge's target state is the new state. If the target
+       state's ``on_entry_dispatch`` is ``None``, the engine performs a
+       single-step CAS transition (no external compute work). Otherwise
+       it delegates to :func:`run_dispatch` for the full write-first
+       sequence.
+    3. On CAS conflict: return ``status="conflict"`` (another worker
+       won the race; this worker bails).
+    4. On dispatch handler failure: the engine rolls back to
+       ``edge.from_state``; return
+       ``status="dispatch_failed_rolled_back"``.
+
+    Phase-1 wait-for-job semantics live in :mod:`phase1`; this driver
+    only handles phase-3.
+    """
+    # ``id`` / ``arxiv_id`` is normalized via :func:`entity_id_for`;
+    # ``version`` is on :class:`BasePipelineRecord`; ``state`` is per-
+    # record but every member of :data:`StateDrivenRecord` declares it.
+    entity_id = entity_id_for(record)
+    entity_state = record.state
+    entity_version = record.version
+
+    gate_context = GateContext(
+        entity_kind=spec.entity_kind,
+        entity_id=entity_id,
+        entity_state=entity_state,
+        entity_version=entity_version,
+        metadata_store=metadata_store,
+        artifact_store=artifact_store,
+        config=config,
+        job_outcome=None,
+    )
+
+    edge = await evaluate_outgoing_edges(
+        spec=spec,
+        entity_state=entity_state,
+        phase="dispatch_time",
+        gate_context=gate_context,
+    )
+    if edge is None:
+        return DriveOutcome(status="no_match")
+
+    target_def = spec.state_def(edge.target_state)
+    return await run_dispatch(
+        spec=spec,
+        metadata_store=metadata_store,
+        artifact_store=artifact_store,
+        compute=compute,
+        llm=llm,
+        config=config,
+        edge=edge,
+        target_state=target_def,
+        entity_id=entity_id,
+        expected_version=entity_version,
+    )
+
+
+__all__ = [
+    "DriveOutcome",
+    "drive_entity_phase3",
+    "evaluate_outgoing_edges",
+]
