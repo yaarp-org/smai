@@ -3,7 +3,9 @@ name = "smai-core"
 version = "0.1.0"
 description = "Methodology layer: data model, DSL + compiler, contract artifacts, mechanical evaluator, plugin Protocol definitions."
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "pydantic>=2.0",
+]
 
 [build-system]
 requires = ["hatchling"]

@@ -1,41 +1,43 @@
-"""Methodology layer.
+"""Methodology entity public surface.
 
-Data model, DSL + compiler, contract artifacts, mechanical evaluator, plugin
-Protocol definitions. Per DEC-029, ``smai-core`` is the methodology layer:
-runtime deps stay on the allowlist (``pydantic``, ``jsonschema``, stdlib);
-imports of pipeline packages are mechanically forbidden by
-``tools/check_deps.py``.
+Re-exports every entity from ``designs/smai/01-data-model.md`` §2's inventory.
+Consumers should import from ``smai_core`` (or this subpackage) rather than
+from individual modules — the module split is an implementation detail.
 """
 
-from smai_core.entities import (
-    AggregationRule,
+from smai_core.entities.conditions import ControlledConditions
+from smai_core.entities.experiment import (
+    ExperimentDefinition,
+    FactorModel,
+    VerifiedExperimentDefinition,
+)
+from smai_core.entities.factor import Entry, Factor, Level
+from smai_core.entities.metric import (
     AtomicMetricEntry,
     AtomicMetricRef,
-    ComparisonRule,
-    ControlledConditions,
-    Entry,
-    ExperimentDefinition,
-    Factor,
-    FactorModel,
-    FidelityAnchor,
-    FidelityAnchorAdapter,
-    Level,
     MetricRef,
     MetricRefAdapter,
     MetricRegistry,
-    NumericValue,
-    PaperFidelityAnchor,
     ParametricFamily,
     ParametricMetricRef,
+)
+from smai_core.entities.numeric import NumericValue
+from smai_core.entities.registries import Registries
+from smai_core.entities.technique import (
+    FidelityAnchor,
+    FidelityAnchorAdapter,
+    PaperFidelityAnchor,
     ProposalFidelityAnchor,
-    Registries,
     ReviewerAttestedFidelityAnchor,
     TechniqueParams,
     TechniqueParamValue,
     TechniqueRef,
+)
+from smai_core.entities.validation import (
+    AggregationRule,
+    ComparisonRule,
     TrendCheck,
     ValidationCriteria,
-    VerifiedExperimentDefinition,
 )
 
 __all__ = [
