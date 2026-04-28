@@ -24,6 +24,18 @@ The shape exposed here matches the brief's deliverable list:
   :data:`SUPERVISOR_NUDGE_PREFIX`).
 """
 
+from smai_agents.agents import (
+    DEFAULT_CODE_REVIEW_PROMPT_CONFIG,
+    DEFAULT_CONTEXTUAL_EVALUATOR_PROMPT_CONFIGS,
+    CGMetadata,
+    CodeReviewerInput,
+    ContextualEvaluatorEntry,
+    ContextualEvaluatorInput,
+    EntryUnderReview,
+    PromptConfig,
+    run_code_review,
+    run_contextual_evaluation,
+)
 from smai_agents.between_turn import (
     SUPERVISOR_NUDGE_PREFIX,
     lint_after_python_write,
@@ -50,6 +62,12 @@ from smai_agents.retry_context import (
     PREV_CONVERSATION_TRACE_FILENAME,
     load_retry_context,
 )
+from smai_agents.schemas import (
+    CodeReviewResult,
+    ContextualVerdict,
+    EntryRanking,
+    Finding,
+)
 from smai_agents.structured_call import StructuredCallFailed, structured_call
 from smai_agents.tools import (
     EXECUTE_MAX_LINES,
@@ -68,6 +86,8 @@ from smai_agents.truncation import TruncationPolicy
 
 __all__ = [
     "DEFAULT_CACHE_CONFIG",
+    "DEFAULT_CODE_REVIEW_PROMPT_CONFIG",
+    "DEFAULT_CONTEXTUAL_EVALUATOR_PROMPT_CONFIGS",
     "EXECUTE_MAX_LINES",
     "EXECUTE_MAX_TOKENS",
     "FINISH_TOOL_NAME",
@@ -78,9 +98,19 @@ __all__ = [
     "AgentLoopConfig",
     "AgentOutcome",
     "AgentSession",
+    "CGMetadata",
     "CacheConfig",
+    "CodeReviewResult",
+    "CodeReviewerInput",
+    "ContextualEvaluatorEntry",
+    "ContextualEvaluatorInput",
+    "ContextualVerdict",
+    "EntryRanking",
+    "EntryUnderReview",
+    "Finding",
     "FinishInput",
     "ModelSelectionError",
+    "PromptConfig",
     "StructuredCallFailed",
     "TaskRole",
     "Tool",
@@ -93,6 +123,8 @@ __all__ = [
     "lint_after_python_write",
     "load_retry_context",
     "make_finish_tool",
+    "run_code_review",
+    "run_contextual_evaluation",
     "run_loop",
     "structured_call",
     "truncate_tool_output",
