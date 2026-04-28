@@ -22,11 +22,39 @@
         "packages/smai-orchestrator/src",
         "packages/smai-core/src"
       ]
+    },
+    {
+      "root": "plugins/smai-llm-bedrock",
+      "reportMissingImports": "error",
+      "extraPaths": [
+        "plugins/smai-llm-bedrock/src",
+        "packages/smai-core/src"
+      ]
+    },
+    {
+      "root": "plugins/smai-store-sqlite",
+      "reportMissingImports": "error",
+      "extraPaths": [
+        "plugins/smai-store-sqlite/src",
+        "packages/smai-core/src",
+        "packages/smai-orchestrator/src"
+      ]
+    },
+    {
+      "root": "plugins/smai-compute-localgpu",
+      "reportMissingImports": "error",
+      "extraPaths": [
+        "plugins/smai-compute-localgpu/src",
+        "packages/smai-core/src"
+      ]
     }
   ],
   "typeCheckingMode": "standard",
   "strict": [
     "packages/smai-core/src",
-    "packages/smai-orchestrator/src"
+    "packages/smai-orchestrator/src",
+    "plugins/smai-llm-bedrock/src",
+    "plugins/smai-store-sqlite/src",
+    "plugins/smai-compute-localgpu/src"
   ]
 }

@@ -3,10 +3,22 @@ name = "smai-llm-bedrock"
 version = "0.1.0"
 description = "LlmProvider plugin: AWS Bedrock Converse adapter."
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "smai-core",
+    "boto3>=1.34",
+]
 
 [project.entry-points."smai.llm_providers"]
 bedrock = "smai_llm_bedrock:BedrockProvider"
+
+[tool.uv.sources]
+smai-core = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "smai-core[conformance]",
+    "vcrpy>=6.0",
+]
 
 [build-system]
 requires = ["hatchling"]

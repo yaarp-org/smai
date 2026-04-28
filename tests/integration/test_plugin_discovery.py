@@ -1,8 +1,17 @@
 """Smoke test: every plugin's entry point is discoverable and loadable.
 
-Phase 0 stub. The classes raise NotImplementedError on construction by design;
-this test only proves the discovery mechanism (importlib.metadata entry points)
-works end-to-end before Phase 1 starts using it.
+Phase 0 introduced this test to prove the ``importlib.metadata`` entry-point
+mechanism wires up correctly before Phase 1 starts depending on it. As
+plugins land their real implementations (Phase 2 onwards), the
+"raises NotImplementedError on no-arg construction" assertion stops
+holding — real plugins (e.g., :class:`smai_llm_bedrock.BedrockProvider`)
+require constructor args (region / model_id), so a no-arg call now
+raises :class:`TypeError` instead.
+
+The test therefore asserts the discovery + loadability invariant only:
+the entry-point name resolves to a callable class object. Per-plugin
+constructor contracts and Protocol conformance are exercised by each
+plugin's own conformance subclass under ``plugins/<name>/tests/``.
 """
 
 from importlib.metadata import entry_points
@@ -30,5 +39,4 @@ def test_entry_points_loadable(group: str) -> None:
         if ep.name not in EXPECTED[group]:
             continue
         cls = ep.load()
-        with pytest.raises(NotImplementedError):
-            cls()
+        assert isinstance(cls, type), f"{group}:{ep.name} entry point did not resolve to a class"
