@@ -24,7 +24,11 @@ class ArtifactStoreCapabilities(BaseModel):
     """Static per-plugin capability flags (§6.2).
 
     ``supports_presigned_urls``:
-        ``True`` for S3-shaped backends; ``False`` for ``LocalFsStore``.
+        ``True`` if :meth:`ArtifactStore.url_for` returns a usable URL —
+        either presigned with real ``expires_in`` semantics (S3-shaped
+        backends) or non-presigned (e.g., ``file://<absolute_path>`` for
+        ``LocalFsStore``, where ``expires_in`` is ignored). ``False``
+        only when ``url_for`` raises :class:`PresignedUrlsUnsupported`.
 
     ``max_object_size_bytes``:
         ``None`` means unbounded (``LocalFsStore``); ``5 * 1024**3`` for
@@ -58,11 +62,15 @@ class ArtifactNotFound(ArtifactStoreError):
 
 
 class PresignedUrlsUnsupported(ArtifactStoreError):
-    """Raised by :meth:`ArtifactStore.url_for` when the plugin does not
-    support presigned URLs (§6.3).
+    """Raised by :meth:`ArtifactStore.url_for` when the plugin cannot
+    return any URL form for ``key`` (§6.3).
 
-    The capability flag ``capabilities.supports_presigned_urls``
-    indicates this in advance.
+    Plugins that return non-presigned URLs (e.g., ``file://`` from
+    ``LocalFsStore``) do NOT raise this — they return the URL directly
+    while reporting ``capabilities.supports_presigned_urls=True`` (the
+    URL is usable, just not presigned with expiry semantics). The
+    exception is reserved for plugins that genuinely cannot produce a
+    usable URL.
     """
 
 
@@ -153,15 +161,22 @@ class ArtifactStore(Protocol):
         expires_in: int = 3600,
         method: Literal["GET", "PUT"] = "GET",
     ) -> str:
-        """Return a presigned URL for direct client access to ``key``
-        (§6.2).
+        """Return a URL for direct client access to ``key`` (§6.2).
 
         Used by the hosted backend's UI to stream large artifacts
-        without proxying through the API tier.
+        without proxying through the API tier; also useful for local
+        dev workflows.
 
-        Plugins that don't support presigned URLs (``LocalFsStore`` in
-        v1) MUST raise :class:`PresignedUrlsUnsupported`. The
-        capability flag ``capabilities.supports_presigned_urls``
-        indicates this in advance.
+        Plugins with presigned-URL semantics (S3-shaped backends)
+        return a presigned URL with ``expires_in`` honored. Plugins
+        without presigned semantics (``LocalFsStore`` in v1) return a
+        non-presigned URL — e.g., ``file://<absolute_path>`` — and
+        ignore ``expires_in``; the URL is usable but does not expire.
+        Plugins that genuinely cannot return any URL form raise
+        :class:`PresignedUrlsUnsupported`.
+
+        ``capabilities.supports_presigned_urls`` is True for both
+        modes (presigned and non-presigned-but-usable); False only
+        when ``url_for`` raises.
         """
         ...

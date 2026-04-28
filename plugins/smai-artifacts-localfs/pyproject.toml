@@ -3,10 +3,18 @@ name = "smai-artifacts-localfs"
 version = "0.1.0"
 description = "ArtifactStore plugin: local filesystem reference implementation."
 requires-python = ">=3.11"
-dependencies = []
+dependencies = ["smai-core"]
 
 [project.entry-points."smai.artifact_stores"]
 localfs = "smai_artifacts_localfs:LocalFsStore"
+
+[tool.uv.sources]
+smai-core = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "smai-core[conformance]",
+]
 
 [build-system]
 requires = ["hatchling"]
