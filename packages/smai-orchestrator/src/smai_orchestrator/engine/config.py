@@ -1,27 +1,27 @@
-"""Engine configuration — the C1 subset.
+"""Engine configuration.
 
-Per ``designs/smai/05-orchestrator.md`` §6. C1 ships only the fields the
-engine substrate consumes directly:
+Per ``designs/smai/05-orchestrator.md`` §6. The C1 task settled the
+engine-driver fields (clock seams, orphan grace, lease seconds, retry
+policies); Task 2.C2 grew this with the worker-loop fields
+(``poll_interval_seconds``, ``worker_count``, ``pool_overrides``,
+``fair_scheduling``, ``fair_scheduling_weights``) per `05` §6 / DEC-034
+#4. C1 fields are unchanged.
 
-* :attr:`EngineConfig.time_provider` — the wall-clock conformance seam
-  per `implementation_plan.md` §6 Q4 (settled here).
-* :attr:`EngineConfig.orphan_grace_seconds` — write-first rollback /
-  orphan detection per `05` §1.4 / §3.1.
-* :attr:`EngineConfig.lease_seconds` — multi-worker leasing tunable
-  per `05` §3.5; C1 runs single-worker and never acquires leases (the
-  field exists so C2 / 3.G1 can wire it in without re-shaping the
-  config).
-* :attr:`EngineConfig.retry_policies` — named retry policies referenced
-  by retry-edge gate rules per `05` §6.
+The fields fall into three groups:
 
-Out of scope, deferred to later tasks:
-
-* ``poll_interval_seconds`` / ``worker_count`` — Task 2.C2 (worker loop).
-* ``pool_overrides`` / ``fair_scheduling`` / ``fair_scheduling_weights``
-  — Task 2.C3 (full :class:`RuntimeConfig`).
+* **Engine driver** — :attr:`time_provider`, :attr:`wall_clock`,
+  :attr:`orphan_grace_seconds`, :attr:`lease_seconds`,
+  :attr:`retry_policies` (Task 2.C1).
+* **Worker loop** — :attr:`poll_interval_seconds`, :attr:`worker_count`,
+  :attr:`pool_overrides`, :attr:`fair_scheduling`,
+  :attr:`fair_scheduling_weights` (Task 2.C2).
+* **Plugin selection** — separate top-level :class:`RuntimeConfig`,
+  Task 2.C3.
 """
 
 from __future__ import annotations
+
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -94,6 +94,42 @@ class EngineConfig(BaseModel):
     §6). The spec declares which retry policy each failure edge
     consults; the deployment configures the actual numbers via this
     map."""
+
+    # ---- Worker-loop fields (Task 2.C2) -----------------------------------
+
+    poll_interval_seconds: int = 30
+    """Worker-loop cadence in seconds between cycles (`05` §6). The
+    `smai dev` deployment uses 10 (lower latency for interactive dev);
+    self-hosted production and the hosted backend use 30. Tests inject
+    a small value (or 0) and rely on the :attr:`time_provider` seam to
+    advance the loop deterministically."""
+
+    worker_count: int = 1
+    """Number of parallel worker processes (`05` §3.5 / §6). Default 1
+    matches the v1 Lambda-with-reserved-concurrency-1 shape and the
+    `smai dev` deployment. ``>1`` implies multi-worker leasing — the
+    :class:`MetadataStore` plugin must support it; Task 3.G1 wires
+    leasing into the worker loop. C2 ships single-worker only."""
+
+    pool_overrides: dict[str, int] = Field(default_factory=dict)
+    """Per-deployment override map for pipeline-spec pool limits (`05`
+    §6). Keyed by :class:`ConcurrencyPool.name`; value replaces the
+    spec's declared :attr:`ConcurrencyPool.limit`. Spec defaults stand
+    if a pool name is absent from the map."""
+
+    fair_scheduling: Literal["off", "round_robin", "weighted"] = "off"
+    """Top-level fair-scheduling policy passed into the
+    :class:`MetadataStore` plugin's discovery queries (`05` §3.4 / §6).
+    ``"off"`` — single-tenant, FIFO discovery. ``"round_robin"`` /
+    ``"weighted"`` — multi-tenant; the SQL-shaped plugin implements
+    the policy via window functions per DEC-030. C2 plumbs the field
+    through the spec's :class:`SchedulingQueryRef` but does not
+    interpret it — that's plugin behavior."""
+
+    fair_scheduling_weights: dict[str, float] | None = None
+    """Per-tenant weights map for ``fair_scheduling="weighted"`` (`05`
+    §6). Tenant id → weight. Only meaningful when
+    :attr:`fair_scheduling` is ``"weighted"``; ignored otherwise."""
 
 
 __all__ = ["EngineConfig", "RetryPolicy"]

@@ -20,7 +20,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from smai_core.plugins import (
     ArtifactStore,
     Compute,
@@ -31,6 +31,15 @@ from smai_core.plugins import (
     MetadataStore,
 )
 
+# Direct import of :class:`Checkpointer` so Pydantic can resolve the
+# annotation at model-build time. The dependency stays acyclic because
+# ``smai_orchestrator.checkpointer.types`` imports only stdlib + pydantic
+# (not the engine), and the indirect path through ``checkpointer.__init__``
+# resolves cleanly: ``engine/__init__.py`` loads ``engine.clock`` and
+# ``engine.config`` before ``engine.types``, so by the time the
+# checkpointer's artifact-flavor module asks for ``engine.clock`` it is
+# already in :data:`sys.modules`.
+from smai_orchestrator.checkpointer.types import Checkpointer
 from smai_orchestrator.engine.config import EngineConfig
 
 # Phase trigger discriminator for an :class:`EdgeDef`. Per `05` §1.2
@@ -123,10 +132,13 @@ class DispatchContext(BaseModel):
     ``llm`` is ``None`` when the deployment did not configure an
     :class:`LlmProvider`; handlers that require LLM access must guard.
 
-    ``checkpointer`` is C2's scope (Task 2.C2 ships :class:`Checkpointer`
-    + the two flavors). C1 carries a placeholder typed ``Any | None``
-    so handler signatures can already declare the slot. The C2 task
-    replaces the placeholder with the concrete Protocol per `05` §2.
+    ``checkpointer`` is the engine-internal step-memoization seam (`05`
+    §2 / DEC-025) — Task 2.C2 shipped :class:`Checkpointer` plus the
+    two concrete flavors (:class:`MetadataStoreCheckpointer` /
+    :class:`ArtifactStoreCheckpointer`). Handlers that want
+    memoization wrap their work via
+    :func:`smai_orchestrator.checkpointer.memoized`. ``None`` is the
+    "no memoization configured" shape — handlers must guard.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
@@ -140,7 +152,7 @@ class DispatchContext(BaseModel):
     compute: Compute
     llm: LlmProvider | None
     config: EngineConfig
-    checkpointer: Any | None = None
+    checkpointer: Checkpointer | None = None
 
 
 class DispatchOutcome(BaseModel):
@@ -230,11 +242,102 @@ class StateDef(BaseModel):
 # the C3 task's job clearly additive.
 
 
-class EngineSpec(BaseModel):
-    """Minimal pipeline-spec substrate driving the engine (`05` §5.1).
+class ConcurrencyPool(BaseModel):
+    """One named concurrency pool — pipeline-spec primitive (`05` §3.4).
 
-    Composed into the full :class:`PipelineSpec` by Task 2.C3 with
-    pools, scheduling-query refs, and a top-level name added.
+    The model lives in :mod:`smai_orchestrator.engine.types` (alongside
+    other spec primitives like :class:`StateDef` and :class:`EdgeDef`)
+    rather than in :mod:`smai_orchestrator.worker.concurrency` because
+    :class:`EngineSpec` references it on the :attr:`EngineSpec.pools`
+    field — having the model in :mod:`engine.types` keeps the engine ↔
+    worker dependency strictly one-way (worker imports engine, never
+    the reverse).
+
+    The slot-computation helpers (:func:`compute_pool_slots`,
+    :func:`in_flight_states_for_pool`, :class:`PoolSlot`) live in
+    :mod:`smai_orchestrator.worker.concurrency` and re-export this
+    class for callers that prefer the worker-namespaced import.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    """Pool identifier referenced by :attr:`DispatchAction.pool`."""
+
+    limit: int
+    """Maximum number of in-flight jobs the pool may hold. The worker
+    derives ``available = limit − count_with_in_flight_jobs(...)`` at
+    each phase-3 cycle."""
+
+    priority: int = 0
+    """Sort key for inter-pool dispatch ordering — higher drains first
+    (`05` §3.4). Default ``0`` is fine when only one pool exists."""
+
+    fair_scheduling: bool = False
+    """Per-pool opt-in for the engine's :attr:`EngineConfig.fair_scheduling`
+    policy (`05` §3.4). ``True`` passes the engine policy through to
+    the :class:`MetadataStore` plugin's discovery query as a hint;
+    ``False`` overrides the engine policy to FIFO regardless of the
+    global setting."""
+
+
+class SchedulingQueryRef(BaseModel):
+    """A pipeline-spec's reference to one :class:`MetadataStore` discovery
+    query (`05` §3.2 / §5.1).
+
+    The engine treats scheduling queries as opaque, named "give me
+    candidates for state X" calls — :attr:`name` is the identifier the
+    plugin's fair-scheduling discipline keys on, and :attr:`fn` is the
+    callable the engine invokes per cycle. Per `05` §3.2 the query
+    namespace is owned by the spec, not the engine; spec authors bind
+    each :class:`MetadataStore` Protocol method to a :class:`SchedulingQueryRef`
+    here.
+
+    :attr:`fn` returns ``list[StateDrivenRecord]`` — the engine drains
+    the page (or first page; cursor-based pagination is the spec
+    author's concern under the C2 worker-cycle model). C3's full
+    :class:`PipelineSpec` may revisit the cursor-handling shape.
+
+    :attr:`fair_scheduling` is per-query opt-in for the engine's global
+    :attr:`EngineConfig.fair_scheduling` policy (`05` §3.4) — passed
+    through to the plugin as a hint; the plugin decides how to
+    interpret. ``False`` (default) means FIFO regardless of the global
+    policy.
+    """
+
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
+
+    name: str
+    fn: Callable[[MetadataStore], Awaitable[list[Any]]]
+    """Bound to ``Callable[[MetadataStore], Awaitable[list[StateDrivenRecord]]]``
+    semantically — typed as ``list[Any]`` here to keep the field's
+    runtime type out of the engine ↔ ``_metadata_ops`` import order.
+    Worker code that consumes the return value treats each element as
+    a :data:`StateDrivenRecord` (the union of pipeline-tracking record
+    types from :mod:`smai_orchestrator.entities.tracking`)."""
+
+    fair_scheduling: bool = False
+
+
+class EngineSpec(BaseModel):
+    """Pipeline-spec substrate driving the engine (`05` §5.1).
+
+    C2 grew the C1 substrate with three fields:
+
+    * :attr:`pools` — :class:`ConcurrencyPool` declarations consumed by
+      the worker loop's slot accounting (`05` §3.4).
+    * :attr:`phase1_queries` — state name → :class:`SchedulingQueryRef`
+      for "find in-flight entities in this state" — used by phase 1 of
+      the worker cycle (`05` §3.1).
+    * :attr:`phase2_queries` — state name → :class:`SchedulingQueryRef`
+      for "find ready candidates entering this state" — used by phase
+      2 of the worker cycle (`05` §3.2).
+
+    Composed into the full :class:`PipelineSpec` by Task 2.C3 with a
+    top-level :attr:`name` field added; the C3 task may also collapse
+    the per-phase scheduling-query maps if a unifying shape emerges
+    from the SMAI CG-execution / proposal / paper-ingestion specs
+    (Task 2.C4 / 3.E1 / 3.E2).
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
@@ -243,6 +346,9 @@ class EngineSpec(BaseModel):
     initial_state: str
     states: list[StateDef]
     edges: list[EdgeDef]
+    pools: list[ConcurrencyPool] = Field(default_factory=list[ConcurrencyPool])
+    phase1_queries: dict[str, SchedulingQueryRef] = Field(default_factory=dict)
+    phase2_queries: dict[str, SchedulingQueryRef] = Field(default_factory=dict)
 
     def state_def(self, state: str) -> StateDef:
         """Look up a :class:`StateDef` by name; raises :class:`KeyError`
@@ -260,8 +366,24 @@ class EngineSpec(BaseModel):
         """
         return [e for e in self.edges if e.from_state == state and e.fires_on == fires_on]
 
+    def state_to_pool(self) -> dict[str, str]:
+        """Derive the in-progress-state → pool-name map (`05` §3.4).
+
+        Walks :attr:`states` and projects ``(state.name, state.on_entry_dispatch.pool)``
+        for every state whose :attr:`StateDef.on_entry_dispatch` is
+        non-None. The worker uses this to call
+        :meth:`MetadataStore.count_with_in_flight_jobs` with the right
+        in-flight-state list per pool (per DEC-035 #3).
+        """
+        return {
+            s.name: s.on_entry_dispatch.pool
+            for s in self.states
+            if s.on_entry_dispatch is not None
+        }
+
 
 __all__ = [
+    "ConcurrencyPool",
     "DispatchAction",
     "DispatchContext",
     "DispatchHandler",
@@ -272,5 +394,6 @@ __all__ = [
     "GateOutcome",
     "GateRule",
     "PhaseTrigger",
+    "SchedulingQueryRef",
     "StateDef",
 ]

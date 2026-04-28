@@ -51,6 +51,7 @@ from smai_orchestrator.engine.state_machine import (
     evaluate_outgoing_edges,
 )
 from smai_orchestrator.engine.types import (
+    ConcurrencyPool,
     DispatchAction,
     DispatchContext,
     DispatchHandler,
@@ -61,10 +62,12 @@ from smai_orchestrator.engine.types import (
     GateOutcome,
     GateRule,
     PhaseTrigger,
+    SchedulingQueryRef,
     StateDef,
 )
 
 __all__ = [
+    "ConcurrencyPool",
     "CostRecordContext",
     "CostRecordHandler",
     "DispatchAction",
@@ -82,6 +85,7 @@ __all__ = [
     "Phase1Outcome",
     "PhaseTrigger",
     "RetryPolicy",
+    "SchedulingQueryRef",
     "StateDef",
     "TimeProvider",
     "WallClockProvider",
