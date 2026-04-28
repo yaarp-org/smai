@@ -42,7 +42,12 @@ from smai_core.plugins.conformance._common import (
     _UnimplementedMetadataStore,
     _UnimplementedTransaction,
 )
-from smai_core.plugins.metadata_store._records import (
+
+# Records live in smai-orchestrator post Task 1.10 (was
+# ``smai_core.plugins.metadata_store._records`` in 1.8). Tests under
+# ``packages/smai-core/tests/`` are not subject to the smai-core import
+# boundary (the lint scans ``src/`` only), so the runtime import is fine.
+from smai_orchestrator.entities.tracking import (
     ComparisonGroupRecord,
     EntryRecord,
     PaperRecord,
@@ -441,23 +446,51 @@ def test_cursor_page_parameterizes_for_each_record_type() -> None:
         assert page.total is None
 
 
-def test_cursor_page_round_trips_pipeline_record_stub_extras() -> None:
-    """Carry-forward from 1.8: ``_PipelineRecordStub.extra='allow'`` lets
-    conformance fixtures construct stub records with arbitrary fields and
-    round-trip them through :class:`CursorPage`."""
+def test_cursor_page_round_trips_real_pipeline_records() -> None:
+    """Task 1.10 supersedes the 1.8 stub round-trip: with real
+    ``ComparisonGroupRecord`` (``extra='forbid'`` per `01` §5.3), the
+    record's declared fields round-trip through :class:`CursorPage`'s
+    ``model_dump`` cleanly. Unknown fields now raise ``ValidationError``
+    rather than being preserved.
+    """
+    from datetime import UTC, datetime
+
+    from pydantic import ValidationError
+
+    now = datetime(2026, 1, 1, tzinfo=UTC)
     record = ComparisonGroupRecord.model_validate(
         {
             "id": "cg_x",
+            "proposal_id": "prop_x",
+            "experiment_definition_id": "cg_x",
             "state": "draft",
             "version": 1,
-            "extra_field_one": "ok",
-            "nested": {"a": 1, "b": [2, 3]},
+            "created_at": now,
+            "updated_at": now,
         }
     )
     page = CursorPage[ComparisonGroupRecord](items=[record], next_cursor="opaque-token")
     assert len(page.items) == 1
     assert page.next_cursor == "opaque-token"
-    # The arbitrary fields survive round-trip.
     dumped = page.model_dump()
-    assert dumped["items"][0]["extra_field_one"] == "ok"
-    assert dumped["items"][0]["nested"] == {"a": 1, "b": [2, 3]}
+    assert dumped["items"][0]["id"] == "cg_x"
+    assert dumped["items"][0]["state"] == "draft"
+    assert dumped["items"][0]["version"] == 1
+
+    # `extra='forbid'` per Task 1.10: unknown fields are rejected at
+    # validation time. The 1.8 stub's `extra='allow'` is gone.
+    import pytest
+
+    with pytest.raises(ValidationError):
+        ComparisonGroupRecord.model_validate(
+            {
+                "id": "cg_y",
+                "proposal_id": "prop_y",
+                "experiment_definition_id": "cg_y",
+                "state": "draft",
+                "version": 1,
+                "created_at": now,
+                "updated_at": now,
+                "unknown_extra": "rejected",
+            }
+        )

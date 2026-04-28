@@ -284,6 +284,179 @@ def test_rule3_allows_plugin_to_plugin_import(tmp_path: Path) -> None:
     assert check_deps.check_plugin_boundaries(tmp_path) == []
 
 
+# ---------- TYPE_CHECKING amendment (Task 1.10) ------------------------------
+
+
+def test_type_checking_block_exempts_pipeline_import_from_smai_core(tmp_path: Path) -> None:
+    """An ``if TYPE_CHECKING:`` block with a pipeline-package import is
+    allowed under rule 2 (Task 1.10 amendment)."""
+    sources = {
+        "protocol.py": (
+            "from typing import TYPE_CHECKING\n"
+            "\n"
+            "if TYPE_CHECKING:\n"
+            "    from smai_orchestrator.entities.tracking import (\n"
+            "        ComparisonGroupRecord,\n"
+            "        EntryRecord,\n"
+            "    )\n"
+        )
+    }
+    _make_smai_core(tmp_path, sources=sources)
+    assert check_deps.check_smai_core_imports(tmp_path) == []
+
+
+def test_type_checking_via_typing_module_attr_also_exempt(tmp_path: Path) -> None:
+    """``if typing.TYPE_CHECKING:`` (qualified attribute access) is the
+    same exemption."""
+    sources = {
+        "protocol.py": (
+            "import typing\n"
+            "\n"
+            "if typing.TYPE_CHECKING:\n"
+            "    from smai_orchestrator.entities.tracking import ComparisonGroupRecord\n"
+        )
+    }
+    _make_smai_core(tmp_path, sources=sources)
+    assert check_deps.check_smai_core_imports(tmp_path) == []
+
+
+def test_type_checking_via_aliased_typing_also_exempt(tmp_path: Path) -> None:
+    """``import typing as t`` then ``if t.TYPE_CHECKING:`` exempts the
+    block — recognized by attribute name (.TYPE_CHECKING)."""
+    sources = {
+        "protocol.py": (
+            "import typing as t\n"
+            "\n"
+            "if t.TYPE_CHECKING:\n"
+            "    from smai_orchestrator.entities.tracking import EntryRecord\n"
+        )
+    }
+    _make_smai_core(tmp_path, sources=sources)
+    assert check_deps.check_smai_core_imports(tmp_path) == []
+
+
+def test_runtime_pipeline_import_outside_type_checking_still_fails(
+    tmp_path: Path,
+) -> None:
+    """The lint still blocks runtime pipeline imports (Rule 2 unchanged
+    for the non-exempt case)."""
+    sources = {"bad.py": "from smai_orchestrator.entities.tracking import ComparisonGroupRecord\n"}
+    _make_smai_core(tmp_path, sources=sources)
+    violations = check_deps.check_smai_core_imports(tmp_path)
+    assert len(violations) == 1
+    assert violations[0].rule == "smai-core-imports"
+    assert "smai_orchestrator" in violations[0].detail
+    # Updated reason mentions the TYPE_CHECKING exception so a future
+    # violator gets the right hint.
+    assert "TYPE_CHECKING" in violations[0].reason
+
+
+def test_not_type_checking_branch_is_not_exempt(tmp_path: Path) -> None:
+    """``if not TYPE_CHECKING:`` is the *runtime* branch — imports there
+    must still fail."""
+    sources = {
+        "bad.py": (
+            "from typing import TYPE_CHECKING\n"
+            "\n"
+            "if not TYPE_CHECKING:\n"
+            "    from smai_orchestrator import x  # forbidden — runs at runtime\n"
+        )
+    }
+    _make_smai_core(tmp_path, sources=sources)
+    violations = check_deps.check_smai_core_imports(tmp_path)
+    assert len(violations) == 1
+    assert "smai_orchestrator" in violations[0].detail
+
+
+def test_else_branch_of_type_checking_is_not_exempt(tmp_path: Path) -> None:
+    """The ``else:`` branch of an ``if TYPE_CHECKING:`` ``If`` is the
+    runtime fallback — imports there must still fail."""
+    sources = {
+        "bad.py": (
+            "from typing import TYPE_CHECKING\n"
+            "\n"
+            "if TYPE_CHECKING:\n"
+            "    pass\n"
+            "else:\n"
+            "    from smai_runtime import HarnessAPI  # forbidden — runtime fallback\n"
+        )
+    }
+    _make_smai_core(tmp_path, sources=sources)
+    violations = check_deps.check_smai_core_imports(tmp_path)
+    assert len(violations) == 1
+    assert "smai_runtime" in violations[0].detail
+
+
+def test_nested_type_checking_blocks_are_exempt(tmp_path: Path) -> None:
+    """A pipeline import inside a nested ``if TYPE_CHECKING:`` is also
+    exempt (the outer condition can be anything)."""
+    sources = {
+        "protocol.py": (
+            "from typing import TYPE_CHECKING\n"
+            "\n"
+            "import os\n"
+            "\n"
+            "if os.environ.get('FOO'):\n"
+            "    if TYPE_CHECKING:\n"
+            "        from smai_orchestrator.entities.tracking import RunRecord\n"
+        )
+    }
+    _make_smai_core(tmp_path, sources=sources)
+    assert check_deps.check_smai_core_imports(tmp_path) == []
+
+
+def test_type_checking_amendment_applies_to_plugin_rule_too(tmp_path: Path) -> None:
+    """Rule 3 (plugin-package boundary) gets the same TYPE_CHECKING
+    exemption — a plugin can name pipeline modules under TYPE_CHECKING."""
+    _make_plugin(
+        tmp_path,
+        "smai-store-sqlite",
+        module="smai_store_sqlite",
+        deps=["smai-core"],
+        sources={
+            "store.py": (
+                "from typing import TYPE_CHECKING\n"
+                "\n"
+                "if TYPE_CHECKING:\n"
+                "    from smai_orchestrator.entities.tracking import (\n"
+                "        ComparisonGroupRecord,\n"
+                "    )\n"
+            )
+        },
+    )
+    assert check_deps.check_plugin_boundaries(tmp_path) == []
+
+
+def test_runtime_pipeline_import_in_plugin_still_fails(tmp_path: Path) -> None:
+    """Rule 3's blocking behavior is unchanged for non-exempt cases."""
+    _make_plugin(
+        tmp_path,
+        "smai-store-sqlite",
+        module="smai_store_sqlite",
+        deps=["smai-core"],
+        sources={"store.py": "from smai_orchestrator.entities.tracking import RunRecord\n"},
+    )
+    violations = check_deps.check_plugin_boundaries(tmp_path)
+    assert len(violations) == 1
+    assert violations[0].rule == "plugin-imports"
+    assert "smai_orchestrator" in violations[0].detail
+
+
+def test_conformance_subpackage_is_exempt_from_rule_2(tmp_path: Path) -> None:
+    """The ``smai_core/plugins/conformance/`` subpackage is opt-in test
+    infrastructure; runtime pipeline imports from inside it are
+    explicitly allowed (per Task 1.10 — conformance bases need to
+    construct real pipeline-tracking record fixtures)."""
+    sources = {
+        "plugins/conformance/__init__.py": "",
+        "plugins/conformance/test_metadata_store.py": (
+            "from smai_orchestrator.entities.tracking import ComparisonGroupRecord\n"
+        ),
+    }
+    _make_smai_core(tmp_path, sources=sources)
+    assert check_deps.check_smai_core_imports(tmp_path) == []
+
+
 # ---------- main() exit code on failure --------------------------------------
 
 

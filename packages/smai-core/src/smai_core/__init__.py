@@ -4,8 +4,11 @@ Data model, DSL + compiler, contract artifacts, mechanical evaluator, plugin
 Protocol definitions. Per DEC-029, ``smai-core`` is the methodology layer:
 runtime deps stay on the allowlist (``pydantic``, ``jsonschema``, stdlib);
 imports of pipeline packages are mechanically forbidden by
-``tools/check_deps.py``.
+``tools/check_deps.py`` (with a narrow TYPE_CHECKING exemption for the
+pipeline-tracking record types named on the ``MetadataStore`` Protocol).
 """
+
+from typing import TYPE_CHECKING
 
 from smai_core._compile import compile_experiment
 from smai_core._runtime_keys import metric_ref_to_runtime_key
@@ -119,8 +122,6 @@ from smai_core.plugins import (
     ArtifactStoreError,
     ArtifactTooLarge,
     CacheConfig,
-    CGState,
-    ComparisonGroupRecord,
     Compute,
     ComputeCapabilities,
     ComputeError,
@@ -128,8 +129,6 @@ from smai_core.plugins import (
     ConflictError,
     CursorPage,
     EntityKind,
-    EntryRecord,
-    EntryState,
     JobHandle,
     JobImageInvalid,
     JobNotFound,
@@ -150,13 +149,7 @@ from smai_core.plugins import (
     ModelResponse,
     NormalizedContent,
     NormalizedMessage,
-    PaperRecord,
-    PaperState,
     PresignedUrlsUnsupported,
-    ProposalRecord,
-    ProposalState,
-    RunRecord,
-    RunState,
     StopReason,
     TextContent,
     TokenUsage,
@@ -165,6 +158,26 @@ from smai_core.plugins import (
     ToolUseContent,
     Transaction,
 )
+
+# Pipeline-tracking record types live in smai-orchestrator per Task 1.10 /
+# `01-data-model.md` §5.1; they are typing-only re-exports here. Runtime
+# construction goes through ``from smai_orchestrator.entities.tracking
+# import ...``. ``tools/check_deps.py`` exempts TYPE_CHECKING imports
+# from rule 2.
+if TYPE_CHECKING:
+    from smai_orchestrator.entities.tracking import (
+        CGState,
+        ComparisonGroupRecord,
+        EntryRecord,
+        EntryState,
+        FactorModelRecord,
+        PaperRecord,
+        PaperState,
+        ProposalRecord,
+        ProposalState,
+        RunRecord,
+        RunState,
+    )
 from smai_core.verification import (
     TECHNIQUE_CATEGORY_V1_CLOSED_SET,
     VerificationError,
@@ -224,6 +237,7 @@ __all__ = [
     "Factor",
     "FactorModel",
     "FactorModelDocument",
+    "FactorModelRecord",
     "FactorTypePlugin",
     "FactorTypePluginError",
     "FidelityAnchor",

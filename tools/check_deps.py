@@ -74,10 +74,13 @@ REASON_CORE_DEP = (
     "package-boundary atomicity invariant (00-vision.md §4 principle #2)."
 )
 REASON_CORE_IMPORT = (
-    "smai-core is the methodology layer (DEC-029); imports of pipeline "
-    "packages (smai_agents, smai_orchestrator, smai_runtime, smai_cli, "
-    "the smai umbrella, or any plugin) break the package-boundary "
-    "atomicity invariant (00-vision.md §4 principle #2)."
+    "smai-core is the methodology layer (DEC-029); runtime imports of "
+    "pipeline packages (smai_agents, smai_orchestrator, smai_runtime, "
+    "smai_cli, the smai umbrella, or any plugin) break the package-boundary "
+    "atomicity invariant (00-vision.md §4 principle #2). Pure typing "
+    "references are allowed under `if TYPE_CHECKING:` (per `01-data-model.md` "
+    "§5.1 / `07-plugin-interfaces.md` §3.1: the MetadataStore Protocol "
+    "type-references pipeline-tracking record types from smai-orchestrator)."
 )
 REASON_PLUGIN_DEP = (
     "Plugin packages must depend only on smai-core and their own provider SDK "
@@ -89,8 +92,9 @@ REASON_PLUGIN_DEP = (
 REASON_PLUGIN_IMPORT = (
     "Plugin packages must not import pipeline packages "
     "(smai_agents, smai_orchestrator, smai_runtime, smai_cli, or the smai "
-    "umbrella) per implementation_plan.md §2.3; doing so couples the plugin "
-    "to the pipeline layer it is meant to plug into."
+    "umbrella) at runtime per implementation_plan.md §2.3; doing so couples "
+    "the plugin to the pipeline layer it is meant to plug into. Pure typing "
+    "references are allowed under `if TYPE_CHECKING:`."
 )
 
 # ---------- data types --------------------------------------------------------
@@ -150,33 +154,99 @@ def iter_python_files(root: Path) -> Iterator[Path]:
         yield path
 
 
-def iter_top_level_imports(py_file: Path) -> Iterator[tuple[int, str, str]]:
-    """Yield ``(lineno, top_level_module, source_snippet)`` for each import.
+def _is_type_checking_test(test: ast.expr) -> bool:
+    """Return True if the ``If.test`` expression is ``TYPE_CHECKING`` /
+    ``typing.TYPE_CHECKING`` (in any module-prefixed form).
+
+    Recognized shapes:
+
+    * ``if TYPE_CHECKING:`` (after ``from typing import TYPE_CHECKING``)
+    * ``if typing.TYPE_CHECKING:`` (after ``import typing``)
+    * ``if t.TYPE_CHECKING:`` (after ``import typing as t``)
+
+    Explicitly NOT recognized — these are runtime branches and remain
+    subject to the import boundary:
+
+    * ``if not TYPE_CHECKING:`` — inverse; imports inside this block run
+      everywhere except a static checker.
+    * The ``else:`` branch of an ``if TYPE_CHECKING:`` ``If`` — that is
+      the runtime fallback.
+    """
+    if isinstance(test, ast.Name):
+        return test.id == "TYPE_CHECKING"
+    if isinstance(test, ast.Attribute):
+        return test.attr == "TYPE_CHECKING"
+    return False
+
+
+class _ImportCollector(ast.NodeVisitor):
+    """AST visitor that yields ``(lineno, top_module, snippet, in_type_checking)``
+    for every ``Import`` and ``ImportFrom`` node, tracking whether each
+    import is nested inside an ``if TYPE_CHECKING:`` block (whose
+    ``orelse`` branch is correctly *not* counted as type-checking).
+
+    A flat ``ast.walk`` cannot do this because it loses the parent-chain
+    context. We descend the tree explicitly, flipping a flag in the
+    body of ``if TYPE_CHECKING:`` ``If`` nodes only.
+    """
+
+    def __init__(self, source_lines: list[str]) -> None:
+        self._lines = source_lines
+        self._in_type_checking = False
+        self.results: list[tuple[int, str, str, bool]] = []
+
+    def visit_If(self, node: ast.If) -> None:
+        if _is_type_checking_test(node.test):
+            saved = self._in_type_checking
+            self._in_type_checking = True
+            for child in node.body:
+                self.visit(child)
+            self._in_type_checking = saved
+            # ``orelse`` is the runtime fallback (``else:`` branch of the
+            # TYPE_CHECKING ``If``) — visit it WITHOUT the flag set.
+            for child in node.orelse:
+                self.visit(child)
+        else:
+            self.generic_visit(node)
+
+    def visit_Import(self, node: ast.Import) -> None:
+        snippet = self._lines[node.lineno - 1].strip() if node.lineno - 1 < len(self._lines) else ""
+        for alias in node.names:
+            top = alias.name.split(".", 1)[0]
+            self.results.append((node.lineno, top, snippet, self._in_type_checking))
+
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+        if node.level and node.level > 0:
+            return  # relative import — no top-level module to record
+        if node.module is None:
+            return
+        top = node.module.split(".", 1)[0]
+        snippet = self._lines[node.lineno - 1].strip() if node.lineno - 1 < len(self._lines) else ""
+        self.results.append((node.lineno, top, snippet, self._in_type_checking))
+
+
+def iter_top_level_imports(py_file: Path) -> Iterator[tuple[int, str, str, bool]]:
+    """Yield ``(lineno, top_level_module, source_snippet, in_type_checking)``
+    for each import.
 
     Top-level module = the first segment of the dotted module path. Relative
     imports (``from . import x``) yield no result — they target the current
     package.
+
+    ``in_type_checking`` is ``True`` when the import is nested inside an
+    ``if TYPE_CHECKING:`` block (per `01-data-model.md` §5.1 /
+    `07-plugin-interfaces.md` §3.1: imports made solely for typing
+    purposes are exempt from the methodology / pipeline boundary). The
+    rule-evaluation site is responsible for honoring the flag.
     """
     source = py_file.read_text(encoding="utf-8")
     try:
         tree = ast.parse(source, filename=str(py_file))
     except SyntaxError as exc:  # pragma: no cover - defensive
         raise ValueError(f"{py_file}: failed to parse: {exc}") from exc
-    lines = source.splitlines()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                top = alias.name.split(".", 1)[0]
-                snippet = lines[node.lineno - 1].strip() if node.lineno - 1 < len(lines) else ""
-                yield (node.lineno, top, snippet)
-        elif isinstance(node, ast.ImportFrom):
-            if node.level and node.level > 0:
-                continue  # relative import
-            if node.module is None:
-                continue
-            top = node.module.split(".", 1)[0]
-            snippet = lines[node.lineno - 1].strip() if node.lineno - 1 < len(lines) else ""
-            yield (node.lineno, top, snippet)
+    collector = _ImportCollector(source.splitlines())
+    collector.visit(tree)
+    yield from collector.results
 
 
 def is_plugin_module(module: str) -> bool:
@@ -220,14 +290,51 @@ def check_smai_core_deps(root: Path) -> list[Violation]:
     return violations
 
 
+# Subpath under ``packages/smai-core/src/`` that is exempt from rule 2.
+# The conformance test suite (``smai_core.plugins.conformance``) is opt-in
+# test infrastructure gated behind the ``[conformance]`` extra (per
+# ``smai-core/pyproject.toml``); it intentionally crosses the methodology
+# / pipeline boundary because it tests the contract between plugin
+# implementations and the pipeline-tracking record types they accept and
+# return. Plugin authors who subclass these bases install smai-orchestrator
+# anyway. Tier B users never reach this subpackage — its ``__init__.py``
+# requires pytest, also opt-in.
+_RULE2_EXEMPT_SUBPATHS: frozenset[str] = frozenset(
+    {"smai_core/plugins/conformance"},
+)
+
+
+def _is_rule2_exempt_path(py_file: Path, src_root: Path) -> bool:
+    rel = py_file.relative_to(src_root).as_posix()
+    return any(rel.startswith(prefix + "/") for prefix in _RULE2_EXEMPT_SUBPATHS)
+
+
 def check_smai_core_imports(root: Path) -> list[Violation]:
-    """Rule 2: smai-core sources don't import pipeline or plugin packages."""
+    """Rule 2: smai-core sources don't import pipeline or plugin packages
+    at runtime.
+
+    Two exemptions apply:
+
+    * Imports nested inside ``if TYPE_CHECKING:`` blocks are exempted (per
+      `01-data-model.md` §5.1 / `07-plugin-interfaces.md` §3.1: the
+      ``MetadataStore`` Protocol type-references record types from
+      ``smai_orchestrator.entities.tracking``). Imports in ``not
+      TYPE_CHECKING`` branches or in the ``else:`` of a TYPE_CHECKING
+      ``If`` remain subject to the rule.
+    * Sources under :data:`_RULE2_EXEMPT_SUBPATHS` are exempted entirely
+      — opt-in test infrastructure that intentionally crosses the
+      package boundary.
+    """
     src = root / "packages" / "smai-core" / "src"
     if not src.exists():
         return []
     violations: list[Violation] = []
     for py_file in iter_python_files(src):
-        for lineno, module, snippet in iter_top_level_imports(py_file):
+        if _is_rule2_exempt_path(py_file, src):
+            continue
+        for lineno, module, snippet, in_type_checking in iter_top_level_imports(py_file):
+            if in_type_checking:
+                continue
             if is_pipeline_module(module) or is_plugin_module(module):
                 violations.append(
                     Violation(
@@ -267,7 +374,9 @@ def check_plugin_boundaries(root: Path) -> list[Violation]:
                     )
         src = plugin / "src"
         for py_file in iter_python_files(src):
-            for lineno, module, snippet in iter_top_level_imports(py_file):
+            for lineno, module, snippet, in_type_checking in iter_top_level_imports(py_file):
+                if in_type_checking:
+                    continue
                 if is_pipeline_module(module):
                     violations.append(
                         Violation(

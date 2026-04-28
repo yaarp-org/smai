@@ -23,6 +23,7 @@ contract methods alone.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable
+from datetime import UTC, datetime
 from typing import Any, TypeVar
 
 import pytest
@@ -38,6 +39,16 @@ from smai_core.plugins import (
     ModelResponse,
     NormalizedMessage,
 )
+
+# The pipeline-tracking record types live in ``smai-orchestrator`` per
+# Task 1.10 / ``01-data-model.md`` §5.1. The conformance subpackage is
+# opt-in test infrastructure (gated behind the ``[conformance]`` extra
+# dep); test callers import the record types directly from
+# ``smai_orchestrator.entities.tracking``. :func:`make_record` below
+# dispatches on the passed ``record_type.__name__`` so it does not need
+# the symbols imported here. ``tools/check_deps.py`` exempts this
+# subdirectory from rule 2 to admit the cross-boundary import where it
+# is needed (in :mod:`test_metadata_store`).
 
 # === The wall-clock seam (deferred to Task 2.C1; §6 Q4) ======================
 
@@ -282,30 +293,99 @@ def skip_no_factory_override(class_name: str, factory_name: str) -> None:
     pytest.skip(_SKIP_MESSAGE_TEMPLATE.format(class_name=class_name, factory_name=factory_name))
 
 
-# === Pipeline-record-stub construction helpers ==============================
+# === Pipeline-record fixture construction helpers ==========================
 #
-# The pipeline-tracking record types (``ComparisonGroupRecord`` etc.) are
-# Pydantic stubs with ``extra="allow"`` and no declared fields per
-# ``07-plugin-interfaces.md`` §3.1 / DEC-029 (carry-forward from Task 1.8).
-# Constructing them with kwargs (``ComparisonGroupRecord(id="x", state=...)``)
-# trips pyright-strict's ``reportCallIssue`` because the class has no
-# declared parameters even though Pydantic accepts the call at runtime.
+# The pipeline-tracking record types live in ``smai_orchestrator.entities.
+# tracking`` (Task 1.10 / ``01-data-model.md`` §5). They have
+# ``model_config = extra="forbid"`` and many required fields (``id``,
+# ``proposal_id``, ``experiment_definition_id``, ``created_at``, etc.).
 #
-# Resolution: use ``model_validate({...})`` — the dict path is unconditionally
-# typed and works for any extra-allow Pydantic stub. The helpers below are
-# narrow wrappers so the bases stay readable.
+# :func:`make_record` provides sensible defaults for the required fields
+# of each known record type so conformance tests can construct fixtures
+# with terse overrides (``make_record(ComparisonGroupRecord, id="cg_x",
+# state="draft")``).
+#
+# A test caller passing an unknown record type (or omitting a required
+# field for which no default is known) gets the same Pydantic
+# ``ValidationError`` they would get constructing the model directly.
 
 _R = TypeVar("_R", bound=BaseModel)
 
 
+def _epoch() -> datetime:
+    return datetime(2026, 1, 1, tzinfo=UTC)
+
+
+def _defaults_for(record_type: type[BaseModel]) -> dict[str, object]:
+    """Return the default field set for ``record_type`` (Task 1.10).
+
+    Empty dict for record types we don't recognize — the caller's kwargs
+    must fill in every required field.
+    """
+    name = record_type.__name__
+    base: dict[str, object] = {
+        "version": 1,
+        "created_at": _epoch(),
+        "updated_at": _epoch(),
+    }
+    if name == "ComparisonGroupRecord":
+        return base | {
+            "id": "cg_default",
+            "proposal_id": "prop_default",
+            "experiment_definition_id": "cg_default",
+            "state": "draft",
+        }
+    if name == "EntryRecord":
+        return base | {
+            "id": "entry_default",
+            "cg_id": "cg_default",
+            "technique_id": None,
+            "is_baseline": True,
+            "entry_id": "entry_default",
+            "state": "pending",
+        }
+    if name == "RunRecord":
+        return base | {
+            "id": "run_default",
+            "cg_id": "cg_default",
+            "entry_id": "entry_default",
+            "seed": 0,
+            "state": "pending",
+        }
+    if name == "ProposalRecord":
+        return base | {
+            "id": "prop_default",
+            "submission_kind": "novel_technique",
+            "state": "proposal_submitted",
+        }
+    if name == "PaperRecord":
+        return base | {
+            "arxiv_id": "2501.00001",
+            "state": "submitted",
+        }
+    if name == "FactorModelRecord":
+        return base | {
+            "id": "fm_default",
+            "factor_model_id": "fm_default",
+            "research_question": "default research question",
+        }
+    return {}
+
+
 def make_record(record_type: type[_R], **fields: object) -> _R:
-    """Construct a stub pipeline-record from kwargs.
+    """Construct a pipeline-tracking record fixture (Task 1.10).
+
+    Per-record defaults from :func:`_defaults_for` cover required fields
+    so conformance tests can override only the fields they care about::
+
+        cg = make_record(ComparisonGroupRecord, id="cg_round_trip", state="draft")
 
     Goes through ``model_validate`` so pyright-strict accepts the call —
-    direct kwarg construction would trip ``reportCallIssue`` (the stub
-    has ``extra="allow"`` but no declared fields).
+    direct kwarg construction trips ``reportCallIssue`` because the merge
+    of defaults + overrides is not visible to the static checker.
     """
-    return record_type.model_validate(dict(fields))
+    payload = _defaults_for(record_type) | dict(fields)
+    return record_type.model_validate(payload)
 
 
 __all__ = [

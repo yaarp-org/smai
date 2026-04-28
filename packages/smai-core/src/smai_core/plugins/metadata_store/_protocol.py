@@ -35,23 +35,30 @@ from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
 
 from smai_core.plugins._common import CursorPage, EntityKind, LeaseToken
 from smai_core.plugins.metadata_store._capabilities import MetadataStoreCapabilities
-from smai_core.plugins.metadata_store._records import (
-    CGState,
-    ComparisonGroupRecord,
-    EntryRecord,
-    EntryState,
-    PaperRecord,
-    PaperState,
-    ProposalRecord,
-    ProposalState,
-    RunRecord,
-    RunState,
-)
 
 if TYPE_CHECKING:
     # ``TechniqueRef`` is a methodology entity (smai-core internal); imported
     # under TYPE_CHECKING to avoid a runtime import cycle through
     # ``smai_core.entities``. Used by the technique-registry lookups in §5.3.
+    # Pipeline-tracking record types live in ``smai-orchestrator`` per
+    # ``07-plugin-interfaces.md`` §3.1 + DEC-029 (one-way dependency:
+    # pipeline → methodology, never reverse). The Protocol references them
+    # by name only; they are never imported at smai-core runtime.
+    # ``tools/check_deps.py`` exempts these TYPE_CHECKING imports from
+    # rule 2 — see the lint module for details.
+    from smai_orchestrator.entities.tracking import (
+        CGState,
+        ComparisonGroupRecord,
+        EntryRecord,
+        EntryState,
+        PaperRecord,
+        PaperState,
+        ProposalRecord,
+        ProposalState,
+        RunRecord,
+        RunState,
+    )
+
     from smai_core.entities import TechniqueRef
 
 

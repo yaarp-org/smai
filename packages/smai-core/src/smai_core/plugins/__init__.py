@@ -17,7 +17,14 @@ from this package — :class:`MetadataStore`, :class:`ArtifactStore`, and
 in-tree CLI, the hosted backend) import these Protocols and the plugin
 packages register implementations via the ``smai.<namespace>`` entry
 points.
+
+Pipeline-tracking record types (``ComparisonGroupRecord`` etc.) live in
+``smai-orchestrator`` per Task 1.10 / ``01-data-model.md`` §5.1; they are
+re-exported here under ``TYPE_CHECKING`` only — runtime construction
+goes through ``from smai_orchestrator.entities.tracking import ...``.
 """
+
+from typing import TYPE_CHECKING
 
 from smai_core.plugins._common import CursorPage, EntityKind, LeaseToken
 from smai_core.plugins.artifact_store import (
@@ -59,23 +66,28 @@ from smai_core.plugins.llm_provider import (
     ToolUseContent,
 )
 from smai_core.plugins.metadata_store import (
-    CGState,
-    ComparisonGroupRecord,
     ConflictError,
-    EntryRecord,
-    EntryState,
     LeaseLostError,
     MetadataStore,
     MetadataStoreCapabilities,
     MetadataStoreError,
-    PaperRecord,
-    PaperState,
-    ProposalRecord,
-    ProposalState,
-    RunRecord,
-    RunState,
     Transaction,
 )
+
+if TYPE_CHECKING:
+    from smai_orchestrator.entities.tracking import (
+        CGState,
+        ComparisonGroupRecord,
+        EntryRecord,
+        EntryState,
+        FactorModelRecord,
+        PaperRecord,
+        PaperState,
+        ProposalRecord,
+        ProposalState,
+        RunRecord,
+        RunState,
+    )
 
 __all__ = [
     # _common
@@ -117,12 +129,14 @@ __all__ = [
     "ToolDefinition",
     "ToolResultContent",
     "ToolUseContent",
-    # metadata_store
+    # metadata_store (Protocols + errors only — record types live in
+    # smai-orchestrator and are re-exported under TYPE_CHECKING above)
     "CGState",
     "ComparisonGroupRecord",
     "ConflictError",
     "EntryRecord",
     "EntryState",
+    "FactorModelRecord",
     "LeaseLostError",
     "MetadataStore",
     "MetadataStoreCapabilities",

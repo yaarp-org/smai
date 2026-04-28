@@ -43,19 +43,27 @@ import time
 
 import pytest
 
-from smai_core.plugins import (
+# Pipeline-tracking record types live in ``smai-orchestrator`` per Task
+# 1.10 / ``01-data-model.md`` §5.1. This conformance suite tests the
+# cross-package contract between ``MetadataStore`` plugins and the
+# records they accept and return; ``tools/check_deps.py`` exempts the
+# conformance subpackage from rule 2 to admit this runtime import.
+from smai_orchestrator.entities.tracking import (
     ComparisonGroupRecord,
+    EntryRecord,
+    PaperRecord,
+    ProposalRecord,
+    RunRecord,
+)
+
+from smai_core.plugins import (
     ConflictError,
     CursorPage,
     EntityKind,
-    EntryRecord,
     LeaseLostError,
     LeaseToken,
     MetadataStore,
     MetadataStoreCapabilities,
-    PaperRecord,
-    ProposalRecord,
-    RunRecord,
 )
 from smai_core.plugins.conformance._common import (
     SCHEDULING_QUERY_METHODS,

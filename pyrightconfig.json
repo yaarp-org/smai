@@ -11,12 +11,22 @@
       "root": "packages/smai-core",
       "reportMissingImports": "error",
       "extraPaths": [
+        "packages/smai-core/src",
+        "packages/smai-orchestrator/src"
+      ]
+    },
+    {
+      "root": "packages/smai-orchestrator",
+      "reportMissingImports": "error",
+      "extraPaths": [
+        "packages/smai-orchestrator/src",
         "packages/smai-core/src"
       ]
     }
   ],
   "typeCheckingMode": "standard",
   "strict": [
-    "packages/smai-core/src"
+    "packages/smai-core/src",
+    "packages/smai-orchestrator/src"
   ]
 }
