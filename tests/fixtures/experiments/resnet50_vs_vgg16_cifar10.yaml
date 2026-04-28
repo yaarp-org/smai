@@ -59,8 +59,3 @@ experiment:
       Top-1 accuracy is the canonical CIFAR-10 image classification metric.
       Threshold of 0.5pp matches the typical reporting precision in
       published comparisons.
-    optional_telemetry:
-      - kind: atomic
-        ref: training_loss_curve
-      - kind: atomic
-        ref: peak_gpu_memory

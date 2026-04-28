@@ -161,8 +161,8 @@ experiments:
         batch_size: 256
         epochs: 90
       seeds: [42, 1337, 2024, 9999, 55]
-      activation_function: relu
-      normalization_layer: batchnorm
+      activation_function: ReLU
+      normalization_layer: BatchNorm
     entries:
       - id: no_mixup_baseline
         is_baseline: true

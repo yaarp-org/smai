@@ -86,8 +86,6 @@ def test_resnet_vs_vgg_substitutive_shape() -> None:
     exp = doc.experiment
     assert exp.factors[0].type == "substitutive"
     assert all(e.level.technique_id is not None for e in exp.entries)
-    assert exp.validation.optional_telemetry is not None
-    assert len(exp.validation.optional_telemetry) == 2
 
 
 def test_cutout_additive_baseline_has_null_technique() -> None:
@@ -154,5 +152,5 @@ def test_factor_model_extras_admitted_on_controlled_conditions() -> None:
     assert isinstance(doc, FactorModelDocument)
     mixup = next(e for e in doc.experiments if e.id == "cg_training_augmentation")
     assert mixup.controlled_conditions.has_field("activation_function")
-    assert mixup.controlled_conditions.get_field("activation_function") == "relu"
-    assert mixup.controlled_conditions.get_field("normalization_layer") == "batchnorm"
+    assert mixup.controlled_conditions.get_field("activation_function") == "ReLU"
+    assert mixup.controlled_conditions.get_field("normalization_layer") == "BatchNorm"

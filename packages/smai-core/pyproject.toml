@@ -5,6 +5,7 @@ description = "Methodology layer: data model, DSL + compiler, contract artifacts
 requires-python = ">=3.11"
 dependencies = [
     "pydantic>=2.0",
+    "jsonschema>=4.0",
 ]
 
 # Factor-type plugin registration per 02-dsl-and-contracts.md §3.5 / DEC-026.

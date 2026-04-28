@@ -41,12 +41,15 @@ from smai_core.entities import (
     ProposalFidelityAnchor,
     Registries,
     ReviewerAttestedFidelityAnchor,
+    RuleSeverity,
     TechniqueParams,
     TechniqueParamValue,
     TechniqueRef,
     TrendCheck,
     ValidationCriteria,
     ValidationError,
+    ValidationReport,
+    VerificationFinding,
     VerifiedExperimentDefinition,
 )
 from smai_core.evaluation import (
@@ -65,6 +68,13 @@ from smai_core.factor_types import (
     FactorTypePluginError,
     SubstitutivePlugin,
     load_builtin_factor_type_plugins,
+)
+from smai_core.verification import (
+    TECHNIQUE_CATEGORY_V1_CLOSED_SET,
+    VerificationError,
+    verify,
+    verify_experiment,
+    verify_to_report,
 )
 
 __all__ = [
@@ -105,14 +115,22 @@ __all__ = [
     "ProposalFidelityAnchor",
     "Registries",
     "ReviewerAttestedFidelityAnchor",
+    "RuleSeverity",
     "SubstitutivePlugin",
+    "TECHNIQUE_CATEGORY_V1_CLOSED_SET",
     "TechniqueParamValue",
     "TechniqueParams",
     "TechniqueRef",
     "TrendCheck",
     "ValidationCriteria",
     "ValidationError",
+    "ValidationReport",
+    "VerificationError",
+    "VerificationFinding",
     "VerifiedExperimentDefinition",
+    "verify",
+    "verify_experiment",
+    "verify_to_report",
     "get_aggregation_rule",
     "get_comparison_rule",
     "load_builtin_factor_type_plugins",

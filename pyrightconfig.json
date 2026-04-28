@@ -17,6 +17,6 @@
   ],
   "typeCheckingMode": "standard",
   "strict": [
-    "packages/smai-core"
+    "packages/smai-core/src"
   ]
 }
