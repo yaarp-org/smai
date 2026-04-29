@@ -11,7 +11,7 @@ from smai_artifacts_s3 import S3Store
 
 store = S3Store(
     bucket="my-existing-bucket",
-    region="us-west-2",
+    region="us-east-1",
     prefix="prod/",                       # optional key namespacing
     presigned_url_expiry_seconds=900,     # 15-minute default
 )
@@ -42,7 +42,7 @@ The plugin ships three test modes:
    S3-affecting change ready:
 
 ```sh
-AWS_TEST_BUCKET=my-test-bucket AWS_TEST_REGION=us-west-2 \
+AWS_TEST_BUCKET=my-test-bucket AWS_TEST_REGION=us-east-1 \
     uv run pytest plugins/smai-artifacts-s3/tests/test_real_aws.py -v
 ```
 

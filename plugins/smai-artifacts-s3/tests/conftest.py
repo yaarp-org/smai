@@ -15,10 +15,10 @@ from botocore.config import Config  # pyright: ignore[reportMissingTypeStubs]
 from moto import mock_aws  # pyright: ignore[reportMissingTypeStubs]
 from smai_artifacts_s3 import S3Store
 
-# A region that requires SigV4 — picking ``us-west-2`` (rather than
-# ``us-east-1``, the legacy default) keeps the moto-mocked tests aligned
-# with how real-world buckets are provisioned today.
-TEST_REGION: str = "us-west-2"
+# Project canonical region per CLAUDE.md. SigV4 is forced via
+# ``signature_version="s3v4"`` in the S3Store client builder regardless
+# of region, so us-east-1 carries no signing-version risk.
+TEST_REGION: str = "us-east-1"
 TEST_BUCKET: str = "smai-conformance-bucket"
 
 
@@ -40,10 +40,11 @@ def s3_store() -> Iterator[S3Store]:
             aws_secret_access_key="testing",
             config=Config(signature_version="s3v4"),
         )
-        client.create_bucket(  # pyright: ignore[reportUnknownMemberType]
-            Bucket=TEST_BUCKET,
-            CreateBucketConfiguration={"LocationConstraint": TEST_REGION},
-        )
+        # ``us-east-1`` is S3's default region and rejects
+        # ``CreateBucketConfiguration={"LocationConstraint": ...}`` — the
+        # bucket is implicitly created in us-east-1 when no constraint
+        # is passed. ``test_presigned_url.py`` documents the same quirk.
+        client.create_bucket(Bucket=TEST_BUCKET)  # pyright: ignore[reportUnknownMemberType]
         yield S3Store(
             bucket=TEST_BUCKET,
             region=TEST_REGION,
