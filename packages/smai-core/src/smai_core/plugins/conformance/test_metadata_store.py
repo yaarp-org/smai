@@ -155,7 +155,17 @@ class MetadataStoreConformance:
         assert fetched is not None
 
     async def test_crud_round_trip_entry(self, store: MetadataStore) -> None:
-        """``create_entry`` then ``get_entry`` returns equivalent record."""
+        """``create_entry`` then ``get_entry`` returns equivalent record.
+
+        Parent CG is seeded first to satisfy the ``entries.cg_id``
+        foreign-key declared on the shared SQL schema (DEC-036). SQLite
+        does not enforce FKs by default; Postgres does. The fixture
+        order matches the production write path (CG before its
+        entries) — see ``08-novel-technique-pipeline.md`` §2.4.
+        """
+        await store.create_cg(
+            make_record(ComparisonGroupRecord, id="cg_x", state="draft", version=1)
+        )
         entry = make_record(
             EntryRecord, id="entry_round_trip", cg_id="cg_x", state="pending", version=1
         )
@@ -164,9 +174,32 @@ class MetadataStoreConformance:
         assert fetched is not None
 
     async def test_crud_round_trip_run(self, store: MetadataStore) -> None:
-        """``create_run`` then ``get_run`` returns equivalent record."""
+        """``create_run`` then ``get_run`` returns equivalent record.
+
+        Parent CG + entry are seeded first to satisfy the ``runs.cg_id``
+        and ``runs.entry_id`` foreign keys declared on the shared SQL
+        schema (DEC-036). See :meth:`test_crud_round_trip_entry` for the
+        rationale.
+        """
+        await store.create_cg(
+            make_record(ComparisonGroupRecord, id="cg_run_parent", state="draft", version=1)
+        )
+        await store.create_entry(
+            make_record(
+                EntryRecord,
+                id="entry_x",
+                cg_id="cg_run_parent",
+                state="pending",
+                version=1,
+            )
+        )
         run = make_record(
-            RunRecord, id="run_round_trip", entry_id="entry_x", state="pending", version=1
+            RunRecord,
+            id="run_round_trip",
+            cg_id="cg_run_parent",
+            entry_id="entry_x",
+            state="pending",
+            version=1,
         )
         await store.create_run(run)
         fetched = await store.get_run("run_round_trip")
