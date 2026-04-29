@@ -49,6 +49,8 @@ from smai_cli.config import (
 )
 from smai_cli.runtime import (
     CGNotFoundError,
+    PaperNotFoundError,
+    PaperStateError,
     ProposalNotFoundError,
     ProposalStateError,
     Runtime,
@@ -785,6 +787,88 @@ def smai_reject_proposal(
                 _err(str(exc), exit_code=4)
                 return
             typer.echo(f"rejected: {record.id} (state={record.state})")
+
+    asyncio.run(_run())
+
+
+# === Verb 11: ingest =========================================================
+
+
+@app.command("ingest")
+def smai_ingest(
+    arxiv_id: Annotated[str, typer.Argument(help="arXiv id (e.g., 1804.07612 or cs.LG/9701001).")],
+    promote_partial: Annotated[
+        bool,
+        typer.Option(
+            "--promote-partial",
+            help=(
+                "Promote an existing partial paper to ``submitted`` "
+                "(per `08-novel-technique-pipeline.md` §5.7). The paper "
+                "must already exist in `partial` state — populated by "
+                "another paper's enrichment step. Mutually exclusive "
+                "with the default ingestion flow."
+            ),
+        ),
+    ] = False,
+    title: Annotated[
+        str | None,
+        typer.Option(
+            "--title",
+            help=(
+                "Optional bibliographic title to record on the new "
+                "PaperRecord. The fetcher overwrites this with the "
+                "arXiv-reported title once content lands."
+            ),
+        ),
+    ] = None,
+    config: Annotated[
+        Path | None,
+        typer.Option("--config", "-c", help="Path to a smai.yaml."),
+    ] = None,
+) -> None:
+    """Submit a paper for ingestion (`09` §1 / DEC-032 OQ1).
+
+    The paper-ingestion verb. Per `08` §5 / DEC-032: paper ingestion is
+    a *supporting utility* that produces ``TechniqueRef``s + paper-
+    fidelity-anchor metadata only — it does NOT produce CGs. To create
+    CGs from a paper, ``smai ingest`` first, then ``smai submit-proposal
+    --reproduce-paper <arxiv-id>``.
+
+    ``smai ingest <arxiv-id>``: create a :class:`PaperRecord` in
+    ``submitted``; the worker's next cycle picks it up via
+    ``get_ready_for_paper_fetch`` and drives the ingestion pipeline.
+
+    ``smai ingest --promote-partial <arxiv-id>``: synchronous transition
+    of a paper from ``partial`` to ``submitted`` (per `08` §5.7 — partial
+    papers are link-target / dedup parking spots created by another
+    paper's enrichment step; promotion fully ingests them).
+    """
+    overrides: dict[str, Any] = _apply_dev_filesystem_defaults({})
+    try:
+        runtime_config = load_runtime_config(
+            config_path=config,
+            defaults=dev_defaults(),
+            flag_overrides=overrides,
+        )
+    except (ConfigFileError, ConfigValidationError) as exc:
+        _err(str(exc))
+
+    async def _run() -> None:
+        async with Runtime.start_in_band(runtime_config, run_worker=False) as runtime:
+            try:
+                if promote_partial:
+                    record = await runtime.papers.promote_partial(arxiv_id)
+                    typer.echo(f"promoted: {record.arxiv_id} (state={record.state})")
+                else:
+                    submission = await runtime.papers.submit(arxiv_id=arxiv_id, title=title)
+                    suffix = " (promoted from partial)" if submission.promoted else ""
+                    typer.echo(f"{submission.arxiv_id} (state={submission.state}){suffix}")
+            except PaperNotFoundError as exc:
+                _err(str(exc), exit_code=2)
+                return
+            except PaperStateError as exc:
+                _err(str(exc), exit_code=4)
+                return
 
     asyncio.run(_run())
 

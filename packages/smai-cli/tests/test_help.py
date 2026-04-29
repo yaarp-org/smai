@@ -5,8 +5,10 @@ Phase-2 landed seven verbs (``dev``, ``run``, ``status``,
 ``compile``, ``init``, ``plugins``, ``version``); Task 3.E1
 (Phase-3 W1.a) landed three proposal verbs (``submit-proposal``,
 ``approve-proposal``, ``reject-proposal``) per DEC-032's primary-
-input-path framing. Remaining Phase-3 verbs (``start``, ``serve``,
-``ingest``, ``migrate``) must NOT appear yet.
+input-path framing. Task 3.E2 (Phase-3 W1.b) landed ``ingest``
+per DEC-032 OQ1's "explicit `smai ingest` only" rule. Remaining
+Phase-3 verbs (``start``, ``serve``, ``migrate``) must NOT appear
+yet.
 """
 
 from __future__ import annotations
@@ -28,6 +30,8 @@ EXPECTED_VERBS: frozenset[str] = frozenset(
         "submit-proposal",
         "approve-proposal",
         "reject-proposal",
+        # Phase-3 W1.b / Task 3.E2 (DEC-032 OQ1)
+        "ingest",
     }
 )
 
@@ -35,7 +39,6 @@ FORBIDDEN_PHASE_3_VERBS: frozenset[str] = frozenset(
     {
         "start",
         "serve",
-        "ingest",
         "migrate",
     }
 )

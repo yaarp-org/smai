@@ -6,6 +6,13 @@ requires-python = ">=3.11"
 dependencies = [
     "smai-core",
     "pydantic>=2.0",
+    # Per Task 3.E2 — the paper-ingestion pipeline-spec's ``fetching``
+    # state's on-entry handler uses the ``arxiv`` PyPI package to pull
+    # LaTeX source tarballs from arxiv.org. Required at runtime because
+    # the orchestrator owns the dispatch handler. Tests inject a fake
+    # arxiv client through the dispatch-handler factory to keep the
+    # default test path offline.
+    "arxiv>=2.1",
 ]
 
 [tool.uv.sources]

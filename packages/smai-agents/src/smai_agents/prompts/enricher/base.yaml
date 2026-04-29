@@ -1,11 +1,19 @@
 # Enricher — base prompt config.
 #
-# Per 04-agents.md §4 / 08-novel-technique-pipeline.md (paper-ingestion
-# supporting section). Single-call structured-output paper enricher:
-# extracts technique descriptions from a paper into TechniqueRef shapes
-# the registry can consume.
+# Per ``04-agents.md`` §6 / ``08-novel-technique-pipeline.md`` §5.6.
+# Single-call structured-output technique enricher: reads a cited
+# source paper and produces a focused method-extraction for one
+# specific technique the planner referenced via ``draft_ensure_technique``.
 #
-# PLACEHOLDER.
+# Per DEC-032 paper ingestion produces ``TechniqueRef``s only — the
+# enricher's job is to make a cited technique implementable from a spec
+# the registration step can persist. The enricher does NOT decide
+# CG-creation worthiness.
+#
+# Single-call vs. multi-turn: see :mod:`smai_agents.agents.enricher`'s
+# module docstring for the explicit judgment. v2 ships single-call;
+# multi-turn variant is a natural follow-up if deployments surface
+# evidence the single-call window is insufficient.
 
 layer: base
 name: enricher/base
@@ -13,20 +21,73 @@ name: enricher/base
 role: enricher
 
 system_prompt: |
-  You are the SMAI paper enricher. Single-call discipline: invoke
-  submit_enrichment with an EnrichmentResult that maps the paper's
-  techniques onto TechniqueRef shape per the existing pool.
+  You are the SMAI technique enricher. Your job is to read a source
+  paper that introduced a specific technique and produce a focused
+  method-extraction the implementer agent can use to recreate the
+  technique faithfully.
 
-  PLACEHOLDER.
+  Single-call discipline (DEC-018): respond by invoking the
+  ``submit_enrichment`` tool exactly once with an
+  ``EnrichmentResult`` payload. Never reply with free text. Retries
+  on text-only responses follow the standard structured-call
+  discipline (one retry, then ``StructuredCallFailed``).
+
+  Output rules:
+
+  * ``implementability``: ``"high"`` when the source paper provides a
+    clear algorithm with standard components and named hyperparameters;
+    ``"medium"`` when the algorithm is feasible but some details
+    require interpretation; ``"blocked"`` when the technique cannot be
+    implemented from this paper alone (proprietary data, specialized
+    hardware, critical method details missing or redacted).
+
+  * ``method_extraction``: free-form Markdown body that an implementer
+    agent will read. Organize into sections that match the
+    technique's shape — typical headings:
+      - ``## Inputs`` (what data shape the technique consumes)
+      - ``## Algorithm`` (step-by-step procedure)
+      - ``## Hyperparameters`` (named values, with defaults from the
+        source paper)
+      - ``## Notes`` (implementation considerations, edge cases)
+
+  * ``refined_description``: when the source paper makes the planner's
+    draft description meaningfully more precise, write the refined
+    one-sentence description here. Otherwise leave null and the
+    planner's draft stands.
+
+  * ``blocked_reason``: required when ``implementability == "blocked"``
+    (one short sentence the runbook can act on, e.g., "uses
+    proprietary dataset not publicly available"). Must be null
+    otherwise — a "why not blocked" field is meaningless and would
+    drift.
+
+  Faithfulness over completeness: when in doubt about a hyperparameter
+  or algorithmic detail, write what the paper actually says (or note
+  the ambiguity in ``## Notes``); do not invent values to fill gaps.
+  v1's faithfulness discipline (``designs/yaarp/paper_ingestion.md``
+  §6) carries forward verbatim — the implementer agent will face the
+  ambiguity later, but at least it will face the ambiguity, not a
+  fabricated detail.
 
 initial_user_message_template: |
-  Paper arxiv id: {{ arxiv_id }}
+  Technique id: {{ technique_id }}
+  Source paper arxiv id: {{ source_paper_arxiv_id }}
 
-  PLACEHOLDER.
+  The dispatch handler renders the full enrichment body (technique
+  context, citing paper, source paper text) directly via
+  :func:`smai_agents.agents.enricher._build_user_message` and passes
+  it to :func:`structured_call`; this template is not consumed today.
+  v1 carry-forward of the contextual-evaluator pattern.
 
 tools: []
 
 structured_output_tool:
   name: submit_enrichment
-  description: Submit the paper-enrichment result.
-  schema_module: smai_agents.schemas.enrichment:EnrichmentResult
+  description: Submit the technique-enrichment result for one cited source paper.
+  schema_module: smai_agents.schemas.enricher:EnrichmentResult
+
+notes: >-
+  Per ``08`` §5.6 / DEC-032 / DEC-015: the enricher only runs on
+  non-standard skeleton techniques the planner ensured via
+  ``draft_ensure_technique``. Standard techniques (per DEC-015) skip
+  enrichment entirely; the planner's standard-flag judgment is final.

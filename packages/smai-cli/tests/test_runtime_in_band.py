@@ -211,10 +211,11 @@ async def test_run_one_cycle_drives_every_registered_spec(tmp_path: Path) -> Non
         stats_per_spec = await runtime.run_one_cycle()
         # Phase-3 expanded the registered SMAI spec set: cg_entries +
         # cg_execution (Phase-2) + run_record (Task 3.E3) + proposal
-        # pipeline (Task 3.E1). Each registered spec produces one
-        # :class:`WorkerCycleStats` per cycle.
+        # pipeline (Task 3.E1) + paper-ingestion (Task 3.E2). Each
+        # registered spec produces one :class:`WorkerCycleStats` per
+        # cycle.
         assert isinstance(stats_per_spec, list)
-        assert len(stats_per_spec) == 4
+        assert len(stats_per_spec) == 5
 
 
 @pytest.mark.asyncio
@@ -262,9 +263,9 @@ async def test_run_one_cycle_advances_treatment_entry_through_entry_spec(
         )
 
         stats_per_spec = await runtime.run_one_cycle()
-        # Four specs after Tasks 3.E1 + 3.E3: proposal + cg_entries +
-        # cg_execution + run_record.
-        assert len(stats_per_spec) == 4
+        # Five specs after Tasks 3.E1 + 3.E2 + 3.E3: proposal + paper +
+        # cg_entries + cg_execution + run_record.
+        assert len(stats_per_spec) == 5
 
         treatment = await runtime.plugins.metadata_store.get_entry("entry_cutout")
         assert treatment is not None

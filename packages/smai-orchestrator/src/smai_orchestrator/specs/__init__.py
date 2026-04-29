@@ -54,6 +54,24 @@ from smai_orchestrator.specs.cg_execution import (
     VALIDATION_CONFIG_KEY_TEMPLATE,
     build_cg_execution_spec,
 )
+from smai_orchestrator.specs.paper_ingestion import (
+    METHOD_EXTRACTION_KEY_TEMPLATE,
+    PAPER_INGESTION_SPEC_NAME,
+    POOL_PAPER_INGESTION,
+    POOL_PAPER_INGESTION_LIMIT,
+    POOL_PAPER_INGESTION_PRIORITY,
+    SCREEN_RESULT_KEY_TEMPLATE,
+    TECHNIQUE_BUFFER_KEY_TEMPLATE,
+    ArxivLatexFetcher,
+    FetchedPaper,
+    PaperFetcher,
+    PaperFetchError,
+    build_paper_ingestion_spec,
+    register_paper_ingestion_pipeline,
+)
+from smai_orchestrator.specs.paper_ingestion import (
+    PAPER_TEXT_KEY_TEMPLATE as PAPER_INGESTION_PAPER_TEXT_KEY_TEMPLATE,
+)
 from smai_orchestrator.specs.proposal import (
     APPROVAL_KEY_TEMPLATE as PROPOSAL_APPROVAL_KEY_TEMPLATE,
 )
@@ -90,7 +108,7 @@ def register_smai_specs(
     require_human_approval: bool = False,
     evaluation_dispatch_trace: list[str] | None = None,
 ) -> tuple[PipelineSpec, PipelineSpec]:
-    """Construct and register both Phase-2 SMAI specs into the process registry.
+    """Construct and register both CG-side SMAI specs into the process registry.
 
     Convenience helper for the CLI bootstrap (Task 2.D2). Constructs the
     CG-execution and CG-entries specs, registers each via
@@ -102,6 +120,17 @@ def register_smai_specs(
     inherits ``workspace_root`` and ``runtime_image`` only (it doesn't
     use the LlmProviders since the implementer agent runs inside the
     dispatched Compute container).
+
+    The proposal-pipeline, paper-ingestion, and run-record specs are
+    registered separately by their own helpers
+    (:func:`register_proposal_pipeline`,
+    :func:`register_paper_ingestion_pipeline`,
+    :func:`register_run_record_spec`) — each takes per-spec arguments
+    that don't fit naturally on this CG-side surface (per-role
+    LlmProvider distinct from code-review / contextual-evaluator, the
+    paper fetcher seam, etc.). The CLI bootstrap in
+    :class:`smai_cli.runtime.Runtime.start_in_band` calls all four
+    registration helpers in sequence.
 
     Raises :class:`smai_orchestrator.runtime.DuplicateSpecError` if
     either spec name is already registered. Tests call
@@ -127,6 +156,7 @@ def register_smai_specs(
 
 
 __all__ = [
+    "ArxivLatexFetcher",
     "CG_ENTRIES_SPEC_NAME",
     "CG_EXECUTION_SPEC_NAME",
     "CODE_REVIEW_KEY_TEMPLATE",
@@ -134,11 +164,18 @@ __all__ = [
     "DESIGN_PLAN_KEY_TEMPLATE",
     "EVALUATION_ERROR_KEY_TEMPLATE",
     "EVALUATION_RESULT_KEY_TEMPLATE",
+    "FetchedPaper",
     "HARNESS_CONTRACT_KEY_TEMPLATE",
     "HARNESS_MANIFEST_KEY_TEMPLATE",
     "HARNESS_VALIDATION_KEY_TEMPLATE",
+    "METHOD_EXTRACTION_KEY_TEMPLATE",
+    "PAPER_INGESTION_PAPER_TEXT_KEY_TEMPLATE",
+    "PAPER_INGESTION_SPEC_NAME",
     "POOL_AGENTS",
     "POOL_INLINE",
+    "POOL_PAPER_INGESTION",
+    "POOL_PAPER_INGESTION_LIMIT",
+    "POOL_PAPER_INGESTION_PRIORITY",
     "POOL_PROPOSAL_PIPELINE",
     "POOL_PROPOSAL_PIPELINE_LIMIT",
     "POOL_PROPOSAL_PIPELINE_PRIORITY",
@@ -147,17 +184,23 @@ __all__ = [
     "PROPOSAL_PIPELINE_SPEC_NAME",
     "PROPOSAL_REJECTION_KEY_TEMPLATE",
     "PROPOSAL_TECHNIQUE_DESCRIPTION_KEY_TEMPLATE",
+    "PaperFetchError",
+    "PaperFetcher",
     "RUN_IN_PROGRESS_STATES",
     "RUN_METRICS_KEY_TEMPLATE",
     "RUN_RECORD_SPEC_NAME",
     "RUN_TERMINAL_STATES",
+    "SCREEN_RESULT_KEY_TEMPLATE",
+    "TECHNIQUE_BUFFER_KEY_TEMPLATE",
     "TECHNIQUE_CONTRACT_KEY_TEMPLATE",
     "TECHNIQUE_VALIDATION_KEY_TEMPLATE",
     "VALIDATION_CONFIG_KEY_TEMPLATE",
     "build_cg_entries_spec",
     "build_cg_execution_spec",
+    "build_paper_ingestion_spec",
     "build_proposal_pipeline_spec",
     "build_run_record_spec",
+    "register_paper_ingestion_pipeline",
     "register_proposal_pipeline",
     "register_run_record_spec",
     "register_smai_specs",

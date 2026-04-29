@@ -57,11 +57,14 @@ from smai_orchestrator import (
     ComparisonGroupRecord,
     EntryRecord,
     InstantiatedPlugins,
+    PaperFetcher,
+    PaperRecord,
     PipelineSpec,
     PluginOverrides,
     ProposalRecord,
     RuntimeConfig,
     instantiate_plugins,
+    register_paper_ingestion_pipeline,
     register_proposal_pipeline,
     register_run_record_spec,
     register_smai_specs,
@@ -143,6 +146,37 @@ class ProposalStateError(RuntimeError):
         super().__init__(
             f"proposal {proposal_id!r} is in state {current_state!r}; "
             f"{attempted} requires state 'designed'"
+        )
+
+
+class PaperNotFoundError(LookupError):
+    """Raised by :class:`PapersService` when an arxiv id is unknown.
+
+    Carries :attr:`arxiv_id` for the CLI surface. Mirrors
+    :class:`ProposalNotFoundError`.
+    """
+
+    def __init__(self, arxiv_id: str) -> None:
+        self.arxiv_id = arxiv_id
+        super().__init__(f"no paper with arxiv id {arxiv_id!r} found in MetadataStore")
+
+
+class PaperStateError(RuntimeError):
+    """Raised when a paper-state operation is illegal.
+
+    E.g. ``promote_partial`` on a paper not in the ``partial`` resting
+    state, or ``submit`` on a paper that already exists in a non-
+    terminal state. Mirrors :class:`ProposalStateError`.
+    """
+
+    def __init__(self, arxiv_id: str, current_state: str, attempted: str, expected: str) -> None:
+        self.arxiv_id = arxiv_id
+        self.current_state = current_state
+        self.attempted = attempted
+        self.expected = expected
+        super().__init__(
+            f"paper {arxiv_id!r} is in state {current_state!r}; "
+            f"{attempted} requires state {expected!r}"
         )
 
 
@@ -461,6 +495,141 @@ class ProposalsService:
         )
 
 
+# === PapersService ==========================================================
+
+
+@dataclass(frozen=True)
+class PaperSubmission:
+    """Immutable bundle returned by :meth:`PapersService.submit`.
+
+    Per `09-cli.md` §1 / DEC-032: ``ingest`` is the v2 paper-ingestion
+    verb. Submission is synchronous in the API surface — the
+    :class:`PaperRecord` exists in :class:`MetadataStore` after the
+    call returns; the worker's next cycle picks the paper up via
+    ``get_ready_for_paper_fetch`` and drives the ingestion pipeline.
+
+    For partial-promotion submissions the returned ``state`` reflects
+    the post-promotion state (``submitted``); the ``promoted`` flag
+    indicates whether the call promoted an existing partial vs.
+    creating a new submission.
+    """
+
+    arxiv_id: str
+    state: str
+    promoted: bool
+
+
+class PapersService:
+    """Verb-to-service surface for ``smai ingest`` (`09` §1.2 / DEC-032).
+
+    Mirrors :class:`ProposalsService`'s shape. Three operations:
+
+    * :meth:`submit` — create a :class:`PaperRecord` in ``submitted``
+      (the default ``smai ingest <arxiv-id>`` flow).
+    * :meth:`get` — read a :class:`PaperRecord` (raises if missing).
+    * :meth:`promote_partial` — synchronous transition of a paper from
+      ``partial`` to ``submitted`` (the ``smai ingest --promote-partial
+      <arxiv-id>`` flow).
+
+    Per `08-novel-technique-pipeline.md` §5.7 / `07-plugin-interfaces.md`
+    §5.6.5 docstring: promotion is a synchronous user-driven write
+    through :meth:`MetadataStore.transition_paper_state`. The pipeline-
+    spec does not declare an engine-driven ``partial → submitted``
+    edge; the synchronous transition + the next cycle's ``submitted``
+    discovery is the canonical promotion shape (see the paper-
+    ingestion spec module's "spec ambiguities resolved" note).
+    """
+
+    def __init__(self, *, plugins: InstantiatedPlugins) -> None:
+        self._plugins = plugins
+
+    async def submit(
+        self,
+        *,
+        arxiv_id: str,
+        title: str | None = None,
+    ) -> PaperSubmission:
+        """Create a :class:`PaperRecord` in ``submitted``, OR promote an
+        existing ``partial`` to ``submitted``, OR no-op on an already-
+        in-flight or terminal paper.
+
+        Per `08` §5.7 line 432-437:
+
+        * Paper doesn't exist: create entity in ``submitted``, dispatch
+          the pipeline.
+        * Paper exists with status ``partial``: transition to
+          ``submitted`` synchronously; pipeline runs (fetch step
+          short-circuits via ``content_already_extracted`` per `08`
+          §5.2 edge 1).
+        * Paper exists in a terminal state (``registered`` / ``rejected``
+          / ``failed``): return existing paper.
+        * Paper exists and is in progress: return existing paper with
+          current status.
+
+        Returns a :class:`PaperSubmission` recording the post-call
+        state and whether the call promoted an existing partial.
+        """
+        existing = await self._plugins.metadata_store.get_paper(arxiv_id)
+        if existing is None:
+            now = datetime.now(UTC)
+            record = PaperRecord(
+                arxiv_id=arxiv_id,
+                title=title,
+                state="submitted",
+                created_at=now,
+                updated_at=now,
+            )
+            await self._plugins.metadata_store.create_paper(record)
+            return PaperSubmission(
+                arxiv_id=arxiv_id,
+                state=record.state,
+                promoted=False,
+            )
+        if existing.state == "partial":
+            promoted = await self._plugins.metadata_store.transition_paper_state(
+                arxiv_id,
+                existing.version,
+                "submitted",
+            )
+            return PaperSubmission(
+                arxiv_id=arxiv_id,
+                state=promoted.state,
+                promoted=True,
+            )
+        # Terminal or in-progress — return existing snapshot. The CLI
+        # surface formats the response so the user can see "already
+        # ingested at registered" or "in flight at planning".
+        return PaperSubmission(
+            arxiv_id=arxiv_id,
+            state=existing.state,
+            promoted=False,
+        )
+
+    async def get(self, arxiv_id: str) -> PaperRecord:
+        """Read the :class:`PaperRecord` (raises :class:`PaperNotFoundError`
+        if missing)."""
+        record = await self._plugins.metadata_store.get_paper(arxiv_id)
+        if record is None:
+            raise PaperNotFoundError(arxiv_id)
+        return record
+
+    async def promote_partial(self, arxiv_id: str) -> PaperRecord:
+        """Promote a partial paper to ``submitted``.
+
+        Per `08` §5.7 / `07` §5.6.5: synchronous user-driven write
+        through :meth:`MetadataStore.transition_paper_state`. Raises
+        :class:`PaperStateError` if the paper is not in ``partial``.
+        """
+        record = await self.get(arxiv_id)
+        if record.state != "partial":
+            raise PaperStateError(arxiv_id, record.state, "promote_partial", "partial")
+        return await self._plugins.metadata_store.transition_paper_state(
+            arxiv_id,
+            record.version,
+            "submitted",
+        )
+
+
 # === Persistence helpers (used by ExperimentsService.submit_text) ===========
 
 
@@ -606,6 +775,7 @@ class Runtime:
         env: Mapping[str, str] | None = None,
         runtime_image: str = "smai-runtime:dev",
         run_worker: bool = True,
+        paper_fetcher: PaperFetcher | None = None,
     ) -> AsyncGenerator[Runtime, None]:
         """Boot the in-band Runtime; yield a configured instance.
 
@@ -701,20 +871,45 @@ class Runtime:
                 # via the same flag.
                 require_human_approval=True,
             )
+            # Register the paper-ingestion pipeline-spec (per Task 3.E2
+            # / DEC-032 — the supporting utility per the
+            # ``08-novel-technique-pipeline.md`` §5 framing). Reuses the
+            # same per-role :class:`LlmProvider` map; the screener,
+            # planner (paper-ingestion variant), and enricher each
+            # receive their own role-bound provider. ``paper_fetcher``
+            # defaults to :class:`ArxivLatexFetcher` (production); test
+            # callers inject a fake fetcher that returns canned content
+            # to keep the fetch-stage offline.
+            llm_for_screener = plugins.llm_providers.get("screener", llm_for_planner)
+            llm_for_enricher = plugins.llm_providers.get("enricher", llm_for_planner)
+            paper_spec = register_paper_ingestion_pipeline(
+                workspace_root=workspace_root,
+                llm_for_screener=llm_for_screener,
+                llm_for_planner=llm_for_planner,
+                llm_for_enricher=llm_for_enricher,
+                fetcher=paper_fetcher,
+            )
             # Drive specs in this order each cycle:
             #   1. proposal spec — advance proposals through designing
             #      / designed / registered (creates new CGs in draft)
-            #   2. entry spec — advance per-entry implementation phase-1
-            #   3. cg spec — phase-1 (harness) + phase-2/3 (gate trio,
+            #   2. paper spec — advance papers through fetching /
+            #      screening / planning / registered (writes
+            #      ``TechniqueRef``s to MetadataStore; CGs are NOT
+            #      created from this spec per DEC-032)
+            #   3. entry spec — advance per-entry implementation phase-1
+            #   4. cg spec — phase-1 (harness) + phase-2/3 (gate trio,
             #      runs creation, evaluation dispatch)
-            #   4. run spec — drive newly-pending runs to ``submitted``
+            #   5. run spec — drive newly-pending runs to ``submitted``
             #      and phase-1-poll already-in-flight runs to terminal
             # so within one cycle a proposal that lands in ``registered``
             # has its CGs created before the next cycle reads them via
             # the CG-execution spec's ``draft → implementing`` gate.
+            # Paper ingestion is independent of the CG-spec lifecycle —
+            # it produces ``TechniqueRef``s consumed by future proposal-
+            # pipeline planner sessions, not CGs.
             state = _RuntimeState(
                 plugins=plugins,
-                specs=[proposal_spec, entry_spec, cg_spec, run_spec],
+                specs=[proposal_spec, paper_spec, entry_spec, cg_spec, run_spec],
                 config=config,
                 workspace_root=workspace_root,
             )
@@ -745,6 +940,7 @@ class Runtime:
         self._experiments = ExperimentsService(plugins=state.plugins)
         self._status = StatusService(plugins=state.plugins)
         self._proposals = ProposalsService(plugins=state.plugins)
+        self._papers = PapersService(plugins=state.plugins)
 
     @property
     def experiments(self) -> ExperimentsService:
@@ -757,6 +953,10 @@ class Runtime:
     @property
     def proposals(self) -> ProposalsService:
         return self._proposals
+
+    @property
+    def papers(self) -> PapersService:
+        return self._papers
 
     @property
     def workspace_root(self) -> Path:
@@ -877,6 +1077,10 @@ __all__ = [
     "ExperimentsService",
     "HARNESS_CONTRACT_KEY_TEMPLATE",
     "PROPOSAL_TECHNIQUE_DESCRIPTION_KEY_TEMPLATE",
+    "PaperNotFoundError",
+    "PaperStateError",
+    "PaperSubmission",
+    "PapersService",
     "ProposalNotFoundError",
     "ProposalStateError",
     "ProposalSubmission",
