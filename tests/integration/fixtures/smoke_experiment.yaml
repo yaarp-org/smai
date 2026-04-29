@@ -1,0 +1,62 @@
+# Task 2.D3 / M2 smoke-test experiment.
+#
+# Minimal additive single-factor experiment (cutout vs no augmentation,
+# CIFAR-10) sized so the canned end-to-end test runs in under a second
+# and exercises every CG-execution happy-path state transition. Picked
+# additive (per `03-state-machine.md` §3.4) to side-step Task 2.A2's
+# substitutive-baseline filter gap (carry-forward from 2.C4); chose
+# `seed_count_required: 1` to match the runs-dispatch default seeds=(0,)
+# in `register_smai_specs(...)` (the YAML's `seeds` field is methodology
+# metadata, not the runs-dispatch config).
+kind: experiment
+experiment:
+  id: cg_smoke
+  hypothesis: |
+    Smoke-test stub for the M2 gate. The test asserts state-graph
+    traversal + EvaluationResult artifact presence; verdict semantics
+    are out of scope for the smoke test itself.
+  factor_model_id: null
+
+  factors:
+    - name: cutout_augmentation
+      type: additive
+      description: |
+        Cutout regularization applied to training images.
+
+  controlled_conditions:
+    dataset:
+      name: cifar10
+      split: standard
+    architecture:
+      name: resnet50
+    optimization:
+      optimizer: sgd
+      lr: 0.1
+    seeds: [0]
+
+  entries:
+    - id: entry_baseline
+      is_baseline: true
+      level:
+        factor: cutout_augmentation
+        name: absent
+        technique_id: null
+
+    - id: entry_cutout
+      is_baseline: false
+      level:
+        factor: cutout_augmentation
+        name: present
+        technique_id: tech_cutout
+
+  validation:
+    metric:
+      kind: atomic
+      ref: accuracy
+    direction: higher_is_better
+    aggregation:
+      method: mean
+    comparison:
+      rule: compare_to_baseline
+      threshold: 0.01
+    seed_count_required: 1
