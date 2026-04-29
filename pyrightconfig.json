@@ -62,6 +62,21 @@
         "plugins/smai-compute-localgpu/src",
         "packages/smai-core/src"
       ]
+    },
+    {
+      "root": "packages/smai-cli",
+      "reportMissingImports": "error",
+      "extraPaths": [
+        "packages/smai-cli/src",
+        "packages/smai-core/src",
+        "packages/smai-orchestrator/src",
+        "packages/smai-agents/src",
+        "packages/smai-runtime/src",
+        "plugins/smai-llm-bedrock/src",
+        "plugins/smai-store-sqlite/src",
+        "plugins/smai-artifacts-localfs/src",
+        "plugins/smai-compute-localgpu/src"
+      ]
     }
   ],
   "typeCheckingMode": "standard",
@@ -69,6 +84,7 @@
     "packages/smai-core/src",
     "packages/smai-orchestrator/src",
     "packages/smai-agents/src",
+    "packages/smai-cli/src",
     "plugins/smai-llm-bedrock/src",
     "plugins/smai-store-sqlite/src",
     "plugins/smai-compute-localgpu/src"

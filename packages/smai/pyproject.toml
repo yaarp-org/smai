@@ -3,7 +3,23 @@ name = "smai"
 version = "0.1.0"
 description = "Umbrella package re-exporting the Tier A programmatic surface."
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "smai-core",
+    "smai-runtime",
+    "smai-agents",
+    "smai-orchestrator",
+    "smai-cli",
+]
+
+[project.scripts]
+smai = "smai_cli.main:app"
+
+[tool.uv.sources]
+smai-core = { workspace = true }
+smai-runtime = { workspace = true }
+smai-agents = { workspace = true }
+smai-orchestrator = { workspace = true }
+smai-cli = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]
