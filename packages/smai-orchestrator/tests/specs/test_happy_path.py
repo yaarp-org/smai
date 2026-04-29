@@ -9,12 +9,14 @@ harness artifacts (manifest, validation_results, contracts) and seeding
 the CG directly in ``implementing`` state with a fake harness job
 handle. Phase-1 polling then sees the handle as ``succeeded``, the
 gate trio runs, manifest fanout fires, code review passes, runs
-dispatch executes (FakeCompute returns succeeded immediately), and
-evaluation produces the result + verdict.
+dispatch creates pending :class:`RunRecord`s (per Task 3.E3 lift —
+the CG-execution dispatch no longer submits Compute jobs inline),
+the run sub-spec drives runs to terminal, and evaluation produces
+the result + verdict.
 
-Per the brief, the inline approximation per `03` §3.9 is suitable for
-fast/fake Compute backends; production at scale lifts run lifecycle to
-the run sub-spec (Task 3.E3).
+Per Task 3.E3 the run lifecycle is owned by the :class:`RunRecord`
+sub-spec; this test now drives both specs in parallel, mirroring
+:func:`smai_cli.runtime.Runtime.run_one_cycle`'s multi-spec drive.
 """
 
 from __future__ import annotations
@@ -41,6 +43,7 @@ from smai_orchestrator.specs.cg_execution import (
     EVALUATION_RESULT_KEY_TEMPLATE,
     build_cg_execution_spec,
 )
+from smai_orchestrator.specs.run_record import build_run_record_spec
 from smai_orchestrator.worker.loop import run_worker_cycle
 from smai_store_sqlite import SqliteStore
 
@@ -111,10 +114,10 @@ async def test_full_cg_lifecycle_terminates_in_complete(
     # FakeCompute reports the harness job + every run job as succeeded.
     fake_compute = FakeCompute()
     fake_compute.set_status("harness-h", make_job_status("succeeded"))
-    # Pre-enqueue handles for the runs dispatch (1 entry × 1 seed).
-    # The baseline doesn't have an implementer agent run, but the runs
-    # dispatch handler iterates ALL implemented entries × seeds — both
-    # baseline and treatment get one run each.
+    # Pre-enqueue handles for the run sub-spec's Compute.submit (one
+    # per (entry × seed) — 2 entries × 1 seed). Per Task 3.E3 the
+    # run sub-spec owns Compute.submit; the CG-execution spec just
+    # creates pending RunRecords.
     for i in range(2):
         h = make_job_handle(f"run-h-{i}")
         fake_compute.enqueue_submit_handle(h)
@@ -131,32 +134,36 @@ async def test_full_cg_lifecycle_terminates_in_complete(
     review_llm = StubLlmProvider([make_review_response(overall_pass=True)])
     contextual_llm = StubLlmProvider([make_contextual_response()])
 
-    spec = build_cg_execution_spec(
+    cg_spec = build_cg_execution_spec(
         workspace_root=tmp_path / "workspaces",
         llm_for_code_reviewer=review_llm,  # type: ignore[arg-type]
         llm_for_contextual_evaluator=contextual_llm,  # type: ignore[arg-type]
         seeds=(0,),
     )
+    run_spec = build_run_record_spec()
 
     config = EngineConfig()
 
-    # Drive cycles until the CG reaches ``complete`` (or fails). The
-    # worker cycle's three-phase shape may advance multiple states per
-    # cycle — phase 1 (job_succeeded → implemented + manifest fanout)
-    # then phase 2/3 (implemented → running → evaluating); the next
-    # cycle phase 2/3 (evaluating → complete).
+    # Drive both specs each cycle (mirroring
+    # :meth:`Runtime.run_one_cycle`'s multi-spec drive). Per Task 3.E3
+    # the run sub-spec drives the per-(entry × seed) lifecycle in
+    # parallel with the CG-level lifecycle; cycle ordering is
+    # CG-spec-first, run-spec-second so a CG that lands in ``running``
+    # gets its child runs advanced before the next cycle's CG-level
+    # phase-2 ``running → evaluating`` discovery.
     final_state: str | None = None
     cycles_executed = 0
-    for _ in range(8):  # generous cap; expected ≤4 cycles.
+    for _ in range(8):  # generous cap; expected ≤6 cycles post-lift.
         cycles_executed += 1
-        await run_worker_cycle(
-            spec=spec.engine_spec(),
-            metadata_store=sqlite_store,
-            artifact_store=localfs_store,  # type: ignore[arg-type]
-            compute=fake_compute,  # type: ignore[arg-type]
-            llm_providers=None,
-            config=config,
-        )
+        for spec_ in (cg_spec, run_spec):
+            await run_worker_cycle(
+                spec=spec_.engine_spec(),
+                metadata_store=sqlite_store,
+                artifact_store=localfs_store,  # type: ignore[arg-type]
+                compute=fake_compute,  # type: ignore[arg-type]
+                llm_providers=None,
+                config=config,
+            )
         cg_now = await sqlite_store.get_cg(cg_id)
         assert cg_now is not None
         if cg_now.state in {

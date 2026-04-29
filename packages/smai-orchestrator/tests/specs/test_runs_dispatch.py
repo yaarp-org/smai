@@ -1,23 +1,22 @@
-"""Inline-approximation runs dispatch — `03` §3.9.
+"""CG-execution runs dispatch — peer-spec coordination per `03` §3.9.
 
-Per the Phase-2 inline approximation (Task 2.C4 brief): the
-``running`` state's on-entry dispatch synchronously creates
-:class:`RunRecord` rows per ``(entry × seed)`` pair, submits Compute
-jobs, polls :meth:`Compute.status` until terminal, and updates the
-RunRecord state with the metrics-artifact key. The brief defers the
-full :class:`RunRecord` sub-spec to Task 3.E3.
+Per Task 3.E3 / DEC-034 #3 the ``running`` state's on-entry dispatch
+no longer submits Compute jobs or polls inline — it creates one
+:class:`RunRecord` per ``(entry × seed)`` pair in ``pending`` state and
+returns. The :class:`RunRecord` sub-spec (in :mod:`.run_record`) drives
+each run to terminal via the engine's standard write-first dispatch +
+phase-1 polling mechanics; see :mod:`.test_run_record_spec` for the
+sub-spec's tests.
 
-These tests verify the dispatch handler creates the right RunRecord
-shape and progresses the run state correctly when Compute reports
-``succeeded`` (the smoke-test happy path).
+These tests verify the post-lift CG-level dispatch handler creates the
+right RunRecord shape per ``(entry × seed)`` and lands them in
+``pending``.
 """
 
 from __future__ import annotations
 
 from _helpers import (  # type: ignore[import-not-found]
     FakeCompute,
-    make_job_handle,
-    make_job_status,
 )
 from _specs_fakes import (  # type: ignore[import-not-found]
     make_cg,
@@ -30,13 +29,14 @@ from smai_orchestrator.specs.cg_execution import _make_dispatch_runs
 from smai_store_sqlite import SqliteStore
 
 
-async def test_runs_dispatch_creates_runrecord_per_entry_seed(
+async def test_runs_dispatch_creates_pending_runrecord_per_entry_seed(
     sqlite_store: SqliteStore,
     localfs_store: LocalFsStore,
 ) -> None:
     """For each ``(entry × seed)`` pair where the entry is
-    ``implemented``, the dispatch creates a :class:`RunRecord` and
-    submits a Compute job."""
+    ``implemented``, the dispatch creates one :class:`RunRecord` in
+    ``pending`` state. The run sub-spec drives each from there.
+    """
     cg_id = "cg-runs"
     cg = make_cg(cg_id=cg_id, state="running")
     await sqlite_store.create_cg(cg)
@@ -45,14 +45,9 @@ async def test_runs_dispatch_creates_runrecord_per_entry_seed(
     await sqlite_store.create_entry(entry_a)
     await sqlite_store.create_entry(entry_b)
 
-    fake_compute = FakeCompute()
-    # Two entries × one seed = 2 submits, all succeed immediately.
-    for i in range(2):
-        h = make_job_handle(f"run-h-{i}")
-        fake_compute.enqueue_submit_handle(h)
-        fake_compute.set_status(h.handle, make_job_status("succeeded"))
+    fake_compute = FakeCompute()  # never invoked under the lifted dispatch
 
-    handler = _make_dispatch_runs(seeds=(0,))
+    handler = _make_dispatch_runs(seeds=(0, 1))
     ctx = DispatchContext(
         entity_kind="cg",
         entity_id=cg_id,
@@ -68,25 +63,33 @@ async def test_runs_dispatch_creates_runrecord_per_entry_seed(
     outcome = await handler(ctx)
     assert outcome.error is None
 
-    # Two RunRecords created, both terminal-succeeded.
+    # Two entries × two seeds = 4 RunRecords, all in pending.
     page_a = await sqlite_store.list_runs_for_entry("entry-a", limit=10)
     page_b = await sqlite_store.list_runs_for_entry("entry-b", limit=10)
-    assert len(page_a.items) == 1
-    assert len(page_b.items) == 1
-    for run in (page_a.items[0], page_b.items[0]):
-        assert run.state == "succeeded"
-        assert run.raw_metrics_artifact_key is not None
+    assert len(page_a.items) == 2
+    assert len(page_b.items) == 2
+    for run in (*page_a.items, *page_b.items):
+        assert run.state == "pending"
         assert run.cg_id == cg_id
-        assert run.seed == 0
+        assert run.compute_job_handle is None
+        assert run.raw_metrics_artifact_key is None
+    seeds_a = sorted(r.seed for r in page_a.items)
+    seeds_b = sorted(r.seed for r in page_b.items)
+    assert seeds_a == [0, 1]
+    assert seeds_b == [0, 1]
+
+    # No Compute submits happened — the run sub-spec owns Compute.submit.
+    assert fake_compute.submit_calls == []
 
 
-async def test_runs_dispatch_routes_failed_jobs_to_failed_state(
+async def test_runs_dispatch_does_not_call_compute(
     sqlite_store: SqliteStore,
     localfs_store: LocalFsStore,
 ) -> None:
-    """When Compute reports ``failed``, the run lands in ``failed``
-    state with ``failure_reason`` populated."""
-    cg_id = "cg-runs-fail"
+    """Even with one entry × one seed, the CG-level dispatch never
+    touches :class:`Compute`. Compute work belongs to the run sub-spec.
+    """
+    cg_id = "cg-no-compute"
     cg = make_cg(cg_id=cg_id, state="running")
     await sqlite_store.create_cg(cg)
     await sqlite_store.create_entry(
@@ -94,9 +97,6 @@ async def test_runs_dispatch_routes_failed_jobs_to_failed_state(
     )
 
     fake_compute = FakeCompute()
-    h = make_job_handle("run-h-fail")
-    fake_compute.enqueue_submit_handle(h)
-    fake_compute.set_status(h.handle, make_job_status("failed"))
 
     handler = _make_dispatch_runs(seeds=(0,))
     ctx = DispatchContext(
@@ -113,11 +113,12 @@ async def test_runs_dispatch_routes_failed_jobs_to_failed_state(
     )
     outcome = await handler(ctx)
     assert outcome.error is None
+    assert fake_compute.submit_calls == []
+    assert fake_compute.cancel_calls == []
 
     page = await sqlite_store.list_runs_for_entry("entry-x", limit=10)
-    run = page.items[0]
-    assert run.state == "failed"
-    assert run.failure_reason is not None
+    assert len(page.items) == 1
+    assert page.items[0].state == "pending"
 
 
 async def test_runs_dispatch_returns_error_when_no_implemented_entries(

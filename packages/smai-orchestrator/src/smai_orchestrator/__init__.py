@@ -47,8 +47,11 @@ from smai_orchestrator.runtime import (
 from smai_orchestrator.specs import (
     CG_ENTRIES_SPEC_NAME,
     CG_EXECUTION_SPEC_NAME,
+    RUN_RECORD_SPEC_NAME,
     build_cg_entries_spec,
     build_cg_execution_spec,
+    build_run_record_spec,
+    register_run_record_spec,
     register_smai_specs,
 )
 
@@ -73,17 +76,20 @@ __all__ = [
     "PluginSelection",
     "ProposalRecord",
     "ProposalState",
+    "RUN_RECORD_SPEC_NAME",
     "RunRecord",
     "RunState",
     "RuntimeConfig",
     "SpecNotRegisteredError",
     "build_cg_entries_spec",
     "build_cg_execution_spec",
+    "build_run_record_spec",
     "get_pipeline_spec",
     "instantiate_plugins",
     "list_discovered_plugins",
     "list_registered_specs",
     "register_pipeline_spec",
+    "register_run_record_spec",
     "register_smai_specs",
     "reset_registry",
 ]

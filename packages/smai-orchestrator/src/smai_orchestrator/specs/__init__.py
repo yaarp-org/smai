@@ -54,6 +54,11 @@ from smai_orchestrator.specs.cg_execution import (
     VALIDATION_CONFIG_KEY_TEMPLATE,
     build_cg_execution_spec,
 )
+from smai_orchestrator.specs.run_record import (
+    RUN_RECORD_SPEC_NAME,
+    build_run_record_spec,
+    register_run_record_spec,
+)
 
 
 def register_smai_specs(
@@ -118,11 +123,14 @@ __all__ = [
     "POOL_RUNS",
     "RUN_IN_PROGRESS_STATES",
     "RUN_METRICS_KEY_TEMPLATE",
+    "RUN_RECORD_SPEC_NAME",
     "RUN_TERMINAL_STATES",
     "TECHNIQUE_CONTRACT_KEY_TEMPLATE",
     "TECHNIQUE_VALIDATION_KEY_TEMPLATE",
     "VALIDATION_CONFIG_KEY_TEMPLATE",
     "build_cg_entries_spec",
     "build_cg_execution_spec",
+    "build_run_record_spec",
+    "register_run_record_spec",
     "register_smai_specs",
 ]

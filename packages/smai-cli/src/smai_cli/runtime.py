@@ -60,6 +60,7 @@ from smai_orchestrator import (
     PluginOverrides,
     RuntimeConfig,
     instantiate_plugins,
+    register_run_record_spec,
     register_smai_specs,
     reset_registry,
 )
@@ -499,14 +500,24 @@ class Runtime:
                 llm_for_contextual_evaluator=llm_for_contextual_evaluator,
                 runtime_image=runtime_image,
             )
+            # Register the :class:`RunRecord` sub-state-machine spec
+            # alongside the Phase-2 specs (per Task 3.E3 / DEC-034 #3).
+            # The supervisor merges this into :func:`register_smai_specs`
+            # at commit time once the parallel Task 3.E1 (proposal
+            # pipeline-spec) lands too — keeping the registration
+            # explicit here for now avoids a multi-task signature change
+            # collision.
+            run_spec = register_run_record_spec(runtime_image=runtime_image)
             # Drive the per-entry spec before the CG-level spec each
             # cycle so phase-1 advancement of in-flight entries lands
             # before the CG spec re-evaluates its all-children-terminal
-            # gate. Both specs share the same shutdown_event in the
+            # gate. The run sub-spec drives newly-pending runs to
+            # ``submitted`` and phase-1-polls already-in-flight runs to
+            # terminal. All specs share the same shutdown_event in the
             # background-worker path (`_run_worker_until_shutdown`).
             state = _RuntimeState(
                 plugins=plugins,
-                specs=[entry_spec, cg_spec],
+                specs=[entry_spec, cg_spec, run_spec],
                 config=config,
                 workspace_root=workspace_root,
             )

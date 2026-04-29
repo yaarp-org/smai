@@ -46,14 +46,19 @@ disagrees):
   :meth:`MetadataStore.transaction` for atomic per-entry CAS, satisfying
   the "atomically" requirement of DEC-033 #3 within the bounds of the
   current Protocol surface (no batch API).
-* **Run lifecycle (inline approximation):** the runs dispatch handler
-  synchronously creates RunRecords + submits Compute jobs + polls to
-  terminal. Suitable for tests with fast Compute backends (FakeCompute
-  returning ``succeeded`` immediately) and for ``smai dev`` laptop
-  deployments. Production at scale lifts this to the :class:`RunRecord`
-  sub-spec per `03` §3.9 / Task 3.E3 — at which point this handler
-  reduces to creating RunRecords + returning, leaving the sub-spec to
-  drive per-(entry × seed) lifecycle.
+* **Run lifecycle (production peer-spec coordination — Task 3.E3):**
+  the ``running`` on-entry dispatch handler creates one
+  :class:`RunRecord` per ``(entry × seed)`` tuple in ``pending`` state
+  and returns. The :class:`RunRecord` sub-state-machine pipeline-spec
+  (in :mod:`.run_record` per `03` §3.9 / DEC-034 #3) drives each run
+  through ``pending → submitted → {succeeded | failed | inconclusive}``
+  via the engine's standard write-first dispatch + phase-1 polling.
+  Cross-spec coordination is via :meth:`MetadataStore.list_runs_for_entry`
+  — the ``running → evaluating`` gate (`05` §1.3 sibling-read pattern)
+  reads child run records and decides "all runs terminal" without
+  needing a per-job-event hook (the engine's existing phase-2
+  ``get_ready_to_evaluate`` discovery picks up CGs whose runs have
+  all terminated on the next cycle, per `05` §3.2).
 * **``evaluating → complete`` transition:** uses ``dispatch_time``
   edges off ``evaluating`` rather than the spec table's
   ``fires_on=job_succeeded`` (which would require a job handle for
@@ -87,8 +92,6 @@ from smai_core.evaluation._evaluate import RawMetricsShapeError, evaluate
 from smai_core.evaluation.raw_metrics import EntryMetrics, SeedRunOutcome
 from smai_core.plugins import (
     ArtifactNotFound,
-    JobHandle,
-    JobStatus,
     LlmProvider,
 )
 from smai_core.plugins.metadata_store import ConflictError
@@ -158,9 +161,6 @@ ComparisonRule = Literal["compare_to_baseline", "compare_to_target"]
 # Run-lifecycle terminal vs in-progress states per `03` §3.9 / `01` §5.5.
 RUN_TERMINAL_STATES: frozenset[str] = frozenset({"succeeded", "failed", "inconclusive"})
 RUN_IN_PROGRESS_STATES: frozenset[str] = frozenset({"pending", "submitted", "running"})
-
-# Failure-mode states of :class:`Compute.JobStatus` per `07` §7.2.
-_COMPUTE_FAILURE_STATES: frozenset[str] = frozenset({"failed", "cancelled", "timeout"})
 
 
 # === Helpers shared by gates and dispatch handlers ===========================
@@ -734,25 +734,35 @@ def _make_dispatch_runs(
     seeds: Sequence[int] = (0,),
     image: str = "smai-runtime:dev",
 ) -> Callable[[DispatchContext], Awaitable[DispatchOutcome]]:
-    """``running`` on-entry dispatch — inline approximation per `03` §3.9.
+    """``running`` on-entry dispatch — peer-spec coordination per `03` §3.9.
 
-    For each ``(entry × seed)`` pair where the entry is ``implemented``,
-    creates a :class:`RunRecord`, submits a Compute job, polls
-    :meth:`Compute.status` until terminal, and updates the run state
-    accordingly. After all runs are terminal the handler returns; the
-    next worker cycle's phase-2 discovery picks the CG up via
-    :meth:`MetadataStore.get_ready_to_evaluate` and the
-    ``running → evaluating`` ``dispatch_time`` edge fires.
+    Lifted from the Phase-2 inline approximation per Task 3.E3 / DEC-034
+    #3. For each ``(entry × seed)`` pair where the entry is
+    ``implemented``, this handler creates one :class:`RunRecord` in
+    ``pending`` state and returns. The :class:`RunRecord` sub-spec
+    (:mod:`.run_record`) drives each run through
+    ``pending → submitted → {succeeded | failed | inconclusive}`` via
+    the engine's standard write-first dispatch + phase-1 polling — no
+    inline :class:`Compute` submit and no synchronous polling here.
 
-    Production at scale lifts this to the :class:`RunRecord` sub-spec
-    per `03` §3.9 / Task 3.E3.
+    Cross-spec coordination is via the existing sibling-read pattern
+    in the ``running → evaluating`` gate (per `05` §1.3): once every
+    child run reaches a terminal state, the next CG-spec poll cycle's
+    phase-2 ``get_ready_to_evaluate`` discovery picks up the CG and
+    the gate fires.
 
     Args:
         seeds: Seeds to dispatch per entry. v1 default ``(0,)`` keeps
             the smoke-test fast; production deployments override.
-        image: Container image for the runtime experiment. Defaults to
-            ``smai-runtime:dev`` per Task 2.D1.
+        image: Reserved for forward-compatibility — the per-run
+            container image now belongs to the run sub-spec's
+            ``Compute.submit`` dispatch, not this handler. Kept on the
+            signature so :func:`build_cg_execution_spec`'s
+            ``runtime_image`` plumbing continues to flow through; can
+            be removed once a future refactor consolidates the
+            CG-execution and run sub-spec construction.
     """
+    del image  # see docstring — image now flows through the run sub-spec
 
     async def _dispatch(ctx: DispatchContext) -> DispatchOutcome:
         from datetime import UTC, datetime  # noqa: PLC0415
@@ -777,108 +787,9 @@ def _make_dispatch_runs(
                     updated_at=now,
                 )
                 await ctx.metadata_store.create_run(run)
-                metrics_key = RUN_METRICS_KEY_TEMPLATE.format(
-                    cg_id=cg_id, entry_id=entry.id, seed=seed
-                )
-                command = [
-                    "python",
-                    "-m",
-                    "smai_runtime.runner",
-                    "--cg-id",
-                    cg_id,
-                    "--entry-id",
-                    entry.id,
-                    "--seed",
-                    str(seed),
-                    "--metrics-key",
-                    metrics_key,
-                ]
-                env = {
-                    "SMAI_CG_ID": cg_id,
-                    "SMAI_ENTRY_ID": entry.id,
-                    "SMAI_SEED": str(seed),
-                    "SMAI_METRICS_KEY": metrics_key,
-                }
-                try:
-                    handle = await ctx.compute.submit(
-                        image=image,
-                        command=command,
-                        env=env,
-                        gpu=True,
-                    )
-                except Exception as exc:  # noqa: BLE001 — runtime failure routes to RunRecord.failed
-                    await ctx.metadata_store.transition_run_state(
-                        run.id,
-                        run.version,
-                        "failed",
-                        failure_reason=f"{type(exc).__name__}: {exc}",
-                    )
-                    continue
-                run = await ctx.metadata_store.transition_run_state(
-                    run.id,
-                    run.version,
-                    "submitted",
-                    compute_job_handle=handle.model_dump(mode="python"),
-                )
-
-                # Synchronous poll — see module docstring's inline-
-                # approximation note.
-                terminal_run_state = await _poll_compute_until_terminal(
-                    ctx=ctx,
-                    handle=handle,
-                )
-                # Walk through the in-progress run state before stamping
-                # terminal so the audit trail mirrors the run sub-spec
-                # shape per `03` §3.9 (`pending → submitted → running →
-                # succeeded | failed | inconclusive`).
-                run = await ctx.metadata_store.transition_run_state(run.id, run.version, "running")
-                fields: dict[str, object] = {}
-                if terminal_run_state == "succeeded":
-                    fields["raw_metrics_artifact_key"] = metrics_key
-                elif terminal_run_state == "failed":
-                    fields["failure_reason"] = "compute job did not succeed"
-                await ctx.metadata_store.transition_run_state(
-                    run.id,
-                    run.version,
-                    cast(Any, terminal_run_state),
-                    **fields,
-                )
         return DispatchOutcome()
 
     return _dispatch
-
-
-async def _poll_compute_until_terminal(
-    *,
-    ctx: DispatchContext,
-    handle: JobHandle,
-    max_polls: int = 256,
-) -> Literal["succeeded", "failed", "inconclusive"]:
-    """Synchronous poll loop for the inline-approximation runs dispatch.
-
-    Returns the run-level terminal state. Maps Compute's terminal
-    JobStatus.state values:
-
-    * ``"succeeded"`` → run-level ``"succeeded"``.
-    * ``"failed"`` / ``"cancelled"`` / ``"timeout"`` → run-level ``"failed"``.
-
-    The ``inconclusive`` run-level state (per `01` §5.5) is not exercised
-    by the inline approximation; the full :class:`RunRecord` sub-spec
-    inspects metrics to route there appropriately.
-    """
-    import asyncio  # noqa: PLC0415
-
-    for _ in range(max_polls):
-        status: JobStatus = await ctx.compute.status(handle)
-        if status.state == "succeeded":
-            return "succeeded"
-        if status.state in _COMPUTE_FAILURE_STATES:
-            return "failed"
-        # `submitted`/`running` — keep polling. asyncio.sleep(0) yields
-        # to the event loop so tests with immediate-status FakeCompute
-        # don't hit the cap.
-        await asyncio.sleep(0)
-    return "failed"
 
 
 def _make_dispatch_evaluation(
@@ -1066,9 +977,14 @@ async def _build_raw_metrics_for_cg(
     """Aggregate per-run metrics into :class:`RawMetrics` for evaluator input.
 
     Walks every :class:`EntryRecord` of the CG, then every
-    :class:`RunRecord` of the entry. For terminal runs whose
-    ``raw_metrics_artifact_key`` is populated, reads the metrics JSON
-    and runs it through :func:`smai_runtime.build_seed_run_outcome` to
+    :class:`RunRecord` of the entry. For ``succeeded`` runs the
+    metrics-artifact key is derived from ``(cg_id, entry_id, seed)``
+    via :data:`RUN_METRICS_KEY_TEMPLATE` (the run sub-spec doesn't
+    persist :attr:`RunRecord.raw_metrics_artifact_key` per Task 3.E3 —
+    phase-1's CAS path can't pass arbitrary fields from the gate body
+    and §1.3 forbids gates from writing entity state, so the canonical
+    derivation is the source of truth). Reads the metrics JSON and
+    runs it through :func:`smai_runtime.build_seed_run_outcome` to
     project to the :class:`SeedRunOutcome` shape the evaluator expects.
 
     Failed / inconclusive runs are encoded as ``completed=False`` with
@@ -1089,9 +1005,12 @@ async def _build_raw_metrics_for_cg(
         while True:
             page = await ctx.metadata_store.list_runs_for_entry(entry.id, limit=100, cursor=cursor)
             for run in page.items:
-                if run.state == "succeeded" and run.raw_metrics_artifact_key:
+                if run.state == "succeeded":
+                    metrics_key = RUN_METRICS_KEY_TEMPLATE.format(
+                        cg_id=cg_id, entry_id=run.entry_id, seed=run.seed
+                    )
                     try:
-                        body = await ctx.artifact_store.get(run.raw_metrics_artifact_key)
+                        body = await ctx.artifact_store.get(metrics_key)
                         metrics = json.loads(body)
                     except (ArtifactNotFound, ValueError):
                         seed_outcomes[run.seed] = SeedRunOutcome(
