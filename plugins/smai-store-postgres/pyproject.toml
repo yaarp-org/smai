@@ -3,27 +3,26 @@ name = "smai-store-postgres"
 version = "0.1.0"
 description = "MetadataStore plugin: PostgreSQL reference production implementation."
 requires-python = ">=3.11"
-# Per DEC-036 (substrate shared with the SQLite reference) and DEC-030
-# (SQL-shape only). The declarative schema lives in ``smai-store-sqlite``;
-# this plugin imports the same ``MetaData`` / ``Table`` set and swaps
-# the driver to ``asyncpg`` so SQLAlchemy renders dialect-specific SQL
-# at engine-bind time. Alembic deferred to Task 3.H2.
+# Per DEC-036 / Task 3.H2 (substrate shared with the SQLite reference).
+# The declarative schema + Alembic env + record↔row helpers live in
+# ``smai-orchestrator.migrations`` (lifted out of ``smai-store-sqlite``
+# in 3.H2). This plugin imports the same ``MetaData`` / ``Table`` set
+# and swaps the driver to ``asyncpg`` so SQLAlchemy renders
+# dialect-specific SQL at engine-bind time.
 dependencies = [
     "smai-core",
     "smai-orchestrator",
-    "smai-store-sqlite",
     "sqlalchemy>=2.0",
     "asyncpg>=0.28",
     # SQLAlchemy's async layer is implemented via greenlet bridging to
-    # the sync core; declared explicitly the same way ``smai-store-sqlite``
-    # declares it (Python 3.13 doesn't pull it in transitively).
+    # the sync core; declared explicitly because Python 3.13 doesn't
+    # pull it in transitively.
     "greenlet>=3.0",
 ]
 
 [tool.uv.sources]
 smai-core = { workspace = true }
 smai-orchestrator = { workspace = true }
-smai-store-sqlite = { workspace = true }
 
 [project.entry-points."smai.metadata_stores"]
 postgres = "smai_store_postgres:PostgresStore"

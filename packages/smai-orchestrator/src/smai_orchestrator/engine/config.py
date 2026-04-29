@@ -158,5 +158,26 @@ class EngineConfig(BaseModel):
     :class:`EngineConfig`. Ignored when :attr:`supervisor_enabled` is
     ``False``."""
 
+    # ---- Retention sweep (Task 3.H2 / DEC-033 #1, #2) ---------------------
+
+    retention_policies: dict[str, int] = Field(default_factory=dict)
+    """Per-table retention windows in days for ``smai migrate --prune``
+    (DEC-033 #1, #2). Keyed by table name (``transition_log``,
+    ``agent_sessions``, ``run_costs``); value is the maximum age in
+    days. ``0`` disables retention for that table.
+
+    Empty (the default) means "use the conservative defaults shipped
+    in :data:`smai_orchestrator.migrations.runner.DEFAULT_RETENTION_DAYS`":
+    ``transition_log = 90``, ``agent_sessions = 180``,
+    ``run_costs = 365``. Operators override per deployment via this
+    map; see ``MIGRATIONS.md`` next to the migrations package for the
+    full table.
+
+    The prune sweep is **never automatic at boot** — it runs only when
+    ``smai migrate --prune`` is invoked explicitly (`09-cli.md` §1). A
+    table not in :data:`RETENTION_TABLES` is rejected with
+    :class:`ValueError` at sweep time so a misspelled key is surfaced
+    rather than silently skipped."""
+
 
 __all__ = ["EngineConfig", "RetryPolicy"]

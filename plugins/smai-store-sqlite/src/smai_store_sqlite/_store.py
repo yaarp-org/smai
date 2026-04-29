@@ -59,6 +59,7 @@ from smai_orchestrator.entities.tracking import (
     RunRecord,
     RunState,
 )
+from smai_orchestrator.migrations import upgrade_to_head
 from sqlalchemy import (
     Column,
     ColumnElement,
@@ -87,7 +88,6 @@ from smai_store_sqlite._schema import (
     cgs_table,
     entries_table,
     factor_models_table,
-    metadata,
     papers_table,
     proposals_table,
     run_costs_table,
@@ -667,15 +667,17 @@ class SqliteStore:
         self._engine: AsyncEngine = create_async_engine(uri, echo=False, future=True)
 
     async def migrate(self) -> None:
-        """Apply boot-time DDL (idempotent).
+        """Apply boot-time DDL via Alembic upgrade-to-head.
 
-        Per DEC-036: ``metadata.create_all(checkfirst=True)`` —
-        ``CREATE TABLE IF NOT EXISTS`` semantics on both SQLite and
-        Postgres. Production deployments lift this into a versioned
-        Alembic migration in Task 3.H2.
+        Per Task 3.H2 / DEC-036: drives the shared Alembic env at
+        :mod:`smai_orchestrator.migrations` with this plugin's
+        :class:`AsyncEngine`. Idempotent — re-running against a
+        head-stamped database is a no-op (Alembic consults
+        ``alembic_version``). The initial revision uses
+        ``checkfirst=True`` so a one-time upgrade against a pre-3.H2
+        ``create_all``-only database does not double-create.
         """
-        async with self._engine.begin() as conn:
-            await conn.run_sync(metadata.create_all, checkfirst=True)
+        await upgrade_to_head(self._engine)
 
     async def dispose(self) -> None:
         """Tear down the engine — for test cleanup."""

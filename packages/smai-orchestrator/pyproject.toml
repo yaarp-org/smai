@@ -13,6 +13,14 @@ dependencies = [
     # arxiv client through the dispatch-handler factory to keep the
     # default test path offline.
     "arxiv>=2.1",
+    # Per Task 3.H2 (DEC-036's Alembic deferral): the shared
+    # ``smai_orchestrator.migrations`` package owns the SQLAlchemy
+    # 2.0 schema + the Alembic env both reference :class:`MetadataStore`
+    # plugins (smai-store-sqlite, smai-store-postgres) drive at boot.
+    # The plugin packages do not declare Alembic themselves — they
+    # import the runner via smai-orchestrator and the dep flows here.
+    "sqlalchemy>=2.0",
+    "alembic>=1.13",
 ]
 
 [tool.uv.sources]
@@ -24,3 +32,11 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/smai_orchestrator"]
+# Per Task 3.H2: the migrations subpackage ships ``alembic.ini`` and
+# ``script.py.mako`` alongside the .py files. Hatchling normally
+# includes them via the default ``include`` rule, but we list them
+# explicitly so a future tightening of the default doesn't drop them.
+[tool.hatch.build.targets.wheel.force-include]
+"src/smai_orchestrator/migrations/alembic.ini" = "smai_orchestrator/migrations/alembic.ini"
+"src/smai_orchestrator/migrations/script.py.mako" = "smai_orchestrator/migrations/script.py.mako"
+"src/smai_orchestrator/migrations/MIGRATIONS.md" = "smai_orchestrator/migrations/MIGRATIONS.md"

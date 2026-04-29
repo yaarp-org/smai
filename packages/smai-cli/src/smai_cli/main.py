@@ -873,6 +873,183 @@ def smai_ingest(
     asyncio.run(_run())
 
 
+# === Verb 12: migrate ========================================================
+
+
+def _resolve_metadata_store_uri(runtime_config: Any) -> str:
+    """Pick the URI the migrate verbs (`smai migrate`, `--check`,
+    `--dry-run`, `--prune`) operate on.
+
+    Resolution order:
+
+    1. ``runtime_config.plugins.metadata_store_config["uri"]`` if set
+       (the layered config-pipeline result, including ``smai dev``'s
+       sqlite-at-``~/.smai/state.db`` default).
+    2. Plugin-specific fallbacks (``sqlite+aiosqlite:///:memory:`` for
+       the sqlite plugin's empty-config default; the dockerized
+       compose URL for the postgres plugin).
+    3. Otherwise: error explicitly so an unknown plugin doesn't
+       silently fall through.
+    """
+    selection = runtime_config.plugins
+    cfg: dict[str, Any] = selection.metadata_store_config
+    uri = cfg.get("uri")
+    if isinstance(uri, str) and uri:
+        return uri
+    plugin_name = selection.metadata_store
+    if plugin_name == "sqlite":
+        return "sqlite+aiosqlite:///:memory:"
+    if plugin_name == "postgres":
+        return "postgresql+asyncpg://smai:smai@localhost:5433/smai"
+    raise ValueError(
+        f"smai migrate: cannot determine database URI for plugin "
+        f"{plugin_name!r}. Set plugins.metadata_store_config.uri in your "
+        "smai.yaml, or pick a plugin with a known default."
+    )
+
+
+@app.command("migrate")
+def smai_migrate(
+    check: Annotated[
+        bool,
+        typer.Option(
+            "--check",
+            help=(
+                "Exit 0 if the database schema is at head, 1 otherwise. "
+                "Useful as a `smai start` pre-flight per `09-cli.md` §6 — "
+                "the worker refuses to boot against a stale schema."
+            ),
+        ),
+    ] = False,
+    dry_run: Annotated[
+        bool,
+        typer.Option(
+            "--dry-run",
+            help=(
+                "Render the SQL Alembic would emit without executing it "
+                "(Alembic's `--sql` mode). Useful for review before a "
+                "production migration."
+            ),
+        ),
+    ] = False,
+    prune: Annotated[
+        bool,
+        typer.Option(
+            "--prune",
+            help=(
+                "Run the retention sweep (DEC-033 #1, #2). Deletes rows "
+                "older than the per-table window from "
+                "`engine.retention_policies` (defaults: transition_log = "
+                "90d, agent_sessions = 180d, run_costs = 365d). "
+                "Mutually exclusive with --check / --dry-run."
+            ),
+        ),
+    ] = False,
+    config: Annotated[
+        Path | None,
+        typer.Option("--config", "-c", help="Path to a smai.yaml."),
+    ] = None,
+) -> None:
+    """Run schema migrations against the configured ``MetadataStore`` (`09` §1).
+
+    Default (no flags): equivalent to ``alembic upgrade head``.
+    Idempotent — safe to run repeatedly.
+
+    Per Task 3.H2 / DEC-036: drives the shared Alembic env at
+    :mod:`smai_orchestrator.migrations`. The same code path runs at
+    `smai dev` boot via the plugin's ``migrate()`` method.
+
+    Rollback policy: v2 does not implement ``alembic downgrade``;
+    operators recover from a bad migration by restoring from backup.
+    See ``MIGRATIONS.md`` next to the migrations package for the
+    operator runbook.
+    """
+    exclusive_count = sum([check, dry_run, prune])
+    if exclusive_count > 1:
+        _err("smai migrate: --check, --dry-run, and --prune are mutually exclusive.")
+
+    # Unlike ``smai dev`` / ``smai run`` we DO NOT apply
+    # :func:`_apply_dev_filesystem_defaults` here — those defaults are
+    # passed as ``flag_overrides`` (highest layering precedence) and
+    # would shadow a user's explicit ``metadata_store_config.uri``
+    # from smai.yaml. Production callers of ``smai migrate`` always
+    # specify a URI in their config; the empty-override path
+    # falls back to plugin defaults via :func:`_resolve_metadata_store_uri`.
+    try:
+        runtime_config = load_runtime_config(
+            config_path=config,
+            defaults=dev_defaults(),
+        )
+    except (ConfigFileError, ConfigValidationError) as exc:
+        _err(str(exc))
+
+    uri = _resolve_metadata_store_uri(runtime_config)
+
+    # Lazy-import the migrations module — keeps `smai --help` fast and
+    # keeps the heavy SQLAlchemy import off the cold-start path of
+    # other verbs.
+    from smai_orchestrator.migrations import (  # noqa: PLC0415
+        get_current_revision,
+        get_head_revision,
+        prune_retention_tables,
+        render_offline_sql,
+        upgrade_to_head,
+    )
+    from sqlalchemy.ext.asyncio import create_async_engine  # noqa: PLC0415
+
+    if dry_run:
+        sql = render_offline_sql(uri)
+        typer.echo(sql, nl=False)
+        return
+
+    async def _run_check() -> None:
+        engine = create_async_engine(uri)
+        try:
+            current = await get_current_revision(engine)
+            head = get_head_revision()
+            if current == head:
+                typer.echo(f"smai migrate: schema at head ({head}).")
+                return
+            shown_current = current if current is not None else "<unstamped>"
+            typer.echo(
+                f"smai migrate: schema NOT at head — current={shown_current}, head={head}.",
+                err=True,
+            )
+            raise typer.Exit(code=1)
+        finally:
+            await engine.dispose()
+
+    async def _run_upgrade() -> None:
+        engine = create_async_engine(uri)
+        try:
+            await upgrade_to_head(engine)
+            head = get_head_revision()
+            typer.echo(f"smai migrate: schema upgraded to head ({head}).")
+        finally:
+            await engine.dispose()
+
+    async def _run_prune() -> None:
+        engine = create_async_engine(uri)
+        try:
+            retention = runtime_config.engine.retention_policies
+            deleted = await prune_retention_tables(
+                engine,
+                retention_days=retention if retention else None,
+            )
+            for name in sorted(deleted):
+                typer.echo(f"{name}: deleted {deleted[name]} row(s)")
+        finally:
+            await engine.dispose()
+
+    if check:
+        asyncio.run(_run_check())
+        return
+    if prune:
+        asyncio.run(_run_prune())
+        return
+    asyncio.run(_run_upgrade())
+
+
 # === Verb 7: version =========================================================
 
 

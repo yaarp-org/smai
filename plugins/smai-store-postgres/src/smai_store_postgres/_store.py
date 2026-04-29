@@ -3,13 +3,16 @@
 Per ``designs/smai/07-plugin-interfaces.md`` §5, DEC-029 (Protocol defs in
 smai-core), DEC-030 (SQL-shape only), DEC-035 (cursor pagination, lease
 nonce, caller-resolved pool→states), DEC-036 (SQLAlchemy 2.0 async Core;
-schema shared across plugins; Alembic deferred to Task 3.H2).
+schema shared across plugins; Alembic-driven migrations land in
+Task 3.H2).
 
-The Postgres plugin reuses the declarative schema from
-``smai_store_sqlite._schema`` (per DEC-036's substrate-sharing
-commitment) and the dialect-agnostic Pydantic ↔ row helpers from
-``smai_store_sqlite._serde``. SQLAlchemy renders Postgres-specific SQL
-(``TIMESTAMP WITH TIME ZONE``, ``JSONB``-via-``JSON``, native
+The Postgres plugin imports the declarative schema from
+:mod:`smai_orchestrator.migrations` (per Task 3.H2's schema lift —
+prior to that, the schema lived in ``smai_store_sqlite._schema`` and
+this plugin cross-imported it). Dialect-agnostic Pydantic ↔ row
+helpers come from ``smai_store_sqlite._serde`` (the row-shape is
+substrate-shared per DEC-036). SQLAlchemy renders Postgres-specific
+SQL (``TIMESTAMP WITH TIME ZONE``, ``JSONB``-via-``JSON``, native
 ``RETURNING``, ``ON CONFLICT DO UPDATE``) from the same ``MetaData``
 declaration at engine-bind time.
 
@@ -80,12 +83,11 @@ from smai_orchestrator.entities.tracking import (
     RunState,
 )
 
-# Per DEC-036: the declarative schema is the substrate shared between
-# the SQLite reference and this plugin. Reusing the same ``MetaData``
-# rather than re-declaring keeps the column shapes from drifting across
-# the two stores. SQLAlchemy renders dialect-specific SQL from the
-# single declaration.
-from smai_store_sqlite._schema import (
+# Per DEC-036 / Task 3.H2: the declarative schema is the substrate
+# shared between every :class:`MetadataStore` plugin and lives in
+# ``smai_orchestrator.migrations``. SQLAlchemy renders dialect-specific
+# SQL from the single declaration at engine-bind time.
+from smai_orchestrator.migrations import (
     ENTITY_PK_COLUMN,
     ENTITY_TABLE,
     cgs_table,
@@ -95,8 +97,9 @@ from smai_store_sqlite._schema import (
     proposals_table,
     runs_table,
     techniques_table,
+    upgrade_to_head,
 )
-from smai_store_sqlite._serde import row_to_record
+from smai_orchestrator.migrations.serde import row_to_record
 from sqlalchemy import (
     ColumnElement,
     Select,
@@ -753,19 +756,30 @@ class PostgresStore:
         self._use_advisory_locks: bool = use_advisory_locks
 
     async def migrate(self) -> None:
-        """Apply boot-time DDL (idempotent).
+        """Apply boot-time DDL via Alembic upgrade-to-head.
 
-        Per DEC-036: ``metadata.create_all(checkfirst=True)`` —
-        ``CREATE TABLE IF NOT EXISTS`` semantics. Production deployments
-        graduate this to a versioned Alembic migration in Task 3.H2.
+        Per Task 3.H2 / DEC-036: drives the shared Alembic env at
+        :mod:`smai_orchestrator.migrations` against this plugin's
+        :class:`AsyncEngine`. Idempotent — re-running against a
+        head-stamped database is a no-op (Alembic consults
+        ``alembic_version``). The initial revision uses
+        ``checkfirst=True`` so a one-time upgrade against a pre-3.H2
+        ``create_all``-only database does not double-create.
         """
-        async with self._engine.begin() as conn:
-            await conn.run_sync(metadata.create_all, checkfirst=True)
+        await upgrade_to_head(self._engine)
 
     async def drop_all(self) -> None:
-        """Drop every table — for test cleanup and fixture rebuilds."""
+        """Drop every table — for test cleanup and fixture rebuilds.
+
+        Per Task 3.H2: also drops Alembic's ``alembic_version`` row /
+        table so a subsequent ``migrate()`` call rebuilds the schema
+        from scratch (otherwise the lingering version row makes
+        Alembic skip the ``upgrade head`` pass and leaves the database
+        empty-but-stamped).
+        """
         async with self._engine.begin() as conn:
             await conn.run_sync(metadata.drop_all, checkfirst=True)
+            await conn.execute(text("DROP TABLE IF EXISTS alembic_version"))
 
     async def dispose(self) -> None:
         """Tear down the engine — for test cleanup."""
