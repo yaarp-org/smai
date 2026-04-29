@@ -89,6 +89,19 @@ class EngineConfig(BaseModel):
     #2). C1 runs single-worker and does not acquire leases; Task 2.C2 /
     3.G1 wire this through the worker loop."""
 
+    extend_lease_interval_seconds: int = 60
+    """Heartbeat cadence for long-running inline dispatches (`05` §3.5).
+    The dispatch wrapper spawns a background task that calls
+    :meth:`MetadataStore.extend_lease` every ``extend_lease_interval_seconds``
+    while the dispatch is in flight. Default ``60`` is half of the
+    default :attr:`lease_seconds=120`, matching `05` §3.5's "renew at
+    half the lease window" sketch — one renewal halfway through the
+    window keeps a lease alive across a typical multi-turn agent loop
+    without flooding the store with extends. A dispatch that finishes
+    in under :attr:`extend_lease_interval_seconds` triggers zero
+    extension calls (the heartbeat task is cancelled before its first
+    sleep elapses)."""
+
     retry_policies: dict[str, RetryPolicy] = Field(default_factory=dict)
     """Named retry policies referenced by retry-edge gate rules (`05`
     §6). The spec declares which retry policy each failure edge

@@ -36,6 +36,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from uuid import uuid4
 
 from smai_core.plugins import (
     ArtifactStore,
@@ -101,6 +102,13 @@ class WorkerCycleStats:
     phase3_conflict: int = 0
     phase3_dispatch_failed: int = 0
     phase3_skipped_pool_full: int = 0
+    phase3_lease_held: int = 0
+    """Per-cycle count of phase-3 candidates skipped because another
+    worker holds the per-entity lease (`05` §3.5 / Task 3.G1). Distinct
+    from :attr:`phase3_conflict` (CAS race lost): ``lease_held`` is the
+    pre-acquire skip case where the dispatch handler never fires;
+    ``conflict`` is the post-acquire CAS race lost (orphan reclaim,
+    peer-reset). Single-worker deployments stay at 0 here."""
 
     pool_slots: list[PoolSlot] = field(default_factory=list[PoolSlot])
 
@@ -208,6 +216,7 @@ async def _drive_phase3_for_records(  # noqa: PLR0913
     records: list[StateDrivenRecord],
     pool_slots: list[PoolSlot],
     stats: WorkerCycleStats,
+    worker_id: str,
 ) -> None:
     """Drive phase 3 over the gathered candidate set in pool-priority
     order, respecting per-pool slot budgets (`05` §3.3 / §3.4).
@@ -277,6 +286,7 @@ async def _drive_phase3_for_records(  # noqa: PLR0913
                 llm=representative_llm,
                 config=config,
                 record=record,
+                worker_id=worker_id,
             )
         except Exception:  # noqa: BLE001 — log + continue per `05` §3
             _log.exception(
@@ -301,6 +311,8 @@ async def _drive_phase3_for_records(  # noqa: PLR0913
                 stats.phase3_conflict += 1
             case "dispatch_failed_rolled_back":
                 stats.phase3_dispatch_failed += 1
+            case "lease_held":
+                stats.phase3_lease_held += 1
 
 
 def _resolve_target_pool_for_record(
@@ -339,6 +351,7 @@ async def run_worker_cycle(  # noqa: PLR0913
     llm_providers: dict[str, LlmProvider] | None,
     config: EngineConfig,
     cost_handler: CostRecordHandler | None = None,
+    worker_id: str | None = None,
 ) -> WorkerCycleStats:
     """Run one full poll cycle (phase 1 → phase 2 → phase 3) (`05` §3).
 
@@ -346,8 +359,17 @@ async def run_worker_cycle(  # noqa: PLR0913
     raised by individual record drives are logged and folded into the
     stats; the cycle keeps running so a single bad entity doesn't stall
     the worker.
+
+    ``worker_id`` is the deployment-stable identity threaded into
+    :meth:`MetadataStore.acquire_lease` as ``lease_holder_id`` for the
+    phase-3 lease wrapper (`05` §3.5 / DEC-035 #2). ``None`` (the test
+    default) auto-generates ``f"worker-{uuid4()}"`` per cycle so unit
+    tests that drive ``run_worker_cycle`` directly don't need to invent
+    one; production callers (:func:`run_worker_loop`,
+    :class:`smai_cli.runtime.Runtime`) pin a stable id.
     """
     stats = WorkerCycleStats()
+    resolved_worker_id = worker_id if worker_id is not None else f"worker-{uuid4().hex[:8]}"
 
     # ---- Phase 1: complete ---------------------------------------------------
     phase1_records = await _gather_phase1_records(spec=spec, metadata_store=metadata_store)
@@ -386,6 +408,7 @@ async def run_worker_cycle(  # noqa: PLR0913
         records=phase2_records,
         pool_slots=pool_slots,
         stats=stats,
+        worker_id=resolved_worker_id,
     )
 
     return stats
@@ -403,6 +426,7 @@ async def run_worker_loop(  # noqa: PLR0913
     shutdown_event: asyncio.Event,
     cost_handler: CostRecordHandler | None = None,
     on_cycle_complete: Callable[[WorkerCycleStats], Awaitable[None]] | None = None,
+    worker_id: str | None = None,
 ) -> None:
     """Long-running worker loop driving entities through ``spec`` (`05` §3).
 
@@ -421,12 +445,15 @@ async def run_worker_loop(  # noqa: PLR0913
     is a one-line follow-up; surfaced as a C4 / 3.G3 carry-forward
     rather than re-shaping the engine surface mid-task).
 
-    Per `05` §3.5 / §6, single-worker default — ``EngineConfig.worker_count=1``.
-    Multi-worker leasing is Task 3.G1; this function ignores
-    :attr:`EngineConfig.worker_count` (the worker process count is a
-    deployment concern — N=2 means 2 of these processes running, each
-    with ``worker_count=1`` from its own perspective).
+    Per `05` §3.5 / §6, ``worker_count`` is a deployment concern — N=2
+    means two worker processes running this loop in parallel, each with
+    a distinct ``worker_id``. Task 3.G1's lease wrapper inside
+    :func:`drive_entity_phase3` enforces correctness across them via
+    per-entity :meth:`MetadataStore.acquire_lease`. Single-process
+    deployments (``smai dev``) leave ``worker_id=None`` and let the
+    cycle generate a stable per-process id.
     """
+    resolved_worker_id = worker_id if worker_id is not None else f"worker-{uuid4().hex[:8]}"
     while not shutdown_event.is_set():
         cycle_start = config.time_provider()
         stats = await run_worker_cycle(
@@ -437,6 +464,7 @@ async def run_worker_loop(  # noqa: PLR0913
             llm_providers=llm_providers,
             config=config,
             cost_handler=cost_handler,
+            worker_id=resolved_worker_id,
         )
         if on_cycle_complete is not None:
             await on_cycle_complete(stats)

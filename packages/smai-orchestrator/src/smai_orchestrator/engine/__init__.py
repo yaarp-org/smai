@@ -38,6 +38,7 @@ from smai_orchestrator.engine.dispatch import (
     DispatchOutcomeWire,
     reset_orphan,
     run_dispatch,
+    run_dispatch_with_lease,
 )
 from smai_orchestrator.engine.phase1 import (
     CostRecordContext,
@@ -96,4 +97,5 @@ __all__ = [
     "phase1_step",
     "reset_orphan",
     "run_dispatch",
+    "run_dispatch_with_lease",
 ]

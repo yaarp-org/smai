@@ -37,6 +37,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
+from uuid import uuid4
 
 import yaml
 from smai_agents.model_selection import TaskRole
@@ -744,6 +745,7 @@ class _RuntimeState:
     specs: list[PipelineSpec]
     config: RuntimeConfig
     workspace_root: Path
+    worker_id: str
     shutdown_event: asyncio.Event = field(default_factory=asyncio.Event)
     worker_task: asyncio.Task[None] | None = None
     cycle_stats: list[WorkerCycleStats] = field(default_factory=list[WorkerCycleStats])
@@ -776,6 +778,7 @@ class Runtime:
         runtime_image: str = "smai-runtime:dev",
         run_worker: bool = True,
         paper_fetcher: PaperFetcher | None = None,
+        worker_id: str | None = None,
     ) -> AsyncGenerator[Runtime, None]:
         """Boot the in-band Runtime; yield a configured instance.
 
@@ -907,11 +910,13 @@ class Runtime:
             # Paper ingestion is independent of the CG-spec lifecycle —
             # it produces ``TechniqueRef``s consumed by future proposal-
             # pipeline planner sessions, not CGs.
+            resolved_worker_id = worker_id if worker_id is not None else f"in-band-{uuid4().hex[:8]}"
             state = _RuntimeState(
                 plugins=plugins,
                 specs=[proposal_spec, paper_spec, entry_spec, cg_spec, run_spec],
                 config=config,
                 workspace_root=workspace_root,
+                worker_id=resolved_worker_id,
             )
             runtime = cls(state)
 
@@ -970,6 +975,14 @@ class Runtime:
     def plugins(self) -> InstantiatedPlugins:
         return self._state.plugins
 
+    @property
+    def worker_id(self) -> str:
+        """Stable per-process worker identity threaded into lease ops
+        (`07` §5.6.7 / DEC-035 #2). For ``Runtime.start_in_band`` the
+        default is ``f"in-band-{uuid4()}"`` unless the caller passed a
+        ``worker_id=`` override."""
+        return self._state.worker_id
+
     async def run_one_cycle(self) -> list[WorkerCycleStats]:
         """Run a single worker cycle synchronously across every
         registered :class:`PipelineSpec`.
@@ -990,6 +1003,7 @@ class Runtime:
                 compute=self._state.plugins.compute,
                 llm_providers=dict(self._state.plugins.llm_providers),
                 config=self._state.config.engine,
+                worker_id=self._state.worker_id,
             )
             stats_per_spec.append(stats)
         return stats_per_spec
@@ -1042,6 +1056,7 @@ async def _run_worker_until_shutdown(state: _RuntimeState) -> None:
                 config=state.config.engine,
                 shutdown_event=state.shutdown_event,
                 on_cycle_complete=on_cycle,
+                worker_id=state.worker_id,
             )
         )
         for spec in state.specs

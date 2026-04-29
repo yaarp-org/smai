@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Literal
+from uuid import uuid4
 
 from smai_core.plugins import (
     ArtifactStore,
@@ -25,7 +26,10 @@ from smai_core.plugins import (
 
 from smai_orchestrator.engine._metadata_ops import StateDrivenRecord, entity_id_for
 from smai_orchestrator.engine.config import EngineConfig
-from smai_orchestrator.engine.dispatch import DispatchOutcomeWire, run_dispatch
+from smai_orchestrator.engine.dispatch import (
+    DispatchOutcomeWire,
+    run_dispatch_with_lease,
+)
 from smai_orchestrator.engine.types import (
     EdgeDef,
     EngineSpec,
@@ -51,6 +55,12 @@ class DriveOutcome:
     * ``dispatch_failed_rolled_back`` — the dispatch handler returned
       :class:`DispatchOutcome` with ``error`` non-None (or raised);
       the engine rolled the entity back to the edge's ``from_state``.
+    * ``lease_held`` — phase-3 dispatch lease (per `05` §3.5 / DEC-035
+      #2) is currently held by another worker. The dispatch never
+      fired; the entity stays in its current state for the next cycle.
+      Distinct from ``conflict`` (which is post-acquire CAS race lost)
+      to give the worker-loop stats a clean "another worker has the
+      lease" counter without overloading the CAS-conflict bucket.
 
     The :attr:`status` field discriminates and the optional fields
     carry the per-variant payload.
@@ -61,6 +71,7 @@ class DriveOutcome:
         "advanced",
         "conflict",
         "dispatch_failed_rolled_back",
+        "lease_held",
     ]
     fired_edge: EdgeDef | None = None
     dispatch_outcome: DispatchOutcomeWire | None = None
@@ -92,7 +103,7 @@ async def evaluate_outgoing_edges(
     return None
 
 
-async def drive_entity_phase3(
+async def drive_entity_phase3(  # noqa: PLR0913
     *,
     spec: EngineSpec,
     metadata_store: MetadataStore,
@@ -101,6 +112,7 @@ async def drive_entity_phase3(
     llm: LlmProvider | None,
     config: EngineConfig,
     record: StateDrivenRecord,
+    worker_id: str | None = None,
 ) -> DriveOutcome:
     """Run one phase-3 evaluate-and-dispatch step against ``record``
     (`05` §3.3).
@@ -113,13 +125,26 @@ async def drive_entity_phase3(
     2. The winning edge's target state is the new state. If the target
        state's ``on_entry_dispatch`` is ``None``, the engine performs a
        single-step CAS transition (no external compute work). Otherwise
-       it delegates to :func:`run_dispatch` for the full write-first
-       sequence.
-    3. On CAS conflict: return ``status="conflict"`` (another worker
-       won the race; this worker bails).
-    4. On dispatch handler failure: the engine rolls back to
+       it delegates to :func:`run_dispatch_with_lease` for the full
+       lease-acquire / write-first / lease-release sequence (`05` §3.5
+       + §1.4).
+    3. On lease contention: return ``status="lease_held"`` (another
+       worker holds the per-entity lease; this worker skips the entity
+       this cycle without firing the handler).
+    4. On CAS conflict: return ``status="conflict"`` (lease was
+       acquired but the in-dispatch CAS race was lost — orphan reclaim
+       or peer-reset).
+    5. On dispatch handler failure: the engine rolls back to
        ``edge.from_state``; return
        ``status="dispatch_failed_rolled_back"``.
+
+    ``worker_id`` is the stable per-worker identity used as
+    :attr:`LeaseToken.lease_holder_id` for audit / debugging surfaces.
+    ``None`` (the test default) auto-generates a fresh per-call UUID;
+    production callers — :func:`smai_orchestrator.worker.run_worker_cycle`,
+    :func:`smai_cli.runtime.Runtime.start_in_band` — pass the
+    deployment-stable worker id so multi-worker contention shows up
+    coherently in audit queries.
 
     Phase-1 wait-for-job semantics live in :mod:`phase1`; this driver
     only handles phase-3.
@@ -152,7 +177,8 @@ async def drive_entity_phase3(
         return DriveOutcome(status="no_match")
 
     target_def = spec.state_def(edge.target_state)
-    return await run_dispatch(
+    resolved_worker_id = worker_id if worker_id is not None else f"worker-{uuid4().hex[:8]}"
+    return await run_dispatch_with_lease(
         spec=spec,
         metadata_store=metadata_store,
         artifact_store=artifact_store,
@@ -163,6 +189,7 @@ async def drive_entity_phase3(
         target_state=target_def,
         entity_id=entity_id,
         expected_version=entity_version,
+        worker_id=resolved_worker_id,
     )
 
 
