@@ -3,10 +3,34 @@ name = "smai-artifacts-s3"
 version = "0.1.0"
 description = "ArtifactStore plugin: BYO-bucket S3 implementation."
 requires-python = ">=3.11"
-dependencies = []
+# Per Task 3.F2 / ``07-plugin-interfaces.md`` §6. The S3 driver is the
+# stock synchronous ``boto3`` client wrapped with ``asyncio.to_thread``
+# at the plugin's async surface — same pattern as ``smai-llm-bedrock``
+# (which also uses sync boto3 behind an async Protocol). Sticking to one
+# boto3 keeps the workspace install footprint small and avoids the
+# ``aioboto3`` ↔ ``aiobotocore`` version-pin matrix.
+dependencies = [
+    "smai-core",
+    "boto3>=1.34",
+]
+
+[tool.uv.sources]
+smai-core = { workspace = true }
 
 [project.entry-points."smai.artifact_stores"]
 s3 = "smai_artifacts_s3:S3Store"
+
+[dependency-groups]
+dev = [
+    "smai-core[conformance]",
+    # ``moto[s3]`` provides the in-process intercept mode the conformance
+    # suite uses (no network round-trip). The ``[server]`` extra adds
+    # Flask + Werkzeug so :class:`moto.server.ThreadedMotoServer` is
+    # importable — needed by ``test_presigned_url`` to actually fetch the
+    # presigned URL over HTTP. Real-AWS validation is a separate, opt-in
+    # test (``test_real_aws``).
+    "moto[s3,server]>=5.0",
+]
 
 [build-system]
 requires = ["hatchling"]
