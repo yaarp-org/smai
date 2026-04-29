@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% from "_state_filter.html" import state_filter %}
+{% block content %}
+<h1>papers</h1>
+<p class="subtitle">
+  Active papers in the paper-ingestion supporting utility.
+  <code>partial</code> papers are non-terminal parking spots awaiting promotion;
+  terminal papers (<code>registered</code> / <code>rejected</code> /
+  <code>failed</code>) are reachable by direct arxiv-id navigation.
+</p>
+
+{{ state_filter("/papers/", available_states, filter_state) }}
+
+{% if papers %}
+<table class="entity-table">
+  <thead>
+    <tr>
+      <th>arxiv id</th>
+      <th>title</th>
+      <th>state</th>
+      <th>screen result</th>
+      <th>updated at</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for paper in papers %}
+    <tr {% if paper.state == "partial" %}class="row-partial"{% endif %}>
+      <td><a href="/papers/{{ paper.arxiv_id }}">{{ paper.arxiv_id }}</a></td>
+      <td>{{ paper.title or "—" }}</td>
+      <td><span class="state-pill state-{{ paper.state | short_state }}">{{ paper.state }}</span></td>
+      <td>{{ paper.screen_result_decision or "—" }}</td>
+      <td>{{ paper.updated_at | format_datetime }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="empty-state" data-test="empty-papers">No active papers.</p>
+{% endif %}
+{% endblock %}

@@ -33,8 +33,10 @@ from smai_cli.runtime import (
     CGNotFoundError,
     CGStatus,
     ExperimentsService,
+    RunNotFoundError,
     Runtime,
     StatusService,
+    SummaryCounts,
     WaitTimeoutError,
 )
 
@@ -45,8 +47,10 @@ __all__ = [
     "ConfigValidationError",
     "ExperimentsService",
     "PHASE_2_DEFAULT_PIPELINES",
+    "RunNotFoundError",
     "Runtime",
     "StatusService",
+    "SummaryCounts",
     "UnsupportedLlmProvider",
     "WaitTimeoutError",
     "base_defaults",

@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% from "_state_filter.html" import state_filter %}
+{% block content %}
+<h1>runs</h1>
+<p class="subtitle">
+  Active per-(entry × seed) training runs. Terminal runs (<code>succeeded</code>,
+  <code>failed</code>, <code>inconclusive</code>) appear on the parent CG's
+  detail page.
+</p>
+
+{{ state_filter("/runs/", available_states, filter_state) }}
+
+{% if filter_cg_id %}
+<p class="filter-note">Filtered to CG <code>{{ filter_cg_id }}</code>.
+<a href="/runs/{% if filter_state %}?state={{ filter_state }}{% endif %}">clear filter</a></p>
+{% endif %}
+
+{% if runs %}
+<table class="entity-table">
+  <thead>
+    <tr>
+      <th>id</th>
+      <th>cg</th>
+      <th>entry</th>
+      <th>seed</th>
+      <th>state</th>
+      <th>updated at</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for run in runs %}
+    <tr>
+      <td><a href="/runs/{{ run.id }}">{{ run.id }}</a></td>
+      <td><a href="/cgs/{{ run.cg_id }}">{{ run.cg_id }}</a></td>
+      <td class="mono">{{ run.entry_id }}</td>
+      <td>{{ run.seed }}</td>
+      <td><span class="state-pill state-{{ run.state | short_state }}">{{ run.state }}</span></td>
+      <td>{{ run.updated_at | format_datetime }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="empty-state" data-test="empty-runs">No active runs.</p>
+{% endif %}
+{% endblock %}

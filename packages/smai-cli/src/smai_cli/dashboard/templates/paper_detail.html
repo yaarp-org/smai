@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+{% block content %}
+<nav class="breadcrumbs"><a href="/papers/">papers</a> &raquo; {{ paper.arxiv_id }}</nav>
+<h1>paper <span class="mono">{{ paper.arxiv_id }}</span></h1>
+
+<dl class="kv">
+  <dt>state</dt>
+  <dd><span class="state-pill state-{{ paper.state | short_state }}">{{ paper.state }}</span></dd>
+
+  <dt>title</dt>
+  <dd>{{ paper.title or "—" }}</dd>
+
+  <dt>authors</dt>
+  <dd>{{ paper.authors | join(", ") if paper.authors else "—" }}</dd>
+
+  <dt>abstract</dt>
+  <dd>{{ paper.abstract or "—" }}</dd>
+
+  <dt>published</dt>
+  <dd>{{ paper.published_date | format_datetime if paper.published_date else "—" }}</dd>
+
+  <dt>categories</dt>
+  <dd>{{ paper.categories | join(", ") if paper.categories else "—" }}</dd>
+
+  <dt>screen decision</dt>
+  <dd>
+    {% if paper.screen_result_decision %}
+    <strong>{{ paper.screen_result_decision }}</strong>
+    {% if paper.screen_result_reason %}<br><em>{{ paper.screen_result_reason }}</em>{% endif %}
+    {% else %}—{% endif %}
+  </dd>
+
+  <dt>latex bundle artifact</dt>
+  <dd class="mono">{{ paper.latex_bundle_artifact_key or "—" }}</dd>
+
+  <dt>expanded tex artifact</dt>
+  <dd class="mono">{{ paper.expanded_tex_artifact_key or "—" }}</dd>
+
+  <dt>extracted text artifact</dt>
+  <dd class="mono">{{ paper.extracted_text_artifact_key or "—" }}</dd>
+
+  <dt>figures artifact</dt>
+  <dd class="mono">{{ paper.figures_artifact_key or "—" }}</dd>
+
+  <dt>technique buffer artifact</dt>
+  <dd class="mono">{{ paper.technique_buffer_artifact_key or "—" }}</dd>
+
+  <dt>error context artifact</dt>
+  <dd class="mono">{{ paper.error_context_artifact_key or "(unset — check most-recent transition log entry for diagnostic)" }}</dd>
+
+  <dt>fetcher job handle</dt>
+  <dd class="mono">
+    {% if paper.fetcher_job_handle %}
+    {{ paper.fetcher_job_handle.plugin }}/{{ paper.fetcher_job_handle.handle }}
+    {% else %}—{% endif %}
+  </dd>
+
+  <dt>screening attempts</dt>
+  <dd>{{ paper.screening_attempt }}</dd>
+
+  <dt>planning attempts</dt>
+  <dd>{{ paper.planning_attempt }}</dd>
+
+  <dt>registration attempts</dt>
+  <dd>{{ paper.registration_attempt }}</dd>
+
+  <dt>created at</dt>
+  <dd>{{ paper.created_at | format_datetime }}</dd>
+
+  <dt>updated at</dt>
+  <dd>{{ paper.updated_at | format_datetime }}</dd>
+</dl>
+
+{% if is_promotable %}
+<aside class="callout callout-action" data-test="paper-promote-affordance">
+  <h3>partial paper — awaiting promotion</h3>
+  <p>
+    This paper was created as a parking spot by another paper's enrichment step
+    (<code>08-novel-technique-pipeline.md</code> §5.7). To fully ingest it, run:
+  </p>
+  <pre><code>smai ingest --promote-partial {{ paper.arxiv_id }}</code></pre>
+  <p>The dashboard does not expose a mutation endpoint for this action.</p>
+</aside>
+{% endif %}
+
+<section>
+  <h2>registered techniques</h2>
+  {% if techniques %}
+  <table class="entity-table">
+    <thead><tr><th>id</th><th>name</th><th>category</th><th>standard</th></tr></thead>
+    <tbody>
+      {% for technique in techniques %}
+      <tr>
+        <td class="mono">{{ technique.id }}</td>
+        <td>{{ technique.name }}</td>
+        <td>{{ technique.category }}</td>
+        <td>{{ "yes" if technique.standard else "no" }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty-state">No techniques registered yet from this paper.</p>
+  {% endif %}
+</section>
+{% endblock %}

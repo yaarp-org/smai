@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block content %}
+<nav class="breadcrumbs">
+  <a href="/runs/">runs</a> &raquo; {{ run.id }}
+</nav>
+<h1>run <span class="mono">{{ run.id }}</span></h1>
+
+<dl class="kv">
+  <dt>state</dt>
+  <dd><span class="state-pill state-{{ run.state | short_state }}">{{ run.state }}</span></dd>
+
+  <dt>cg</dt>
+  <dd><a href="/cgs/{{ run.cg_id }}">{{ run.cg_id }}</a></dd>
+
+  <dt>entry</dt>
+  <dd class="mono">{{ run.entry_id }}</dd>
+
+  <dt>seed</dt>
+  <dd>{{ run.seed }}</dd>
+
+  <dt>compute job handle</dt>
+  <dd class="mono">
+    {% if run.compute_job_handle %}
+    {{ run.compute_job_handle.plugin }}/{{ run.compute_job_handle.handle }}
+    {% else %}—{% endif %}
+  </dd>
+
+  <dt>raw metrics artifact</dt>
+  <dd class="mono">{{ run.raw_metrics_artifact_key or "—" }}</dd>
+
+  <dt>started at</dt>
+  <dd>{{ run.started_at | format_datetime if run.started_at else "—" }}</dd>
+
+  <dt>completed at</dt>
+  <dd>{{ run.completed_at | format_datetime if run.completed_at else "—" }}</dd>
+
+  <dt>duration (s)</dt>
+  <dd>{{ "%.2f"|format(run.duration_seconds) if run.duration_seconds is not none else "—" }}</dd>
+
+  <dt>run attempts</dt>
+  <dd>{{ run.run_attempt }}</dd>
+
+  <dt>failure reason</dt>
+  <dd>{{ run.failure_reason or "—" }}</dd>
+
+  <dt>created at</dt>
+  <dd>{{ run.created_at | format_datetime }}</dd>
+
+  <dt>updated at</dt>
+  <dd>{{ run.updated_at | format_datetime }}</dd>
+</dl>
+{% endblock %}

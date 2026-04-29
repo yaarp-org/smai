@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="hero">
+  <h1>in-flight summary</h1>
+  <p class="subtitle">
+    Counts of active entities per pipeline tracking kind. Terminal entities
+    are reachable by direct id navigation on the per-entity detail pages.
+  </p>
+</section>
+
+<section class="counts">
+  <a class="count-card" href="/proposals/">
+    <span class="count-label">proposals</span>
+    <span class="count-value" data-test="count-proposals">{{ counts.proposals_in_flight }}</span>
+  </a>
+  <a class="count-card" href="/cgs/">
+    <span class="count-label">comparison groups</span>
+    <span class="count-value" data-test="count-cgs">{{ counts.cgs_in_flight }}</span>
+  </a>
+  <a class="count-card" href="/runs/">
+    <span class="count-label">runs</span>
+    <span class="count-value" data-test="count-runs">{{ counts.runs_in_flight }}</span>
+  </a>
+  <a class="count-card" href="/papers/">
+    <span class="count-label">papers</span>
+    <span class="count-value" data-test="count-papers">{{ counts.papers_in_flight }}</span>
+  </a>
+</section>
+
+<section class="surface-notes">
+  <h2>about this surface</h2>
+  <ul>
+    <li>The dashboard is read-only by spec (<code>09-cli.md</code> §5.4). Use the CLI verbs to mutate state.</li>
+    <li>The <code>partial</code> paper state is non-terminal &mdash; promote with <code>smai ingest --promote-partial &lt;arxiv-id&gt;</code>.</li>
+    <li>No authentication is configured. Bind to <code>--host=127.0.0.1</code> for laptop deployments.</li>
+  </ul>
+</section>
+{% endblock %}

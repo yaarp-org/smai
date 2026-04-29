@@ -1,0 +1,12 @@
+{% macro state_filter(base_path, available_states, filter_state) %}
+<form class="state-filter" method="get" action="{{ base_path }}">
+  <label for="state-filter">filter by state:</label>
+  <select id="state-filter" name="state" onchange="this.form.submit()">
+    <option value="">all active</option>
+    {% for state in available_states %}
+    <option value="{{ state }}" {% if filter_state == state %}selected{% endif %}>{{ state }}</option>
+    {% endfor %}
+  </select>
+  <noscript><button type="submit">apply</button></noscript>
+</form>
+{% endmacro %}

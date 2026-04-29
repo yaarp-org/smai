@@ -36,7 +36,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, TypeVar, cast
 from uuid import uuid4
 
 import yaml
@@ -48,10 +48,11 @@ from smai_core import (
     ExperimentDocument,
     FactorModelDocument,
     Registries,
+    TechniqueRef,
     compile_experiment,
     load_default_registries,
 )
-from smai_core.plugins import ArtifactStore, MetadataStore
+from smai_core.plugins import ArtifactStore, CursorPage, MetadataStore
 from smai_orchestrator import (
     CG_EXECUTION_SPEC_NAME,
     DEFAULT_TASK_ROLES,
@@ -63,6 +64,7 @@ from smai_orchestrator import (
     PipelineSpec,
     PluginOverrides,
     ProposalRecord,
+    RunRecord,
     RuntimeConfig,
     instantiate_plugins,
     register_paper_ingestion_pipeline,
@@ -95,6 +97,24 @@ VALIDATION_CONFIG_KEY_TEMPLATE = "comparison-groups/{cg_id}/validation_config.js
 # (three failure terminals + one success terminal).
 TERMINAL_CG_STATES: frozenset[str] = frozenset(
     {"complete", "implementation_failed", "running_failed", "evaluation_failed"}
+)
+
+# In-flight state catalogs per the :class:`*State` Literal definitions
+# in :mod:`smai_orchestrator.entities.tracking`. The dashboard surfaces
+# these via :meth:`StatusService.summary_counts` (the index-page count
+# pills) and the per-entity ``list_active`` aggregator helpers.
+_PROPOSAL_IN_FLIGHT_STATES: frozenset[str] = frozenset(
+    {"proposal_submitted", "designing", "designed"}
+)
+_CG_IN_FLIGHT_STATES: frozenset[str] = frozenset(
+    {"draft", "implementing", "implemented", "running", "evaluating"}
+)
+_RUN_IN_FLIGHT_STATES: frozenset[str] = frozenset({"pending", "submitted", "running"})
+# ``partial`` is a non-terminal parking spot per `08` §5.7 — papers in
+# ``partial`` need user attention to promote, so they count as in-flight
+# from the dashboard's perspective.
+_PAPER_IN_FLIGHT_STATES: frozenset[str] = frozenset(
+    {"submitted", "fetching", "screening", "planning", "partial"}
 )
 
 _log = logging.getLogger(__name__)
@@ -181,6 +201,18 @@ class PaperStateError(RuntimeError):
         )
 
 
+class RunNotFoundError(LookupError):
+    """Raised by :meth:`StatusService.get_run_record` when a run id is unknown.
+
+    Carries :attr:`run_id` so the dashboard / CLI surface can render a
+    clear error.
+    """
+
+    def __init__(self, run_id: str) -> None:
+        self.run_id = run_id
+        super().__init__(f"no run with id {run_id!r} found in MetadataStore")
+
+
 class WaitTimeoutError(TimeoutError):
     """Raised by :meth:`StatusService.wait_for_terminal` when the
     timeout elapses without the CG reaching a terminal state.
@@ -202,6 +234,82 @@ class CGStatus:
     state: str
     updated_at: datetime
     is_terminal: bool
+
+
+@dataclass(frozen=True)
+class SummaryCounts:
+    """In-flight entity counts per :meth:`StatusService.summary_counts`.
+
+    Drives the dashboard index page's count pills. ``in_flight``
+    membership is defined per the :class:`*State` Literal catalogs in
+    :mod:`smai_orchestrator.entities.tracking` — see the ``_*_IN_FLIGHT_STATES``
+    frozensets at module top.
+    """
+
+    proposals_in_flight: int
+    cgs_in_flight: int
+    runs_in_flight: int
+    papers_in_flight: int
+
+
+# Cursor-page walker types. The :class:`MetadataStore` ``list_*`` /
+# ``get_ready_*`` / ``get_in_flight_*`` Protocol surface returns
+# :class:`CursorPage` per DEC-035 #1; the dashboard materializes the
+# pages into in-memory lists for rendering.
+_T = TypeVar("_T")
+_PageFn = Callable[[str | None], Awaitable[CursorPage[_T]]]
+
+
+async def _walk_cursor_pages(
+    fetch: Callable[[str | None], Awaitable[CursorPage[_T]]],
+    *,
+    page_cap: int = 100,
+) -> list[_T]:
+    """Walk a paginated source until it yields no more cursors.
+
+    ``page_cap`` is a defensive bound — the dashboard is for laptop /
+    single-user deployments at v1, so individual entity counts are
+    bounded; the cap exists to avoid runaway loops on a buggy plugin.
+    """
+    items: list[_T] = []
+    cursor: str | None = None
+    for _ in range(page_cap):
+        page = await fetch(cursor)
+        items.extend(page.items)
+        if page.next_cursor is None:
+            break
+        cursor = page.next_cursor
+    return items
+
+
+async def _walk_many_cursor_pages(
+    sources: tuple[Callable[[str | None], Awaitable[CursorPage[_T]]], ...],
+) -> list[_T]:
+    """Walk multiple paginated sources concurrently and concatenate."""
+    page_lists = await asyncio.gather(*(_walk_cursor_pages(s) for s in sources))
+    out: list[_T] = []
+    for items in page_lists:
+        out.extend(items)
+    return out
+
+
+def _dedupe_by_id(items: list[_T], key_fn: Callable[[_T], str]) -> list[_T]:
+    """De-duplicate ``items`` by the result of ``key_fn``.
+
+    Multiple per-state scheduling queries can return the same entity
+    when state transitions interleave with the dashboard's reads; the
+    aggregator helpers de-dupe by primary key so the dashboard renders
+    each entity once.
+    """
+    seen: set[str] = set()
+    out: list[_T] = []
+    for item in items:
+        key = key_fn(item)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
+    return out
 
 
 def _parse_yaml_text(yaml_text: str) -> dict[str, Any]:
@@ -356,6 +464,100 @@ class StatusService:
                 )
             await asyncio.sleep(poll_interval_seconds)
 
+    async def get_cg_record(self, cg_id: str) -> ComparisonGroupRecord:
+        """Return the full :class:`ComparisonGroupRecord` for ``cg_id``.
+
+        :meth:`get` projects the narrow `09` §7 status surface; the
+        dashboard's CG-detail page needs the full record (artifact
+        hashes, job handle, code-review state). Raises
+        :class:`CGNotFoundError` when missing.
+        """
+        record = await self._plugins.metadata_store.get_cg(cg_id)
+        if record is None:
+            raise CGNotFoundError(cg_id)
+        return record
+
+    async def get_run_record(self, run_id: str) -> RunRecord:
+        """Read a :class:`RunRecord` by id (raises :class:`RunNotFoundError`
+        when missing)."""
+        record = await self._plugins.metadata_store.get_run(run_id)
+        if record is None:
+            raise RunNotFoundError(run_id)
+        return record
+
+    async def list_entries_for_cg(self, cg_id: str) -> list[EntryRecord]:
+        """Return every :class:`EntryRecord` parented by ``cg_id``.
+
+        Walks the cursor pages exposed by
+        :meth:`MetadataStore.list_entries_for_cg`. v1 deployments have
+        small per-CG entry counts (factor-model fan-out is bounded);
+        the dashboard renders the materialized list directly.
+        """
+        return await _walk_cursor_pages(
+            lambda cursor: self._plugins.metadata_store.list_entries_for_cg(cg_id, cursor=cursor),
+        )
+
+    async def list_runs_for_entry(self, entry_id: str) -> list[RunRecord]:
+        """Return every :class:`RunRecord` parented by ``entry_id``."""
+        return await _walk_cursor_pages(
+            lambda cursor: self._plugins.metadata_store.list_runs_for_entry(
+                entry_id, cursor=cursor
+            ),
+        )
+
+    async def list_active_cgs(self) -> list[ComparisonGroupRecord]:
+        """Aggregate every active CG via per-state scheduling queries.
+
+        The :class:`MetadataStore` Protocol exposes no broad "list all
+        CGs" surface (full enumeration is deferred per `07` §5); the
+        dashboard composes the ``get_ready_*`` / ``get_in_flight_*``
+        queries instead. Covers ``draft``, ``implementing``,
+        ``implemented``, ``running``, ``evaluating``. Terminal CGs are
+        reachable by direct id-navigation to the detail page.
+        """
+        store = self._plugins.metadata_store
+        sources: tuple[_PageFn[ComparisonGroupRecord], ...] = (
+            lambda cursor: store.get_ready_for_harness_build(cursor=cursor),
+            lambda cursor: store.get_in_flight_harness_build(cursor=cursor),
+            lambda cursor: store.get_ready_for_review_and_run(cursor=cursor),
+            lambda cursor: store.get_ready_to_evaluate(cursor=cursor),
+            lambda cursor: store.get_in_flight_evaluation(cursor=cursor),
+        )
+        return _dedupe_by_id(await _walk_many_cursor_pages(sources), lambda r: r.id)
+
+    async def list_active_runs(self) -> list[RunRecord]:
+        """Aggregate every active run via per-state scheduling queries.
+
+        Covers ``pending`` (:meth:`get_ready_to_run`) plus the in-flight
+        states ``submitted`` / ``running`` (:meth:`get_in_flight_runs`).
+        Terminal runs are reachable via the per-entry run list on the
+        CG-detail page.
+        """
+        store = self._plugins.metadata_store
+        sources: tuple[_PageFn[RunRecord], ...] = (
+            lambda cursor: store.get_ready_to_run(cursor=cursor),
+            lambda cursor: store.get_in_flight_runs(cursor=cursor),
+        )
+        return _dedupe_by_id(await _walk_many_cursor_pages(sources), lambda r: r.id)
+
+    async def summary_counts(self) -> SummaryCounts:
+        """In-flight counts per entity kind for the dashboard index.
+
+        Uses :meth:`MetadataStore.count_in_state` (`07` §5.6.6) — one
+        round-trip per kind, with the in-flight state lists pinned per
+        the :class:`*State` Literal catalogs in
+        :mod:`smai_orchestrator.entities.tracking`.
+        """
+        store = self._plugins.metadata_store
+        return SummaryCounts(
+            proposals_in_flight=await store.count_in_state(
+                "proposal", list(_PROPOSAL_IN_FLIGHT_STATES)
+            ),
+            cgs_in_flight=await store.count_in_state("cg", list(_CG_IN_FLIGHT_STATES)),
+            runs_in_flight=await store.count_in_state("run", list(_RUN_IN_FLIGHT_STATES)),
+            papers_in_flight=await store.count_in_state("paper", list(_PAPER_IN_FLIGHT_STATES)),
+        )
+
 
 # === ProposalsService =======================================================
 
@@ -495,6 +697,38 @@ class ProposalsService:
             last_error=last_error,
         )
 
+    async def list_active(self) -> list[ProposalRecord]:
+        """Aggregate every active proposal via per-state scheduling queries.
+
+        Covers ``proposal_submitted`` (:meth:`get_ready_for_proposal_design`),
+        ``designing`` (:meth:`get_in_flight_proposal_design`), and
+        ``designed`` (:meth:`get_proposals_at_human_gate` — returns ALL
+        proposals at the human gate per the Protocol docstring's
+        reconciliation note). Terminal proposals (``registered`` /
+        ``rejected`` / ``failed``) are reachable by direct id-navigation
+        to the detail page.
+        """
+        store = self._plugins.metadata_store
+        sources: tuple[_PageFn[ProposalRecord], ...] = (
+            lambda cursor: store.get_ready_for_proposal_design(cursor=cursor),
+            lambda cursor: store.get_in_flight_proposal_design(cursor=cursor),
+            lambda cursor: store.get_proposals_at_human_gate(cursor=cursor),
+        )
+        return _dedupe_by_id(await _walk_many_cursor_pages(sources), lambda r: r.id)
+
+    async def list_cgs(self, proposal_id: str) -> list[ComparisonGroupRecord]:
+        """Return every CG parented by ``proposal_id``.
+
+        Walks :meth:`MetadataStore.list_cgs_for_proposal`'s cursor pages.
+        Used by the proposal-detail page to surface the registered
+        children of an approved proposal.
+        """
+        return await _walk_cursor_pages(
+            lambda cursor: self._plugins.metadata_store.list_cgs_for_proposal(
+                proposal_id, cursor=cursor
+            ),
+        )
+
 
 # === PapersService ==========================================================
 
@@ -628,6 +862,44 @@ class PapersService:
             arxiv_id,
             record.version,
             "submitted",
+        )
+
+    async def list_active(self) -> list[PaperRecord]:
+        """Aggregate every active paper via per-state scheduling queries.
+
+        Composes the paper-pipeline ``get_ready_*`` /
+        ``get_in_flight_*`` queries plus
+        :meth:`get_partial_pending_promotion` (papers parked in
+        ``partial`` per `08` §5.7 require user attention so they belong
+        on the dashboard). Terminal papers (``registered`` / ``rejected``
+        / ``failed``) are reachable by direct arxiv-id navigation.
+        """
+        store = self._plugins.metadata_store
+        sources: tuple[_PageFn[PaperRecord], ...] = (
+            lambda cursor: store.get_ready_for_paper_fetch(cursor=cursor),
+            lambda cursor: store.get_in_flight_paper_fetch(cursor=cursor),
+            lambda cursor: store.get_ready_for_paper_screen(cursor=cursor),
+            lambda cursor: store.get_in_flight_paper_screen(cursor=cursor),
+            lambda cursor: store.get_ready_for_paper_plan(cursor=cursor),
+            lambda cursor: store.get_in_flight_paper_plan(cursor=cursor),
+            lambda cursor: store.get_partial_pending_promotion(cursor=cursor),
+        )
+        return _dedupe_by_id(
+            await _walk_many_cursor_pages(sources),
+            lambda r: r.arxiv_id,
+        )
+
+    async def list_techniques(self, arxiv_id: str) -> list[TechniqueRef]:
+        """Techniques registered with ``fidelity_anchor`` pointing at this paper.
+
+        Walks :meth:`MetadataStore.list_techniques_for_paper`'s cursor
+        pages. The paper-detail page surfaces these as the visible
+        outcome of a successful ingestion.
+        """
+        return await _walk_cursor_pages(
+            lambda cursor: self._plugins.metadata_store.list_techniques_for_paper(
+                arxiv_id, cursor=cursor
+            ),
         )
 
 
@@ -767,7 +1039,7 @@ class Runtime:
 
     @classmethod
     @asynccontextmanager
-    async def start_in_band(
+    async def start_in_band(  # noqa: PLR0913
         cls,
         config: RuntimeConfig,
         *,
@@ -800,7 +1072,14 @@ class Runtime:
         ``run_worker=False`` is for tests that drive
         :func:`run_worker_cycle` manually; production callers
         (``smai dev``) leave it ``True``.
+
+        ``worker_id`` is the deployment-stable identity threaded into
+        the phase-3 lease wrapper (`05` §3.5 / DEC-035 #2 / Task 3.G1).
+        ``None`` (the default) auto-generates ``f"in-band-{uuid4()}"``.
+        Multi-worker deployments (Task 3.G3 ``smai start``) pin a
+        process-stable id (typically host+pid+uuid).
         """
+        resolved_worker_id = worker_id if worker_id is not None else f"in-band-{uuid4().hex[:8]}"
         workspace_root = workspace_root or (Path.home() / ".smai" / "workspaces")
         workspace_root.mkdir(parents=True, exist_ok=True)
 
@@ -910,7 +1189,6 @@ class Runtime:
             # Paper ingestion is independent of the CG-spec lifecycle —
             # it produces ``TechniqueRef``s consumed by future proposal-
             # pipeline planner sessions, not CGs.
-            resolved_worker_id = worker_id if worker_id is not None else f"in-band-{uuid4().hex[:8]}"
             state = _RuntimeState(
                 plugins=plugins,
                 specs=[proposal_spec, paper_spec, entry_spec, cg_spec, run_spec],
@@ -977,10 +1255,13 @@ class Runtime:
 
     @property
     def worker_id(self) -> str:
-        """Stable per-process worker identity threaded into lease ops
-        (`07` §5.6.7 / DEC-035 #2). For ``Runtime.start_in_band`` the
-        default is ``f"in-band-{uuid4()}"`` unless the caller passed a
-        ``worker_id=`` override."""
+        """The deployment-stable worker identity threaded into the
+        phase-3 lease wrapper (`05` §3.5 / DEC-035 #2 / Task 3.G1).
+
+        Set at :meth:`start_in_band` entry — auto-generated as
+        ``f"in-band-{uuid4()}"`` unless the caller passed a
+        ``worker_id=`` override.
+        """
         return self._state.worker_id
 
     async def run_one_cycle(self) -> list[WorkerCycleStats]:
@@ -1100,9 +1381,11 @@ __all__ = [
     "ProposalStateError",
     "ProposalSubmission",
     "ProposalsService",
+    "RunNotFoundError",
     "Runtime",
     "RuntimeNotStartedError",
     "StatusService",
+    "SummaryCounts",
     "TECHNIQUE_CONTRACT_KEY_TEMPLATE",
     "TERMINAL_CG_STATES",
     "VALIDATION_CONFIG_KEY_TEMPLATE",

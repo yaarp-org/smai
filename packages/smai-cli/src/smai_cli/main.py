@@ -873,7 +873,93 @@ def smai_ingest(
     asyncio.run(_run())
 
 
-# === Verb 12: migrate ========================================================
+# === Verb 12: serve ==========================================================
+
+
+@app.command("serve")
+def smai_serve(
+    host: Annotated[
+        str,
+        typer.Option(
+            "--host",
+            help=(
+                "Bind address. Defaults to 127.0.0.1 (loopback only) per "
+                "the single-user local dashboard contract — the OSS "
+                "dashboard has no authentication (DEC-027). Production "
+                "deployments that want broader binding pass --host "
+                "explicitly; this is a deliberate choice each deployment "
+                "makes for itself."
+            ),
+        ),
+    ] = "127.0.0.1",
+    port: Annotated[
+        int,
+        typer.Option("--port", help="Port to listen on.", min=1, max=65535),
+    ] = 8000,
+    config: Annotated[
+        Path | None,
+        typer.Option("--config", "-c", help="Path to a smai.yaml."),
+    ] = None,
+) -> None:
+    """Boot the read-only dashboard (`09` §5.4).
+
+    Renders pages over the configured ``MetadataStore`` + ``ArtifactStore``
+    via the existing :class:`Runtime` service surface. Pages cover
+    proposals, comparison groups, runs, and papers (lists + per-entity
+    detail). The surface is read-only by spec; mutations go through the
+    other CLI verbs (``smai run`` / ``smai submit-proposal`` /
+    ``smai approve-proposal`` / ``smai reject-proposal`` /
+    ``smai ingest``).
+
+    No authentication. The default ``--host=127.0.0.1`` keeps the
+    surface loopback-only; broaden the bind explicitly if you mean to.
+    """
+    import uvicorn  # noqa: PLC0415 — lazy-import to keep `--help` fast
+
+    from smai_cli.dashboard import build_app  # noqa: PLC0415
+
+    overrides: dict[str, Any] = _apply_dev_filesystem_defaults({})
+    try:
+        runtime_config = load_runtime_config(
+            config_path=config,
+            defaults=dev_defaults(),
+            flag_overrides=overrides,
+        )
+    except (ConfigFileError, ConfigValidationError) as exc:
+        _err(str(exc))
+
+    workspace_root, _artifacts, _sqlite = _dev_artifact_paths()
+
+    async def _run() -> None:
+        # The dashboard is read-only — boot the runtime without spawning
+        # a worker. Workers are managed independently by `smai dev` /
+        # `smai start`; the dashboard reads through the configured
+        # plugins per `09` §5.4 ("the verb that runs only the dashboard
+        # ... no worker").
+        async with Runtime.start_in_band(
+            runtime_config,
+            workspace_root=workspace_root,
+            run_worker=False,
+        ) as runtime:
+            fastapi_app = build_app(runtime)
+            uvicorn_config = uvicorn.Config(
+                fastapi_app,
+                host=host,
+                port=port,
+                log_level="info",
+                access_log=True,
+            )
+            server = uvicorn.Server(uvicorn_config)
+            typer.echo(
+                f"smai serve: dashboard listening on http://{host}:{port}/ "
+                "(read-only, no authentication). Press Ctrl+C to stop."
+            )
+            await server.serve()
+
+    asyncio.run(_run())
+
+
+# === Verb 13: migrate ========================================================
 
 
 def _resolve_metadata_store_uri(runtime_config: Any) -> str:

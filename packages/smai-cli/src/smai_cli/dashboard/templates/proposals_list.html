@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% from "_state_filter.html" import state_filter %}
+{% block content %}
+<h1>proposals</h1>
+<p class="subtitle">
+  Active proposals from the novel-technique pipeline. Terminal proposals
+  (<code>registered</code> / <code>rejected</code> / <code>failed</code>)
+  are reachable by direct id navigation.
+</p>
+
+{{ state_filter("/proposals/", available_states, filter_state) }}
+
+{% if proposals %}
+<table class="entity-table">
+  <thead>
+    <tr>
+      <th>id</th>
+      <th>state</th>
+      <th>submission kind</th>
+      <th>user decision</th>
+      <th>updated at</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for proposal in proposals %}
+    <tr>
+      <td><a href="/proposals/{{ proposal.id }}">{{ proposal.id }}</a></td>
+      <td><span class="state-pill state-{{ proposal.state | short_state }}">{{ proposal.state }}</span></td>
+      <td>{{ proposal.submission_kind }}</td>
+      <td>{{ proposal.user_decision or "—" }}</td>
+      <td>{{ proposal.updated_at | format_datetime }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="empty-state" data-test="empty-proposals">No active proposals.</p>
+{% endif %}
+{% endblock %}

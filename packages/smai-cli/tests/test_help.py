@@ -6,10 +6,11 @@ Phase-2 landed seven verbs (``dev``, ``run``, ``status``,
 (Phase-3 W1.a) landed three proposal verbs (``submit-proposal``,
 ``approve-proposal``, ``reject-proposal``) per DEC-032's primary-
 input-path framing. Task 3.E2 (Phase-3 W1.b) landed ``ingest``
-per DEC-032 OQ1's "explicit `smai ingest` only" rule. Task 3.H2
-(Phase-3 W2) landed ``migrate`` (`09` §1) for production-deployment
-schema management. Remaining Phase-3 verbs (``start``, ``serve``)
-must NOT appear yet.
+per DEC-032 OQ1's "explicit `smai ingest` only" rule. Task 3.H1
+landed the read-only dashboard verb ``serve`` (`09` §5.4); Task
+3.H2 landed ``migrate`` (`09` §1) for production-deployment
+schema management. The remaining Phase-3 verb (``start``) is not
+yet shipped.
 """
 
 from __future__ import annotations
@@ -33,6 +34,8 @@ EXPECTED_VERBS: frozenset[str] = frozenset(
         "reject-proposal",
         # Phase-3 W1.b / Task 3.E2 (DEC-032 OQ1)
         "ingest",
+        # Phase-3 W2 / Task 3.H1 (`09` §5.4 — read-only dashboard)
+        "serve",
         # Phase-3 W2 / Task 3.H2 (`09` §1 — schema migration tool)
         "migrate",
     }
@@ -41,7 +44,6 @@ EXPECTED_VERBS: frozenset[str] = frozenset(
 FORBIDDEN_PHASE_3_VERBS: frozenset[str] = frozenset(
     {
         "start",
-        "serve",
     }
 )
 

@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block content %}
+<nav class="breadcrumbs"><a href="/cgs/">comparison groups</a> &raquo; {{ cg.id }}</nav>
+<h1>CG <span class="mono">{{ cg.id }}</span></h1>
+
+<dl class="kv">
+  <dt>state</dt>
+  <dd><span class="state-pill state-{{ cg.state | short_state }}">{{ cg.state }}</span></dd>
+
+  <dt>proposal</dt>
+  <dd>
+    {% if cg.proposal_id %}
+    <a href="/proposals/{{ cg.proposal_id }}">{{ cg.proposal_id }}</a>
+    {% else %}—{% endif %}
+  </dd>
+
+  <dt>experiment definition</dt>
+  <dd class="mono">{{ cg.experiment_definition_id }}</dd>
+
+  <dt>factor model</dt>
+  <dd class="mono">{{ cg.factor_model_id or "—" }}</dd>
+
+  <dt>experiment plan hash</dt>
+  <dd class="mono">{{ cg.experiment_plan_hash or "—" }}</dd>
+
+  <dt>harness contract hash</dt>
+  <dd class="mono">{{ cg.harness_contract_hash or "—" }}</dd>
+
+  <dt>validation config hash</dt>
+  <dd class="mono">{{ cg.validation_config_hash or "—" }}</dd>
+
+  <dt>harness job handle</dt>
+  <dd class="mono">
+    {% if cg.harness_job_handle %}
+    {{ cg.harness_job_handle.plugin }}/{{ cg.harness_job_handle.handle }}
+    {% else %}—{% endif %}
+  </dd>
+
+  <dt>code review attempts</dt>
+  <dd>{{ cg.code_review_attempt }}</dd>
+
+  <dt>code review result hash</dt>
+  <dd class="mono">{{ cg.code_review_result_hash or "—" }}</dd>
+
+  <dt>created at</dt>
+  <dd>{{ cg.created_at | format_datetime }}</dd>
+
+  <dt>updated at</dt>
+  <dd>{{ cg.updated_at | format_datetime }}</dd>
+</dl>
+
+<section>
+  <h2>entries</h2>
+  {% if entries %}
+  {% for entry in entries %}
+  <article class="entry-card">
+    <header>
+      <h3 class="mono">{{ entry.id }}</h3>
+      <span class="state-pill state-{{ entry.state | short_state }}">{{ entry.state }}</span>
+      {% if entry.is_baseline %}<span class="badge">baseline</span>{% endif %}
+    </header>
+    <dl class="kv inline">
+      <dt>technique</dt>
+      <dd class="mono">{{ entry.technique_id or "—" }}</dd>
+      <dt>technique contract hash</dt>
+      <dd class="mono">{{ entry.technique_contract_hash or "—" }}</dd>
+      <dt>harness manifest hash</dt>
+      <dd class="mono">{{ entry.harness_api_manifest_hash or "—" }}</dd>
+      <dt>implementation attempts</dt>
+      <dd>{{ entry.implementation_attempt }}</dd>
+    </dl>
+
+    <h4>runs</h4>
+    {% set entry_runs = runs_per_entry.get(entry.id, []) %}
+    {% if entry_runs %}
+    <table class="entity-table compact">
+      <thead><tr><th>id</th><th>seed</th><th>state</th><th>updated at</th></tr></thead>
+      <tbody>
+        {% for run in entry_runs %}
+        <tr>
+          <td><a href="/runs/{{ run.id }}">{{ run.id }}</a></td>
+          <td>{{ run.seed }}</td>
+          <td><span class="state-pill state-{{ run.state | short_state }}">{{ run.state }}</span></td>
+          <td>{{ run.updated_at | format_datetime }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="empty-state compact">No runs yet for this entry.</p>
+    {% endif %}
+  </article>
+  {% endfor %}
+  {% else %}
+  <p class="empty-state">No entries on this CG.</p>
+  {% endif %}
+</section>
+{% endblock %}

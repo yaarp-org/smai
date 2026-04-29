@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% from "_state_filter.html" import state_filter %}
+{% block content %}
+<h1>comparison groups</h1>
+<p class="subtitle">
+  Active CGs in the CG-execution pipeline. Terminal CGs (<code>complete</code>,
+  <code>implementation_failed</code>, <code>running_failed</code>,
+  <code>evaluation_failed</code>) are reachable by direct id navigation.
+</p>
+
+{{ state_filter("/cgs/", available_states, filter_state) }}
+
+{% if cgs %}
+<table class="entity-table">
+  <thead>
+    <tr>
+      <th>id</th>
+      <th>proposal</th>
+      <th>state</th>
+      <th>updated at</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for cg in cgs %}
+    <tr>
+      <td><a href="/cgs/{{ cg.id }}">{{ cg.id }}</a></td>
+      <td>
+        {% if cg.proposal_id %}
+        <a href="/proposals/{{ cg.proposal_id }}">{{ cg.proposal_id }}</a>
+        {% else %}—{% endif %}
+      </td>
+      <td><span class="state-pill state-{{ cg.state | short_state }}">{{ cg.state }}</span></td>
+      <td>{{ cg.updated_at | format_datetime }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="empty-state" data-test="empty-cgs">No active comparison groups.</p>
+{% endif %}
+{% endblock %}

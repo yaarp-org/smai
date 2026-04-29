@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block content %}
+<nav class="breadcrumbs"><a href="/proposals/">proposals</a> &raquo; {{ proposal.id }}</nav>
+<h1>proposal <span class="mono">{{ proposal.id }}</span></h1>
+
+<dl class="kv">
+  <dt>state</dt>
+  <dd><span class="state-pill state-{{ proposal.state | short_state }}">{{ proposal.state }}</span></dd>
+
+  <dt>submission kind</dt>
+  <dd>{{ proposal.submission_kind }}</dd>
+
+  <dt>submitted by</dt>
+  <dd>{{ proposal.submitted_by or "—" }}</dd>
+
+  <dt>technique description artifact</dt>
+  <dd class="mono">{{ proposal.technique_description_artifact_key or "—" }}</dd>
+
+  <dt>reproduce-paper arxiv id</dt>
+  <dd>
+    {% if proposal.reproduce_paper_arxiv_id %}
+    <a href="/papers/{{ proposal.reproduce_paper_arxiv_id }}">{{ proposal.reproduce_paper_arxiv_id }}</a>
+    {% else %}—{% endif %}
+  </dd>
+
+  <dt>user decision</dt>
+  <dd>
+    {% if proposal.user_decision %}
+    <strong>{{ proposal.user_decision }}</strong>
+    {% if proposal.user_decided_at %}at {{ proposal.user_decided_at | format_datetime }}{% endif %}
+    {% else %}—{% endif %}
+  </dd>
+
+  <dt>design plan artifact</dt>
+  <dd class="mono">{{ proposal.design_plan_artifact_key or "—" }}</dd>
+
+  <dt>design attempts</dt>
+  <dd>{{ proposal.design_attempt }}</dd>
+
+  <dt>registration attempts</dt>
+  <dd>{{ proposal.registration_attempt }}</dd>
+
+  <dt>created at</dt>
+  <dd>{{ proposal.created_at | format_datetime }}</dd>
+
+  <dt>updated at</dt>
+  <dd>{{ proposal.updated_at | format_datetime }}</dd>
+</dl>
+
+{% if is_resting_at_human_gate %}
+<aside class="callout callout-action" data-test="proposal-human-gate">
+  <h3>awaiting your decision</h3>
+  <p>This proposal is parked at the human approval gate. Approve via:</p>
+  <pre><code>smai approve-proposal {{ proposal.id }}</code></pre>
+  <p>or reject via:</p>
+  <pre><code>smai reject-proposal {{ proposal.id }} --reason="..."</code></pre>
+</aside>
+{% elif is_decided_pending_registration %}
+<aside class="callout callout-info" data-test="proposal-decided">
+  <h3>decision recorded</h3>
+  <p>
+    Decision: <strong>{{ proposal.user_decision }}</strong>. The next worker
+    cycle will fire the corresponding edge out of <code>designed</code>.
+  </p>
+</aside>
+{% endif %}
+
+<section>
+  <h2>child comparison groups</h2>
+  {% if cgs %}
+  <table class="entity-table">
+    <thead>
+      <tr><th>id</th><th>state</th><th>updated at</th></tr>
+    </thead>
+    <tbody>
+      {% for cg in cgs %}
+      <tr>
+        <td><a href="/cgs/{{ cg.id }}">{{ cg.id }}</a></td>
+        <td><span class="state-pill state-{{ cg.state | short_state }}">{{ cg.state }}</span></td>
+        <td>{{ cg.updated_at | format_datetime }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty-state">No child CGs registered yet.</p>
+  {% endif %}
+</section>
+{% endblock %}
