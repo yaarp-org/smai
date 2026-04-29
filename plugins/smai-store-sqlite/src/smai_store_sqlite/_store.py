@@ -432,8 +432,12 @@ def _predicate_in_flight_harness_build() -> tuple[Table, ColumnElement[bool], ty
 
 
 def _predicate_ready_to_implement_entry() -> tuple[Table, ColumnElement[bool], type[Any]]:
-    # Entry is non-baseline (has a technique_id), in 'pending', and parent
-    # CG is in 'implementing'. Per ``07`` §5.6.3.
+    # Entry has a ``technique_id`` (excludes additive baselines per
+    # DEC-013), is in 'pending', and parent CG is in 'implementing'.
+    # Substitutive baselines (``is_baseline=True`` AND ``technique_id IS
+    # NOT NULL`` per DEC-013 / DEC-017) DO need implementation, so the
+    # filter is on ``technique_id IS NOT NULL`` rather than
+    # ``is_baseline=False``. Per ``07`` §5.6.3.
     parent_implementing = exists().where(
         and_(
             cgs_table.c.id == entries_table.c.cg_id,
@@ -444,7 +448,6 @@ def _predicate_ready_to_implement_entry() -> tuple[Table, ColumnElement[bool], t
         entries_table,
         and_(
             entries_table.c.state == "pending",
-            entries_table.c.is_baseline.is_(False),
             entries_table.c.technique_id.is_not(None),
             parent_implementing,
         ),

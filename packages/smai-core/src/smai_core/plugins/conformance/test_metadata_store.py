@@ -520,6 +520,90 @@ class MetadataStoreConformance:
             "in-flight runs query returned a run with NULL compute_job_handle"
         )
 
+    # ---- Ready-to-implement-entry filter correctness (R3 / F3) -------------
+    #
+    # Per DEC-013 / DEC-017 the implementer-dispatch scheduling query
+    # selects entries whose ``technique_id IS NOT NULL``. Both
+    # substitutive baselines (``is_baseline=True`` AND ``technique_id IS
+    # NOT NULL`` — e.g. a VGG architecture reference) AND treatments
+    # (``is_baseline=False``) need implementation; only additive baselines
+    # (``technique_id IS NULL``) skip the dispatch. Pre-R3 a `SqliteStore`
+    # filter additionally required ``is_baseline=False`` which silently
+    # excluded substitutive baselines — this test pins the corrected
+    # cross-plugin contract.
+
+    async def test_filter_correctness_ready_to_implement_entry_baseline_kinds(
+        self, store: MetadataStore
+    ) -> None:
+        """``get_ready_to_implement_entry`` returns substitutive
+        baselines + treatments and excludes additive baselines.
+
+        Seeds three pending entries whose parent CG is in
+        ``implementing``:
+
+        * additive baseline (``is_baseline=True``, ``technique_id=None``)
+          — excluded.
+        * substitutive baseline (``is_baseline=True``, ``technique_id``
+          set) — included.
+        * treatment (``is_baseline=False``, ``technique_id`` set) —
+          included.
+        """
+        await store.create_cg(
+            make_record(
+                ComparisonGroupRecord,
+                id="cg_rti_filter",
+                state="implementing",
+                version=1,
+            )
+        )
+        await store.create_entry(
+            make_record(
+                EntryRecord,
+                id="entry_rti_additive",
+                cg_id="cg_rti_filter",
+                state="pending",
+                version=1,
+                is_baseline=True,
+                technique_id=None,
+            )
+        )
+        await store.create_entry(
+            make_record(
+                EntryRecord,
+                id="entry_rti_substitutive",
+                cg_id="cg_rti_filter",
+                state="pending",
+                version=1,
+                is_baseline=True,
+                technique_id="tq_vgg",
+            )
+        )
+        await store.create_entry(
+            make_record(
+                EntryRecord,
+                id="entry_rti_treatment",
+                cg_id="cg_rti_filter",
+                state="pending",
+                version=1,
+                is_baseline=False,
+                technique_id="tq_treatment",
+            )
+        )
+
+        page = await store.get_ready_to_implement_entry(limit=100, cursor=None)
+        returned_ids = {e.id for e in page.items}
+        assert "entry_rti_additive" not in returned_ids, (
+            "additive baseline (technique_id IS NULL) must be excluded "
+            "from get_ready_to_implement_entry per DEC-013"
+        )
+        assert "entry_rti_substitutive" in returned_ids, (
+            "substitutive baseline (is_baseline=True with non-null "
+            "technique_id) must be included per DEC-013 / DEC-017 — "
+            "the over-restrictive ``is_baseline=False`` filter shape "
+            "would silently exclude it"
+        )
+        assert "entry_rti_treatment" in returned_ids
+
     # ---- In-flight count correctness ---------------------------------------
 
     @pytest.mark.parametrize(

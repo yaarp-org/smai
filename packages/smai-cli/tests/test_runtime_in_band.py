@@ -180,3 +180,91 @@ def test_experiments_service_constructed_via_runtime_property() -> None:
     # Instance-level smoke check; full lifecycle in async tests above.
     # This module-level test ensures the import surface is intact.
     assert ExperimentsService is not None
+
+
+@pytest.mark.asyncio
+async def test_run_one_cycle_drives_every_registered_spec(tmp_path: Path) -> None:
+    """``run_one_cycle()`` returns one :class:`WorkerCycleStats` per
+    registered spec — both ``cg_entries`` and ``cg_execution`` are
+    advanced each cycle (R3 / F1).
+
+    Before R3, only the CG-execution spec was driven; entries sat in
+    ``pending`` indefinitely unless a test manually fired
+    :meth:`MetadataStore.transition_entry_state`. The smoke test (Task
+    2.D3) papered over the gap; this assertion is the regression
+    pin.
+    """
+    overrides = PluginOverrides(
+        llm_providers={role: StubLlmProvider() for role in DEFAULT_TASK_ROLES},
+        artifact_store=LocalFsStore(tmp_path / "artifacts"),
+        compute=FakeCompute(),
+    )
+    config = _make_runtime_config()
+    async with Runtime.start_in_band(
+        config,
+        workspace_root=tmp_path / "workspaces",
+        plugin_overrides=overrides,
+        run_worker=False,
+    ) as runtime:
+        runtime.experiments._registries_factory = make_registries_with_technique  # type: ignore[attr-defined]
+        await runtime.experiments.submit_text(EXPERIMENT_YAML)
+        stats_per_spec = await runtime.run_one_cycle()
+        # Phase-2 ships exactly two SMAI specs (cg_entries + cg_execution).
+        assert isinstance(stats_per_spec, list)
+        assert len(stats_per_spec) == 2
+
+
+@pytest.mark.asyncio
+async def test_run_one_cycle_advances_treatment_entry_through_entry_spec(
+    tmp_path: Path,
+) -> None:
+    """Per R3 / F1 — ``run_one_cycle`` advances a treatment entry
+    through the ``cg_entries`` spec without manual
+    :meth:`MetadataStore.transition_entry_state` intervention.
+
+    Setup elides the harness-build path (which would normally drive
+    ``draft → implementing`` on the CG) by transitioning the CG
+    directly to ``implementing``. The treatment entry is then visible
+    to ``get_ready_to_implement_entry``; after one ``run_one_cycle``,
+    the entry-spec's phase-3 dispatch fires, submits a Compute job
+    against :class:`FakeCompute`, and the entry advances ``pending →
+    implementing`` with the resulting :class:`JobHandle` recorded on
+    ``EntryRecord.implementation_job_handle``.
+    """
+    artifact_store = LocalFsStore(tmp_path / "artifacts")
+    overrides = PluginOverrides(
+        llm_providers={role: StubLlmProvider() for role in DEFAULT_TASK_ROLES},
+        artifact_store=artifact_store,
+        compute=FakeCompute(),
+    )
+    config = _make_runtime_config()
+    async with Runtime.start_in_band(
+        config,
+        workspace_root=tmp_path / "workspaces",
+        plugin_overrides=overrides,
+        run_worker=False,
+    ) as runtime:
+        runtime.experiments._registries_factory = make_registries_with_technique  # type: ignore[attr-defined]
+        await runtime.experiments.submit_text(EXPERIMENT_YAML)
+
+        # Move the CG into ``implementing`` so the entry spec's phase-2
+        # query (gated on parent_state=implementing) discovers the
+        # treatment entry. This is the only manual entity transition
+        # the test performs — the entry-spec drive itself is what we
+        # are asserting on.
+        cg = await runtime.plugins.metadata_store.get_cg("cg_example")
+        assert cg is not None
+        await runtime.plugins.metadata_store.transition_cg_state(
+            "cg_example", cg.version, "implementing"
+        )
+
+        stats_per_spec = await runtime.run_one_cycle()
+        assert len(stats_per_spec) == 2
+
+        treatment = await runtime.plugins.metadata_store.get_entry("entry_cutout")
+        assert treatment is not None
+        assert treatment.state == "implementing", (
+            f"expected entry-spec to advance treatment entry to "
+            f"'implementing'; got state={treatment.state}"
+        )
+        assert treatment.implementation_job_handle is not None

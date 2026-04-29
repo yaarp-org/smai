@@ -112,6 +112,55 @@ async def test_submit_creates_entry_records_per_definition_entry(
 
 
 @pytest.mark.asyncio
+async def test_submit_lifts_additive_baseline_to_implemented(tmp_path: Path) -> None:
+    """Per R3 / F2 — additive baselines (``is_baseline=True`` AND
+    ``technique_id IS None``) are written directly in ``implemented``
+    by the CG-creation transaction.
+
+    The :class:`EntryRecord` docstring / DEC-013 / DEC-017 commit this
+    invariant: an additive baseline has no technique to implement, so
+    the orchestrator's implementer dispatch never fires for it. The
+    canonical lift point is the CG-creation transaction in both Phase
+    2 (``smai run`` direct creation — this codepath) and Phase 3 (the
+    proposal pipeline's registration transaction). Treatment entries
+    stay in ``pending`` — they have technique code that needs the
+    agent.
+    """
+    artifact_store = LocalFsStore(tmp_path / "artifacts")
+    overrides = PluginOverrides(
+        llm_providers={role: StubLlmProvider() for role in DEFAULT_TASK_ROLES},
+        artifact_store=artifact_store,
+        compute=FakeCompute(),
+    )
+    async with Runtime.start_in_band(
+        _make_config(),
+        workspace_root=tmp_path / "workspaces",
+        plugin_overrides=overrides,
+        run_worker=False,
+    ) as runtime:
+        runtime.experiments._registries_factory = make_registries_with_technique  # type: ignore[attr-defined]
+        await runtime.experiments.submit_text(EXPERIMENT_YAML)
+
+        baseline = await runtime.plugins.metadata_store.get_entry("entry_baseline")
+        assert baseline is not None
+        assert baseline.is_baseline is True
+        assert baseline.technique_id is None
+        assert baseline.state == "implemented", (
+            f"additive baseline must land in 'implemented' at registration; "
+            f"got state={baseline.state}"
+        )
+
+        treatment = await runtime.plugins.metadata_store.get_entry("entry_cutout")
+        assert treatment is not None
+        assert treatment.is_baseline is False
+        assert treatment.technique_id == "tech_cutout"
+        assert treatment.state == "pending", (
+            f"treatment entries must stay in 'pending' for the implementer "
+            f"dispatch; got state={treatment.state}"
+        )
+
+
+@pytest.mark.asyncio
 async def test_wait_for_terminal_times_out_on_non_terminal_cg(
     tmp_path: Path,
 ) -> None:

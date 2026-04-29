@@ -20,13 +20,23 @@ technique-implementer dispatch handlers are wired without their
 ``inline_runner`` test seam (the seam is only reachable when
 constructing dispatch handlers manually, per Task 2.B3 / 2.B4). To
 keep the smoke test using the canonical Tier-A entry path, the agent
-containers' side effects are pre-staged to :class:`ArtifactStore` +
-:class:`MetadataStore` before the worker drives cycles. The
-production dispatch handlers fire (workspace materialization included),
-submit fake jobs to :class:`SmokeFakeCompute`, and the orchestrator's
-phase-1 polling sees them as succeeded. The downstream gate bodies
-(manifest fanout, code review, runs dispatch with metric harvest,
-evaluation dispatch) all run against the pre-staged + real artifacts.
+containers' artifact side effects are pre-staged to
+:class:`ArtifactStore` before the worker drives cycles. The production
+dispatch handlers fire (workspace materialization included), submit
+fake jobs to :class:`SmokeFakeCompute`, and the orchestrator's phase-1
+polling sees them as succeeded. The downstream gate bodies (manifest
+fanout, code review, runs dispatch with metric harvest, evaluation
+dispatch) all run against the pre-staged + real artifacts.
+
+Post-R3 the smoke test no longer manually transitions
+:class:`EntryRecord` rows or pre-creates additive baselines in
+``implemented`` — those workarounds were paper-cuts over R3's three
+fixes (F1 multi-spec drive, F2 additive-baseline lift in
+``_create_cg_record``, F3 substitutive-baseline filter relaxation).
+The remaining mocking surface is ``(SmokeFakeCompute) +
+(ArtifactStore artifact pre-staging)``: the agent containers' actual
+multi-turn LLM loops are out of scope for the in-process smoke test
+(agent loops themselves are covered by ``packages/smai-agents/tests/``).
 
 Spec ambiguities resolved
 -------------------------
@@ -55,7 +65,11 @@ Spec ambiguities resolved
   approximation); cycle 4 ``running → evaluating`` (phase 3 runs-
   terminal gate + evaluation dispatch); cycle 5 ``evaluating →
   complete`` (phase 3 evaluation-artifacts-present gate). 8 is a
-  generous cap (matches `test_happy_path.py`'s budget).
+  generous cap (matches `test_happy_path.py`'s budget). Post-R3 each
+  ``run_one_cycle`` drives both the ``cg_execution`` and the
+  ``cg_entries`` specs in turn (F1) — the cycle bound is unchanged
+  because the entry-spec advancement is interleaved within the same
+  cadence.
 
 * **Determinism.** No clock-dependent gates, no real I/O against
   external services, no randomness. The test is deterministic by
@@ -67,9 +81,6 @@ explicitly not asserted by the smoke test:
 
 * The harness-builder and technique-implementer agent loops
   themselves (covered by ``packages/smai-agents/tests/``).
-* The ``cg_entries`` pipeline-spec's worker drive (:func:`Runtime.start_in_band`'s
-  worker only drives the CG-execution spec; entries spec is registered
-  but not driven — Phase 3 / Task 3.G3 territory).
 * Live-mode (real Bedrock + real LocalGpuCompute) — opt-in marker
   ``pytest.mark.live_smoke``, skipped on CI by default.
 """
@@ -406,24 +417,28 @@ def _build_smoke_manifest(harness_contract: HarnessContract) -> HarnessAPIManife
 
 async def _pre_stage_for_smoke(
     *,
-    metadata_store: Any,
     artifact_store: LocalFsStore,
     cg_id: str,
 ) -> _PreStaged:
-    """Pre-stage every agent-side artifact + per-entry state the gates expect.
+    """Pre-stage every agent-side artifact the gates read.
 
     Performs the work the harness-builder, technique-implementer, and
-    runtime containers would have done:
+    runtime containers would have written to :class:`ArtifactStore`:
 
     * harness/manifest.json + harness/validation_results.json + harness
       Python files.
-    * per-entry code/validation_results.json + per-non-baseline-entry
+    * per-entry code/validation_results.json + per-treatment-entry
       code/techniques/<technique>.py.
     * runs/<entry_id>/<seed>/metrics.json for every entry × seed.
-    * EntryRecord.state transitions ``pending → implemented`` for every
-      entry (the proposal-pipeline registration transaction would do
-      this in Phase 3 — see DEC-013 / `EntryRecord` docstring; Phase 2
-      ``submit_text`` creates them all in ``pending``).
+
+    Post-R3 the smoke test does NOT manually transition
+    :class:`EntryRecord` rows — the entry spec drives ``pending →
+    implementing → implemented`` via the F1 multi-spec
+    :meth:`Runtime.run_one_cycle`, and additive baselines land directly
+    in ``implemented`` from :func:`_create_cg_record` per F2. The
+    artifact pre-staging that remains is the ArtifactStore side-effect
+    of agent-container loops the in-process smoke test does not run
+    (covered separately under ``packages/smai-agents/tests/``).
 
     Returns the staged manifest for cross-checking in test assertions.
     """
@@ -447,42 +462,21 @@ async def _pre_stage_for_smoke(
         json.dumps({"passed": True}).encode("utf-8"),
     )
 
-    # 4. Stage per-entry artifacts + transition each entry to
-    #    ``implemented``. Both entries get a code/validation_results.json
-    #    (the entry-spec's success gate reads it; we don't drive the
-    #    entry spec here but stage it for completeness — defensive
-    #    against a future change that does drive it). Treatment entry
-    #    additionally gets the technique code the code-reviewer reads.
-    treatment_entry = await metadata_store.get_entry(SMOKE_TREATMENT_ENTRY_ID)
-    baseline_entry = await metadata_store.get_entry(SMOKE_BASELINE_ENTRY_ID)
-    assert treatment_entry is not None
-    assert baseline_entry is not None
-
-    for entry in (treatment_entry, baseline_entry):
+    # 4. Stage per-entry artifacts. Both entries get a
+    #    code/validation_results.json (the entry-spec's success gate
+    #    reads it for the treatment entry; the additive baseline never
+    #    reaches the entry-spec since F2 lands it in ``implemented`` at
+    #    registration). Treatment entry additionally gets the technique
+    #    code the code-reviewer reads.
+    for entry_id in (SMOKE_BASELINE_ENTRY_ID, SMOKE_TREATMENT_ENTRY_ID):
         await artifact_store.put(
-            TECHNIQUE_VALIDATION_KEY_TEMPLATE.format(cg_id=cg_id, entry_id=entry.id),
+            TECHNIQUE_VALIDATION_KEY_TEMPLATE.format(cg_id=cg_id, entry_id=entry_id),
             json.dumps({"passed": True}).encode("utf-8"),
         )
 
     await artifact_store.put(
         f"comparison-groups/{cg_id}/entries/{SMOKE_TREATMENT_ENTRY_ID}/code/techniques/{SMOKE_TECHNIQUE_ID}.py",
         TECHNIQUE_CODE_PY.encode("utf-8"),
-    )
-
-    # Entry state transitions. Phase-2 ``submit_text`` creates entries
-    # in ``pending``; we lift them to ``implemented`` directly because:
-    # (a) the cg_entries spec is registered but ``Runtime.run_one_cycle``
-    #     only drives the CG-execution spec (Phase 3 / Task 3.G3
-    #     elaborates multi-spec worker drive); and
-    # (b) per ``EntryRecord`` docstring, additive baselines belong in
-    #     ``implemented`` from the proposal-pipeline registration
-    #     transaction (Phase 3) — Phase 2's direct ``smai run`` path
-    #     hasn't lifted that detail yet.
-    await metadata_store.transition_entry_state(
-        treatment_entry.id, treatment_entry.version, "implemented"
-    )
-    await metadata_store.transition_entry_state(
-        baseline_entry.id, baseline_entry.version, "implemented"
     )
 
     # 5. Pre-stage per-(entry, seed=0) metrics.json. The runs dispatch
@@ -632,11 +626,14 @@ async def test_smoke_e2e_round_trip(tmp_path: Path) -> None:
         assert snap.state == "draft"
         transitions.append(snap.state)
 
-        # Pre-stage agent-side artifacts + transition entries to
-        # ``implemented`` (see :func:`_pre_stage_for_smoke` docstring
-        # for the rationale).
+        # Pre-stage the agent-container side-effect artifacts (see
+        # :func:`_pre_stage_for_smoke` docstring). Post-R3 there are no
+        # manual entry-state transitions or additive-baseline lifts to
+        # apply — F1 (multi-spec ``run_one_cycle``), F2 (additive
+        # baseline lifted in ``_create_cg_record``), and F3 (substitutive
+        # baseline included in ``get_ready_to_implement_entry``) cover
+        # each.
         staged = await _pre_stage_for_smoke(
-            metadata_store=runtime.plugins.metadata_store,
             artifact_store=artifact_store,
             cg_id=cg_id,
         )

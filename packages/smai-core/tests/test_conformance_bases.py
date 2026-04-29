@@ -193,6 +193,7 @@ _METADATA_EXPECTED_METHODS = {
     "test_filter_correctness_proposal_design_handle",
     "test_filter_correctness_paper_fetch_handle",
     "test_filter_correctness_run_handle",
+    "test_filter_correctness_ready_to_implement_entry_baseline_kinds",
     "test_count_in_state_multi_state_input",
     "test_count_with_in_flight_jobs_predicate",
     "test_acquire_then_acquire_fails",

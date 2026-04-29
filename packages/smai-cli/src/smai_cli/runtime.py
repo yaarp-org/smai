@@ -339,6 +339,18 @@ async def _create_cg_record(
     edge has the contract surfaces it needs immediately. The proposal
     side (Phase 3) populates the same hashes in its registration
     transaction (per `01-data-model.md` §5.3).
+
+    Additive baselines (``is_baseline=True`` and ``technique_id is None``)
+    are written directly in ``implemented`` per the :class:`EntryRecord`
+    docstring / DEC-013 / DEC-017 — they have no technique to implement
+    so the orchestrator's per-entry implementer dispatch never fires
+    for them. The CG-creation transaction is the canonical lift point
+    in both Phase 2 (this function — ``smai run`` direct creation) and
+    Phase 3 (the proposal pipeline's registration transaction).
+    Substitutive baselines (``is_baseline=True`` and
+    ``technique_id is not None``) and treatments (``is_baseline=False``)
+    stay in ``pending`` — both have technique code the agent must
+    implement.
     """
     now = datetime.now(UTC)
     cg = ComparisonGroupRecord(
@@ -353,26 +365,28 @@ async def _create_cg_record(
         created_at=now,
         updated_at=now,
     )
-    await metadata_store.create_cg(cg)
     contract_by_entry = {
         contract.body.entry_id: contract for contract in artifact_set.technique_contracts
     }
-    for entry in definition.entries:
-        contract = contract_by_entry.get(entry.id)
-        entry_record = EntryRecord(
-            id=entry.id,
-            cg_id=cg_id,
-            technique_id=entry.level.technique_id,
-            is_baseline=entry.is_baseline,
-            entry_id=entry.id,
-            technique_contract_hash=(
-                contract.envelope.content_hash if contract is not None else None
-            ),
-            state="pending",
-            created_at=now,
-            updated_at=now,
-        )
-        await metadata_store.create_entry(entry_record)
+    async with await metadata_store.transaction() as txn:
+        await txn.create_cg(cg)
+        for entry in definition.entries:
+            contract = contract_by_entry.get(entry.id)
+            is_additive_baseline = entry.is_baseline and entry.level.technique_id is None
+            entry_record = EntryRecord(
+                id=entry.id,
+                cg_id=cg_id,
+                technique_id=entry.level.technique_id,
+                is_baseline=entry.is_baseline,
+                entry_id=entry.id,
+                technique_contract_hash=(
+                    contract.envelope.content_hash if contract is not None else None
+                ),
+                state="implemented" if is_additive_baseline else "pending",
+                created_at=now,
+                updated_at=now,
+            )
+            await txn.create_entry(entry_record)
 
 
 # === Runtime =================================================================
@@ -383,7 +397,7 @@ class _RuntimeState:
     """Internal handle on the worker loop's lifecycle."""
 
     plugins: InstantiatedPlugins
-    cg_spec: PipelineSpec
+    specs: list[PipelineSpec]
     config: RuntimeConfig
     workspace_root: Path
     shutdown_event: asyncio.Event = field(default_factory=asyncio.Event)
@@ -479,15 +493,20 @@ class Runtime:
             # Register the SMAI Phase-2 specs (CG-execution + entry).
             llm_for_code_reviewer = plugins.llm_providers["code_reviewer"]
             llm_for_contextual_evaluator = plugins.llm_providers["contextual_evaluator"]
-            cg_spec, _entry_spec = register_smai_specs(
+            cg_spec, entry_spec = register_smai_specs(
                 workspace_root=workspace_root,
                 llm_for_code_reviewer=llm_for_code_reviewer,
                 llm_for_contextual_evaluator=llm_for_contextual_evaluator,
                 runtime_image=runtime_image,
             )
+            # Drive the per-entry spec before the CG-level spec each
+            # cycle so phase-1 advancement of in-flight entries lands
+            # before the CG spec re-evaluates its all-children-terminal
+            # gate. Both specs share the same shutdown_event in the
+            # background-worker path (`_run_worker_until_shutdown`).
             state = _RuntimeState(
                 plugins=plugins,
-                cg_spec=cg_spec,
+                specs=[entry_spec, cg_spec],
                 config=config,
                 workspace_root=workspace_root,
             )
@@ -538,21 +557,29 @@ class Runtime:
     def plugins(self) -> InstantiatedPlugins:
         return self._state.plugins
 
-    async def run_one_cycle(self) -> WorkerCycleStats:
-        """Run a single worker cycle synchronously.
+    async def run_one_cycle(self) -> list[WorkerCycleStats]:
+        """Run a single worker cycle synchronously across every
+        registered :class:`PipelineSpec`.
 
-        Used by tests that want deterministic cycle granularity (the
-        ``run_worker=False`` path of :meth:`start_in_band` skips the
-        background task and lets the caller drive cycles by hand).
+        Returns one :class:`WorkerCycleStats` per spec, in the same
+        order the specs are stored on :class:`_RuntimeState` (per-entry
+        spec first, then CG spec — see :meth:`start_in_band`). Tests
+        that drive cycles deterministically (``run_worker=False``) get
+        per-spec stats so they can assert per-spec phase counters
+        independently.
         """
-        return await run_worker_cycle(
-            spec=self._state.cg_spec.engine_spec(),
-            metadata_store=self._state.plugins.metadata_store,
-            artifact_store=self._state.plugins.artifact_store,
-            compute=self._state.plugins.compute,
-            llm_providers=dict(self._state.plugins.llm_providers),
-            config=self._state.config.engine,
-        )
+        stats_per_spec: list[WorkerCycleStats] = []
+        for spec in self._state.specs:
+            stats = await run_worker_cycle(
+                spec=spec.engine_spec(),
+                metadata_store=self._state.plugins.metadata_store,
+                artifact_store=self._state.plugins.artifact_store,
+                compute=self._state.plugins.compute,
+                llm_providers=dict(self._state.plugins.llm_providers),
+                config=self._state.config.engine,
+            )
+            stats_per_spec.append(stats)
+        return stats_per_spec
 
 
 def _parse_per_role_overrides(
@@ -580,22 +607,42 @@ def _parse_per_role_overrides(
 
 
 async def _run_worker_until_shutdown(state: _RuntimeState) -> None:
-    """Background worker task body."""
-    try:
-        await run_worker_loop(
-            spec=state.cg_spec.engine_spec(),
-            metadata_store=state.plugins.metadata_store,
-            artifact_store=state.plugins.artifact_store,
-            compute=state.plugins.compute,
-            llm_providers=dict(state.plugins.llm_providers),
-            config=state.config.engine,
-            shutdown_event=state.shutdown_event,
-            on_cycle_complete=_record_cycle(state),
+    """Background worker task body — one :func:`run_worker_loop` per
+    registered :class:`PipelineSpec`.
+
+    All loops share the same :attr:`_RuntimeState.shutdown_event`, so
+    the context-manager exit cleanly stops every spec at once. Per-spec
+    cycle stats are recorded into the shared ``state.cycle_stats`` list
+    (interleaved across specs) — tests that need per-spec slicing call
+    :meth:`Runtime.run_one_cycle` instead of inspecting the background
+    cycle log.
+    """
+    on_cycle = _record_cycle(state)
+    tasks = [
+        asyncio.create_task(
+            run_worker_loop(
+                spec=spec.engine_spec(),
+                metadata_store=state.plugins.metadata_store,
+                artifact_store=state.plugins.artifact_store,
+                compute=state.plugins.compute,
+                llm_providers=dict(state.plugins.llm_providers),
+                config=state.config.engine,
+                shutdown_event=state.shutdown_event,
+                on_cycle_complete=on_cycle,
+            )
         )
+        for spec in state.specs
+    ]
+    try:
+        await asyncio.gather(*tasks)
     except asyncio.CancelledError:
+        for task in tasks:
+            task.cancel()
         raise
     except Exception:  # noqa: BLE001 — log so background failures aren't silent
         _log.exception("smai dev worker loop crashed")
+        for task in tasks:
+            task.cancel()
         raise
 
 

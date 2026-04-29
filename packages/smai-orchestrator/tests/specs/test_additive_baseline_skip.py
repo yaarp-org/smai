@@ -33,11 +33,10 @@ async def test_get_ready_to_implement_entry_excludes_additive_baselines(
     """Per `07` §5.6.3 / DEC-013 — the scheduling query excludes
     entries with ``technique_id IS NULL`` (additive baselines).
 
-    The Task 2.A2 SqliteStore implementation filters
-    ``is_baseline=False AND technique_id NOT NULL``; this test
-    verifies the additive-baseline part of that filter (the
-    is_baseline filter additionally excludes substitutive baselines —
-    flagged below as a Task 2.A2 follow-up).
+    Post-R3 the SqliteStore filter is ``technique_id IS NOT NULL AND
+    state='pending'``; this test verifies the additive-baseline part of
+    that filter (the substitutive-baseline counterpart is asserted in
+    :func:`test_get_ready_to_implement_entry_includes_substitutive_baselines`).
     """
     cg_id = "cg-baseline"
     cg = make_cg(cg_id=cg_id, state="implementing")
@@ -73,27 +72,21 @@ async def test_get_ready_to_implement_entry_excludes_additive_baselines(
     assert "entry-additive-baseline" not in returned_ids
 
 
-async def test_substitutive_baseline_filter_gap_carry_forward(
+async def test_get_ready_to_implement_entry_includes_substitutive_baselines(
     sqlite_store: SqliteStore,
 ) -> None:
-    """**Carry-forward to Task 2.A2:** the SqliteStore's
-    ``_predicate_ready_to_implement_entry`` filters ``is_baseline=False``
-    in addition to ``technique_id NOT NULL``, which excludes
-    substitutive baselines (which per DEC-013 have ``is_baseline=True``
-    AND ``technique_id != None`` AND require implementation).
+    """Per DEC-013 / DEC-017 — substitutive baselines (``is_baseline=True``
+    AND ``technique_id IS NOT NULL``, e.g. a VGG reference in an
+    architecture CG) DO need implementation and must appear in the
+    scheduling-query result.
 
-    Per DEC-013 substitutive baselines have real technique code and
-    must enter the implementer dispatch path. The current filter shape
-    is over-restrictive; deployments that need substitutive baselines
-    must pre-stage them in ``implemented`` state via the proposal-
-    pipeline registration transaction, OR Task 2.A2 should relax the
-    filter to ``technique_id IS NOT NULL`` only (dropping the
-    ``is_baseline=False`` clause).
-
-    This test documents the current behavior and the gap; it locks
-    behavior so a future SqliteStore change is intentional.
+    Pre-R3 (the C4 carry-forward) the SqliteStore filter was
+    ``is_baseline=False AND technique_id NOT NULL`` which silently
+    excluded substitutive baselines. R3 / F3 dropped the
+    ``is_baseline=False`` clause; this test pins the corrected
+    behavior so a future regression surfaces immediately.
     """
-    cg_id = "cg-sub-baseline-gap"
+    cg_id = "cg-sub-baseline-fixed"
     cg = make_cg(cg_id=cg_id, state="implementing")
     await sqlite_store.create_cg(cg)
     sub_baseline = make_entry(
@@ -104,8 +97,20 @@ async def test_substitutive_baseline_filter_gap_carry_forward(
         is_baseline=True,
     )
     await sqlite_store.create_entry(sub_baseline)
+    treatment = make_entry(
+        "entry-treatment-fixed",
+        cg_id=cg_id,
+        state="pending",
+        technique_id="tq-1",
+        is_baseline=False,
+    )
+    await sqlite_store.create_entry(treatment)
 
     page = await sqlite_store.get_ready_to_implement_entry(limit=100)
-    # CURRENT BEHAVIOR — substitutive baseline excluded by is_baseline=False filter.
-    # This is the carry-forward to Task 2.A2 to relax.
-    assert "entry-vgg" not in {e.id for e in page.items}
+    returned_ids = {e.id for e in page.items}
+
+    # Both substitutive baseline AND treatment are returned.
+    assert "entry-vgg" in returned_ids, (
+        "substitutive baseline must be returned by get_ready_to_implement_entry (R3 / F3 fix)"
+    )
+    assert "entry-treatment-fixed" in returned_ids
