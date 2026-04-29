@@ -87,6 +87,26 @@ class AgentLoopConfig(BaseModel):
     """How often the loop polls for a supervisor nudge file. Set to
     ``0`` to disable."""
 
+    supervisor_check_every_turns: int = 0
+    """How often the loop runs the supervisor between-turn check (Task
+    3.G4 / ``04-agents.md`` §2.6). Default ``0`` (disabled at the loop
+    level — the supervisor needs an :class:`LlmProvider` for the
+    ``supervisor`` role in :attr:`AgentSession.llm_providers`, so an
+    ad-hoc test session that doesn't wire one shouldn't accidentally
+    activate the check). The orchestrator's dispatch handlers translate
+    :class:`smai_orchestrator.engine.config.EngineConfig.supervisor_enabled`
+    + :class:`...EngineConfig.supervisor_check_every_n_turns` into this
+    field at session-construction time."""
+
+    supervisor_recent_snapshot_count: int = 5
+    """How many recent status snapshots the supervisor's input bundle
+    carries. Bounded so a long-running session doesn't unboundedly
+    grow :attr:`AgentSession.recent_status_snapshots`."""
+
+    supervisor_recent_tool_call_count: int = 10
+    """How many recent tool-call names the supervisor's input bundle
+    carries. Same bound rationale as :attr:`supervisor_recent_snapshot_count`."""
+
     truncation_check_every_turns: int = 1
     """How often the loop checks the truncation threshold. Set to ``0``
     to disable."""
@@ -115,6 +135,12 @@ class AgentOutcome(BaseModel):
     usage_total: TokenUsage
     finish_summary: str | None = None
     finish_success: bool | None = None
+    supervisor_reason: str | None = None
+    """Populated only when ``kind == 'aborted_by_supervisor'`` (Task
+    3.G4) — carries the supervisor's :attr:`SupervisorDecision.reason`
+    so the dispatch handler can route the parent entity to a
+    ``*_failed`` state with a human-readable diagnostic. ``None`` for
+    every other kind."""
 
 
 class AgentSession(BaseModel):
@@ -184,7 +210,36 @@ class AgentSession(BaseModel):
     )
     nudges_consumed: int = 0
     truncations_fired: int = 0
+    supervisor_checks_fired: int = 0
     """Diagnostic counters per §3.4's debug logging."""
+
+    recent_status_snapshots: list[dict[str, Any]] = Field(default_factory=list[dict[str, Any]])
+    """Bounded ring of the most-recent status payloads the loop's
+    between-turn :func:`smai_agents.between_turn.write_status`
+    produced. Trimmed to
+    :attr:`AgentLoopConfig.supervisor_recent_snapshot_count` on append.
+    Consumed by the supervisor's between-turn hook (Task 3.G4) so the
+    supervisor sees the structured signal without reading
+    :class:`ArtifactStore`."""
+
+    recent_tool_call_names: list[str] = Field(default_factory=list[str])
+    """Bounded ring of recently invoked tool names (most-recent-last).
+    Trimmed to
+    :attr:`AgentLoopConfig.supervisor_recent_tool_call_count` on append.
+    Lets the supervisor (Task 3.G4) detect "agent stuck reading the
+    same file repeatedly" without seeing the full conversation trace."""
+
+    supervisor_aborted: bool = False
+    """Set to ``True`` by
+    :func:`smai_agents.between_turn.maybe_run_supervisor_check` when
+    the supervisor returned ``action='abort'``. The loop checks this
+    flag after every between-turn cycle and exits with
+    :class:`AgentOutcome` ``kind='aborted_by_supervisor'``."""
+
+    supervisor_abort_reason: str | None = None
+    """The :attr:`SupervisorDecision.reason` from the abort decision,
+    propagated onto the terminal :class:`AgentOutcome`. ``None`` when
+    :attr:`supervisor_aborted` is ``False``."""
 
     config: AgentLoopConfig = Field(default_factory=AgentLoopConfig)
 
@@ -272,6 +327,19 @@ async def run_loop(session: AgentSession) -> AgentOutcome:
             and session.turn_count % session.config.status_write_every_turns == 0
         ):
             await between_turn.write_status(session)
+        if (
+            session.config.supervisor_check_every_turns > 0
+            and session.turn_count > 0
+            and session.turn_count % session.config.supervisor_check_every_turns == 0
+        ):
+            await between_turn.maybe_run_supervisor_check(session)
+            if session.supervisor_aborted:
+                return AgentOutcome(
+                    kind="aborted_by_supervisor",
+                    turn_count=session.turn_count,
+                    usage_total=session.usage_total,
+                    supervisor_reason=session.supervisor_abort_reason,
+                )
 
         # ---- Turn: model call through the LlmProvider plugin ----
         response: ModelResponse = await session.llm.call(
@@ -347,6 +415,13 @@ async def _execute_tool_uses(
     for block in assistant_message.content:
         if not isinstance(block, ToolUseContent):
             continue
+
+        # Record the tool-call name for the supervisor's between-turn
+        # check (Task 3.G4). Bounded ring; trim to the configured cap.
+        session.recent_tool_call_names.append(block.name)
+        cap = session.config.supervisor_recent_tool_call_count
+        if cap > 0 and len(session.recent_tool_call_names) > cap:
+            del session.recent_tool_call_names[: len(session.recent_tool_call_names) - cap]
 
         tool = session.tools.get(block.name)
         if tool is None:

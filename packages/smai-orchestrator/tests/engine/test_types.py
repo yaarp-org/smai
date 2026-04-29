@@ -42,6 +42,29 @@ def test_engine_config_defaults() -> None:
     assert cfg.wall_clock is default_wall_clock
 
 
+def test_engine_config_supervisor_defaults() -> None:
+    """Task 3.G4: supervisor is default-on; cadence default is every turn."""
+    cfg = EngineConfig()
+    assert cfg.supervisor_enabled is True
+    assert cfg.supervisor_check_every_n_turns == 1
+
+
+def test_engine_config_supervisor_can_be_disabled() -> None:
+    """Deployment override flips the master switch."""
+    cfg = EngineConfig(supervisor_enabled=False)
+    assert cfg.supervisor_enabled is False
+    # ``supervisor_check_every_n_turns`` is still tunable but ignored
+    # by handlers when ``supervisor_enabled=False``.
+    assert cfg.supervisor_check_every_n_turns == 1
+
+
+def test_engine_config_supervisor_cadence_override() -> None:
+    """Deployment can change the cadence without disabling."""
+    cfg = EngineConfig(supervisor_check_every_n_turns=5)
+    assert cfg.supervisor_enabled is True
+    assert cfg.supervisor_check_every_n_turns == 5
+
+
 def test_time_provider_substitution() -> None:
     fake = FakeMonotonic(start=10.0)
     cfg = EngineConfig(time_provider=fake)

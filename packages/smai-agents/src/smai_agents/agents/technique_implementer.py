@@ -136,6 +136,7 @@ async def run_technique_implementer_session(
     prompt_config: PromptConfig | None = None,
     config: AgentLoopConfig | None = None,
     runner: SessionRunner | None = None,
+    supervisor_llm: LlmProvider | None = None,
 ) -> AgentOutcome:
     """Drive the technique-implementer agent loop in-process.
 
@@ -269,6 +270,10 @@ async def run_technique_implementer_session(
     # === AgentSession =======================================================
     from smai_core.plugins import NormalizedMessage, TextContent  # noqa: PLC0415
 
+    llm_providers: dict[TaskRole, LlmProvider] = {_TECHNIQUE_IMPLEMENTER_ROLE: llm}
+    if supervisor_llm is not None:
+        llm_providers["supervisor"] = supervisor_llm
+
     session = AgentSession(
         system_prompt=cfg.system_prompt,
         messages=[
@@ -278,7 +283,7 @@ async def run_technique_implementer_session(
             )
         ],
         tools=tools,
-        llm_providers={_TECHNIQUE_IMPLEMENTER_ROLE: llm},
+        llm_providers=llm_providers,
         current_role=_TECHNIQUE_IMPLEMENTER_ROLE,
         workspace_path=workspace_path,
         artifact_store=artifact_store,
@@ -489,6 +494,21 @@ def make_dispatch_technique_implementation(
 
         workspace_path = workspace_root / cg_id / entry_id
 
+        # Translate :class:`EngineConfig` supervisor settings (Task
+        # 3.G4) into the loop's :class:`AgentLoopConfig`. Some unit
+        # tests leave ``ctx.config = None``; treat that as "supervisor
+        # off" so those tests don't have to wire a full config in.
+        engine_config = getattr(ctx, "config", None)
+        if (
+            engine_config is not None
+            and getattr(engine_config, "supervisor_enabled", False) is True
+        ):
+            supervisor_on = True
+            supervisor_cadence = int(getattr(engine_config, "supervisor_check_every_n_turns", 0))
+        else:
+            supervisor_on = False
+            supervisor_cadence = 0
+        loop_config = AgentLoopConfig(supervisor_check_every_turns=supervisor_cadence)
         await run_technique_implementer_session(
             workspace_path=workspace_path,
             cg_id=cg_id,
@@ -514,6 +534,8 @@ def make_dispatch_technique_implementation(
             prev_conversation_trace_path=prev_trace_key,
             implementation_attempt=entry_record.implementation_attempt,
             runner=inline_runner,
+            supervisor_llm=llm if supervisor_on else None,
+            config=loop_config,
         )
         return DispatchOutcome(
             submitted_handles=[

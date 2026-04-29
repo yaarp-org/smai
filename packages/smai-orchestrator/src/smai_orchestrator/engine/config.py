@@ -131,5 +131,32 @@ class EngineConfig(BaseModel):
     §6). Tenant id → weight. Only meaningful when
     :attr:`fair_scheduling` is ``"weighted"``; ignored otherwise."""
 
+    # ---- Supervisor (Task 3.G4 / `04-agents.md` §2.6 / §15 OQ2) -----------
+
+    supervisor_enabled: bool = True
+    """Master switch for the between-turn supervisor check
+    (``04-agents.md`` §2.6). Default-on per the Task 3.G4 brief; the
+    multi-turn agent dispatch handlers (harness builder, technique
+    implementer, planner) translate this into the supervised
+    :class:`smai_agents.AgentLoopConfig.supervisor_check_every_turns`
+    field at session-construction time. Set to ``False`` to disable
+    the supervisor across the deployment without changing per-handler
+    code.
+
+    Per §15 OQ2 the *invocation lifecycle* (where in the worker loop
+    the stuck-detection signal evaluation lives, what the
+    configurable thresholds look like) is open; v2 ships a
+    cadence-driven trigger via :attr:`supervisor_check_every_n_turns`
+    and lets richer signal sources land later without a config-shape
+    break."""
+
+    supervisor_check_every_n_turns: int = 1
+    """Cadence in turns for the between-turn supervisor check
+    (``04-agents.md`` §2.6 / §15 OQ2). v2 default ``1`` (every turn)
+    matches v1's ``agent_design.md`` §5 default. Tuned per deployment
+    via the same config-layering pipeline as the rest of
+    :class:`EngineConfig`. Ignored when :attr:`supervisor_enabled` is
+    ``False``."""
+
 
 __all__ = ["EngineConfig", "RetryPolicy"]

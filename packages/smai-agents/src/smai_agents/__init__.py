@@ -43,17 +43,20 @@ from smai_agents.agents import (
     ContextualEvaluatorEntry,
     ContextualEvaluatorInput,
     EntryUnderReview,
+    SupervisorInput,
     make_dispatch_harness_build,
     make_dispatch_technique_implementation,
     make_emit_harness_manifest_tool,
     run_code_review,
     run_contextual_evaluation,
     run_harness_builder_session,
+    run_supervisor_check,
     run_technique_implementer_session,
 )
 from smai_agents.between_turn import (
     SUPERVISOR_NUDGE_PREFIX,
     lint_after_python_write,
+    maybe_run_supervisor_check,
     wait_for_compute_job,
 )
 from smai_agents.cache import (
@@ -95,6 +98,8 @@ from smai_agents.schemas import (
     ContextualVerdict,
     EntryRanking,
     Finding,
+    SupervisorAction,
+    SupervisorDecision,
 )
 from smai_agents.std_tools import (
     EDIT_FILE_TOOL_NAME,
@@ -197,6 +202,9 @@ __all__ = [
     "StandardToolName",
     "StructuredCallFailed",
     "StructuredOutputTool",
+    "SupervisorAction",
+    "SupervisorDecision",
+    "SupervisorInput",
     "TaskRole",
     "Tool",
     "ToolBinding",
@@ -223,11 +231,13 @@ __all__ = [
     "make_run_experiment_tool",
     "make_search_tool",
     "make_write_file_tool",
+    "maybe_run_supervisor_check",
     "render_initial_user_message",
     "run_code_review",
     "run_contextual_evaluation",
     "run_harness_builder_session",
     "run_loop",
+    "run_supervisor_check",
     "run_technique_implementer_session",
     "structured_call",
     "truncate_tool_output",

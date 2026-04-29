@@ -35,6 +35,10 @@ from smai_agents.agents.manifest_tool import (
     EMIT_HARNESS_MANIFEST_TOOL_NAME,
     make_emit_harness_manifest_tool,
 )
+from smai_agents.agents.supervisor import (
+    SupervisorInput,
+    run_supervisor_check,
+)
 from smai_agents.agents.technique_implementer import (
     ContextKind,
     make_dispatch_technique_implementation,
@@ -49,11 +53,13 @@ __all__ = [
     "ContextualEvaluatorEntry",
     "ContextualEvaluatorInput",
     "EntryUnderReview",
+    "SupervisorInput",
     "make_dispatch_harness_build",
     "make_dispatch_technique_implementation",
     "make_emit_harness_manifest_tool",
     "run_code_review",
     "run_contextual_evaluation",
     "run_harness_builder_session",
+    "run_supervisor_check",
     "run_technique_implementer_session",
 ]

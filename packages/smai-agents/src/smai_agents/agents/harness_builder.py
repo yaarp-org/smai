@@ -127,6 +127,7 @@ async def run_harness_builder_session(
     prompt_config: PromptConfig | None = None,
     config: AgentLoopConfig | None = None,
     runner: SessionRunner | None = None,
+    supervisor_llm: LlmProvider | None = None,
 ) -> AgentOutcome:
     """Drive the harness-builder agent loop in-process.
 
@@ -217,6 +218,10 @@ async def run_harness_builder_session(
     # === AgentSession =======================================================
     from smai_core.plugins import NormalizedMessage, TextContent  # noqa: PLC0415
 
+    llm_providers: dict[TaskRole, LlmProvider] = {_HARNESS_BUILDER_ROLE: llm}
+    if supervisor_llm is not None:
+        llm_providers["supervisor"] = supervisor_llm
+
     session = AgentSession(
         system_prompt=cfg.system_prompt,
         messages=[
@@ -226,7 +231,7 @@ async def run_harness_builder_session(
             )
         ],
         tools=tools,
-        llm_providers={_HARNESS_BUILDER_ROLE: llm},
+        llm_providers=llm_providers,
         current_role=_HARNESS_BUILDER_ROLE,
         workspace_path=workspace_path,
         artifact_store=artifact_store,
@@ -371,6 +376,27 @@ def make_dispatch_harness_build(
         # synthesizes a JobHandle. Production leaves this None and the
         # branch below submits via Compute.
         if inline_runner is not None:
+            # Translate :class:`EngineConfig` supervisor settings (Task
+            # 3.G4) into the loop's :class:`AgentLoopConfig`. The
+            # representative ``ctx.llm`` provider doubles as the
+            # supervisor LLM in the C2 single-LLM-per-context shape;
+            # per-role plumbing is the natural follow-up when a
+            # deployment lands per-role models. Some unit tests leave
+            # ``ctx.config = None``; treat that as "supervisor off" so
+            # those tests don't have to wire a full config in.
+            engine_config = getattr(ctx, "config", None)
+            if (
+                engine_config is not None
+                and getattr(engine_config, "supervisor_enabled", False) is True
+            ):
+                supervisor_on = True
+                supervisor_cadence = int(
+                    getattr(engine_config, "supervisor_check_every_n_turns", 0)
+                )
+            else:
+                supervisor_on = False
+                supervisor_cadence = 0
+            loop_config = AgentLoopConfig(supervisor_check_every_turns=supervisor_cadence)
             await run_harness_builder_session(
                 workspace_path=workspace_path,
                 harness_contract=harness_contract,
@@ -384,6 +410,8 @@ def make_dispatch_harness_build(
                 run_experiment_image=run_experiment_image,
                 run_experiment_gpu=run_experiment_gpu,
                 runner=inline_runner,
+                supervisor_llm=llm if supervisor_on else None,
+                config=loop_config,
             )
             return DispatchOutcome(
                 submitted_handles=[

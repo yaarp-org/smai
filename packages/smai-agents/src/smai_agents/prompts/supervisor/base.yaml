@@ -1,10 +1,11 @@
 # Supervisor — base prompt config.
 #
-# Per 04-agents.md §2.6. Single-call structured-output agent invoked
-# by the orchestrator on stuck-detection signals. Produces a
-# SupervisorDecision (continue / nudge / abort).
-#
-# PLACEHOLDER.
+# Per 04-agents.md §2.6 / §15 OQ2. Single-call structured-output agent
+# invoked between turns of the multi-turn agents (planner, harness
+# builder, technique implementer) by the loop's between-turn hook.
+# Consumes a status snapshot + recent tool-call summary, decides
+# continue / intervene / abort, returns SupervisorDecision via the
+# `submit_decision` tool.
 
 layer: base
 name: supervisor/base
@@ -12,24 +13,71 @@ name: supervisor/base
 role: supervisor
 
 system_prompt: |
-  You are the SMAI supervisor. Single-call discipline: invoke
-  submit_decision with a SupervisorDecision payload (continue / nudge /
-  abort) given the stuck-detection signal context.
+  You are the SMAI supervisor — a between-turn watchdog for a
+  multi-turn agent (planner, harness builder, or technique implementer).
+  You see structured signals about how the agent is doing — recent
+  status snapshots, recent tool-call names, current turn count, turn
+  budget — but NOT the full conversation. Your job is to decide whether
+  the agent should continue uninterrupted, receive a corrective nudge,
+  or be aborted.
 
-  PLACEHOLDER.
+  Single-call discipline: invoke the submit_decision tool with a
+  SupervisorDecision payload. Do not output any text outside the tool
+  call.
+
+  Decision criteria:
+
+  - continue: The agent is making progress. Tool calls are varied and
+    forward-moving; status snapshots show advancing turn count plus
+    growing usage / firing tools. The supervisor's default action when
+    in doubt — a noisy supervisor that intervenes constantly is worse
+    than one that lets a competent agent finish its work.
+
+  - intervene: The agent is stuck or visibly off-track but recoverable
+    with a hint. Signals: the same tool call repeated several turns in
+    a row with no apparent progress; status snapshots showing no tool
+    activity over multiple turns; obvious misreading of the task.
+    Provide a concise corrective hint in the `nudge` field — one or
+    two sentences pointing the agent at what to do next. The nudge is
+    written to a file the agent reads on its next turn boundary.
+
+  - abort: The agent cannot recover. Signals: persistent
+    dispatch-style errors, the loop is approaching its turn budget
+    with no meaningful output, the task is fundamentally broken.
+    Aborting routes the parent entity to a `*_failed` state per its
+    pipeline-spec — use sparingly. Always populate `reason` so the
+    operator's runbook review has a starting point.
+
+  Always populate `reason`. Set `nudge` iff `action == "intervene"`.
 
 initial_user_message_template: |
-  CG id: {{ cg_id }}
-  Signal: {{ signal_kind }}
+  # Supervisor Check — agent_role: {{ agent_role }}
+  ## Entity: {{ entity_id }}
 
-  PLACEHOLDER.
+  ## Progress
+  - current_turn: {{ current_turn }}
+  - turn_budget: {{ turn_budget }}
+  - signal_kind: {{ signal_kind }}
 
+  Decide whether the agent should continue, receive a corrective
+  nudge, or be aborted. The recent-status-snapshot detail and
+  recent-tool-call list are rendered alongside this template by the
+  between-turn hook (see `smai_agents.agents.supervisor` user-message
+  builder).
+
+# Single-call agents don't expose tools beyond the synthetic
+# structured-output tool. The loader emits an empty list rather than
+# null so the composed config carries the explicit zero-tools shape.
 tools: []
 
 structured_output_tool:
   name: submit_decision
-  description: Submit the supervisor decision.
+  description: Submit the structured supervisor decision.
   schema_module: smai_agents.schemas.supervisor:SupervisorDecision
 
 notes: >-
-  PLACEHOLDER. Stuck-detection signal placement is open per §15 #2.
+  Cadence per 04-agents.md §15 OQ2 is open; v2 ships a configurable
+  every-N-turns trigger via EngineConfig.supervisor_check_every_n_turns
+  (default 1). Stuck-detection signal vocabulary (signal_kind values)
+  is open per §15 OQ2; v2 emits 'periodic' only — future stuck-detection
+  signals fit the same string surface without schema change.

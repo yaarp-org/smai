@@ -20,10 +20,16 @@ from smai_agents.schemas.contextual_verdict import (
     ContextualVerdict,
     EntryRanking,
 )
+from smai_agents.schemas.supervisor import (
+    SupervisorAction,
+    SupervisorDecision,
+)
 
 __all__ = [
     "CodeReviewResult",
     "ContextualVerdict",
     "EntryRanking",
     "Finding",
+    "SupervisorAction",
+    "SupervisorDecision",
 ]

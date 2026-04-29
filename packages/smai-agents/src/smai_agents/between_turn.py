@@ -163,16 +163,20 @@ async def write_status(session: AgentSession) -> None:
     enough to power v1's stuck-detection signals (status unchanged 25+
     min, same error 3+ times, many turns without writes).
 
-    No-op when no :attr:`AgentSession.artifact_store` /
+    Also records the snapshot in
+    :attr:`AgentSession.recent_status_snapshots` (bounded ring) so the
+    supervisor's between-turn hook (§2.6) can consume the structured
+    summary without going back to :class:`ArtifactStore`. The
+    in-memory ring is updated even when no
+    :attr:`AgentSession.artifact_store` is configured — the snapshot
+    is the supervisor's primary signal regardless of substrate.
+
+    No-op (skips the store write only) when no
+    :attr:`AgentSession.artifact_store` /
     :attr:`AgentSession.status_artifact_path`. The loop's
     ``status_write_every_turns`` config controls cadence; this function
     runs unconditionally when called.
     """
-    store = session.artifact_store
-    path = session.status_artifact_path
-    if store is None or path is None:
-        return
-
     payload: dict[str, Any] = {
         "role": session.current_role,
         "turn_count": session.turn_count,
@@ -181,8 +185,163 @@ async def write_status(session: AgentSession) -> None:
         "nudges_consumed": session.nudges_consumed,
         "truncations_fired": session.truncations_fired,
     }
+
+    # Always record in-memory for the supervisor (Task 3.G4) — bounded
+    # ring trimmed to the configured cap.
+    session.recent_status_snapshots.append(dict(payload))
+    cap = session.config.supervisor_recent_snapshot_count
+    if cap > 0 and len(session.recent_status_snapshots) > cap:
+        del session.recent_status_snapshots[: len(session.recent_status_snapshots) - cap]
+
+    store = session.artifact_store
+    path = session.status_artifact_path
+    if store is None or path is None:
+        return
+
     body = json.dumps(payload, sort_keys=True).encode("utf-8")
     await store.put(path, body, content_type="application/json")
+
+
+# === Supervisor between-turn check (§2.6 / §15 OQ2) =========================
+
+
+async def maybe_run_supervisor_check(session: AgentSession) -> None:
+    """Run the supervisor agent against the session's recent activity.
+
+    Per ``04-agents.md`` §2.6: between-turn dispatch — the loop calls
+    this every ``AgentLoopConfig.supervisor_check_every_turns`` turns
+    (Task 3.G4). The hook:
+
+    1. Resolves the supervisor :class:`smai_core.plugins.LlmProvider`
+       from :attr:`AgentSession.llm_providers` (key
+       ``'supervisor'``). When the supervised session has no supervisor
+       provider wired, this is a no-op + warning — the dispatch handler
+       is responsible for wiring one when ``EngineConfig.supervisor_enabled``
+       is set.
+    2. Builds :class:`smai_agents.agents.supervisor.SupervisorInput`
+       from the session's recent status snapshots + recent tool-call
+       names + role / turn / budget.
+    3. Calls :func:`smai_agents.agents.supervisor.run_supervisor_check`.
+    4. Applies the decision:
+
+       * ``continue`` — no-op.
+       * ``intervene`` — writes the nudge text to the same
+         :attr:`AgentSession.nudge_artifact_path` location that
+         :func:`maybe_check_supervisor_nudge` polls; the next turn's
+         pre-turn cycle picks it up and injects it into the
+         conversation per §3.2's ``[supervisor nudge]`` convention.
+       * ``abort`` — sets :attr:`AgentSession.supervisor_aborted` and
+         records the supervisor's reason; the loop body checks this
+         flag after the between-turn cycle and exits with
+         :class:`AgentOutcome` ``kind='aborted_by_supervisor'`` per the
+         dispatch handler's *_failed routing.
+
+    On a :class:`StructuredCallFailed` raised by the supervisor (both
+    attempts produced text instead of a tool call — DEC-018), the hook
+    logs a warning and continues. A flaky supervisor is a config
+    issue; we do not abort the supervised agent on the supervisor's
+    own protocol failure.
+
+    Per §2.6 the supervisor "does NOT see the full conversation trace"
+    — this hook respects that: only the in-memory bounded snapshots +
+    tool-call names go into :class:`SupervisorInput`. The conversation
+    history stays on the supervised session.
+    """
+    # Imported locally to break the cycle: between_turn ↔ agents.supervisor
+    # ↔ schemas.supervisor — the agents.supervisor module imports
+    # PromptConfig, which transitively pulls smai_agents.prompts; that
+    # surface is fine, but we keep the supervisor-specific import here
+    # so unrelated tests (loop.run_loop with supervisor disabled) don't
+    # pay the import cost.
+    from smai_agents.agents.supervisor import (  # noqa: PLC0415
+        SupervisorInput,
+        run_supervisor_check,
+    )
+    from smai_agents.structured_call import StructuredCallFailed  # noqa: PLC0415
+
+    supervisor_llm = session.llm_providers.get("supervisor")
+    if supervisor_llm is None:
+        logger.warning(
+            "agent loop: supervisor check requested but no 'supervisor' LlmProvider "
+            "wired into session.llm_providers (turn=%d, role=%s); skipping",
+            session.turn_count,
+            session.current_role,
+        )
+        return
+
+    # Resolve the supervised entity id from the status path. The status
+    # path templates carry the entity id verbatim per the per-role
+    # dispatch handlers (e.g.,
+    # ``comparison-groups/{cg_id}/harness/status.json``); we surface
+    # the full path as ``entity_id`` when no narrower extraction is
+    # available — the supervisor's prompt only needs a stable handle
+    # for traceability. Tests pass a clean entity_id directly when
+    # they want one.
+    entity_id = session.status_artifact_path or "<unknown>"
+
+    inp = SupervisorInput(
+        agent_role=session.current_role,
+        entity_id=entity_id,
+        current_turn=session.turn_count,
+        turn_budget=session.config.max_turns,
+        recent_status_snapshots=list(session.recent_status_snapshots),
+        recent_tool_calls=list(session.recent_tool_call_names),
+        signal_kind="periodic",
+    )
+
+    try:
+        decision = await run_supervisor_check(llm=supervisor_llm, input=inp)
+    except StructuredCallFailed:
+        logger.warning(
+            "agent loop: supervisor returned non-tool-use response twice "
+            "(turn=%d, role=%s); treating as 'continue' per DEC-018 retry-once "
+            "discipline (supervisor protocol failure does NOT abort the "
+            "supervised agent)",
+            session.turn_count,
+            session.current_role,
+            exc_info=True,
+        )
+        return
+
+    session.supervisor_checks_fired += 1
+
+    if decision.action == "continue":
+        return
+    if decision.action == "intervene":
+        store = session.artifact_store
+        nudge_path = session.nudge_artifact_path
+        if store is None or nudge_path is None:
+            logger.warning(
+                "agent loop: supervisor returned 'intervene' but session has no "
+                "ArtifactStore / nudge_artifact_path wired (turn=%d, role=%s); "
+                "the nudge will not be delivered",
+                session.turn_count,
+                session.current_role,
+            )
+            return
+        # Per the §3.2 contract, ``maybe_check_supervisor_nudge`` reads
+        # the file as bytes and prepends the literal ``[supervisor nudge]``
+        # parsing-convention prefix when injecting. We write the raw
+        # nudge text — the prefix is the consumer's responsibility.
+        nudge_bytes = (decision.nudge or "").encode("utf-8")
+        await store.put(nudge_path, nudge_bytes, content_type="text/plain")
+        logger.info(
+            "agent loop: supervisor wrote intervene nudge (turn=%d, role=%s, reason=%r)",
+            session.turn_count,
+            session.current_role,
+            decision.reason,
+        )
+        return
+    # decision.action == "abort"
+    session.supervisor_aborted = True
+    session.supervisor_abort_reason = decision.reason
+    logger.warning(
+        "agent loop: supervisor returned 'abort' (turn=%d, role=%s, reason=%r); "
+        "loop will exit with AgentOutcome(kind='aborted_by_supervisor')",
+        session.turn_count,
+        session.current_role,
+        decision.reason,
+    )
 
 
 # === Lint-on-write hook (§3.2 / §12.1) ======================================
@@ -310,6 +469,7 @@ __all__ = [
     "SUPERVISOR_NUDGE_PREFIX",
     "lint_after_python_write",
     "maybe_check_supervisor_nudge",
+    "maybe_run_supervisor_check",
     "maybe_truncate_context",
     "wait_for_compute_job",
     "write_status",
