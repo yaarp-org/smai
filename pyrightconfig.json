@@ -20,7 +20,11 @@
       "reportMissingImports": "error",
       "extraPaths": [
         "packages/smai-orchestrator/src",
-        "packages/smai-core/src"
+        "packages/smai-core/src",
+        "packages/smai-agents/src",
+        "packages/smai-runtime/src",
+        "plugins/smai-store-sqlite/src",
+        "plugins/smai-artifacts-localfs/src"
       ]
     },
     {

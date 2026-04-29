@@ -44,9 +44,18 @@ from smai_orchestrator.runtime import (
     register_pipeline_spec,
     reset_registry,
 )
+from smai_orchestrator.specs import (
+    CG_ENTRIES_SPEC_NAME,
+    CG_EXECUTION_SPEC_NAME,
+    build_cg_entries_spec,
+    build_cg_execution_spec,
+    register_smai_specs,
+)
 
 __all__ = [
     "CGState",
+    "CG_ENTRIES_SPEC_NAME",
+    "CG_EXECUTION_SPEC_NAME",
     "ComparisonGroupRecord",
     "DEFAULT_TASK_ROLES",
     "DuplicateSpecError",
@@ -68,10 +77,13 @@ __all__ = [
     "RunState",
     "RuntimeConfig",
     "SpecNotRegisteredError",
+    "build_cg_entries_spec",
+    "build_cg_execution_spec",
     "get_pipeline_spec",
     "instantiate_plugins",
     "list_discovered_plugins",
     "list_registered_specs",
     "register_pipeline_spec",
+    "register_smai_specs",
     "reset_registry",
 ]
