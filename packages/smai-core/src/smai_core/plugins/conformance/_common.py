@@ -147,7 +147,7 @@ _METADATA_STORE_METHODS: tuple[str, ...] = (
     # proposal scheduling queries (3)
     "get_ready_for_proposal_design",
     "get_in_flight_proposal_design",
-    "get_pending_proposal_user_decision",
+    "get_proposals_at_human_gate",
     # paper-ingestion scheduling queries (6)
     "get_ready_for_paper_fetch",
     "get_in_flight_paper_fetch",
@@ -170,11 +170,16 @@ _METADATA_STORE_METHODS: tuple[str, ...] = (
 
 # Subset of scheduling-query method names that are parameterized over in the
 # MetadataStore conformance suite (per §5.6.10 — covers every ``get_ready_for_*``
-# / ``get_in_flight_*`` / ``get_pending_*`` / ``get_partial_*`` query).
+# / ``get_in_flight_*`` / ``get_pending_*`` / ``get_partial_*`` / ``get_proposals_*``
+# query). The ``get_proposals_*`` prefix admits human-gate parking queries whose
+# semantics ("proposals in a state pending the human gate") don't fit the
+# action-noun shapes of the other prefixes — see ``08`` §2.2 / Task 3.E1.
 SCHEDULING_QUERY_METHODS: tuple[str, ...] = tuple(
     m
     for m in _METADATA_STORE_METHODS
-    if m.startswith(("get_ready_", "get_in_flight_", "get_pending_", "get_partial_"))
+    if m.startswith(
+        ("get_ready_", "get_in_flight_", "get_pending_", "get_partial_", "get_proposals_")
+    )
 )
 
 

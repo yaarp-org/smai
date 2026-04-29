@@ -4,10 +4,13 @@
 # ExperimentDefinition for the compiler. There are TWO prompt variants
 # per DEC-032 (novel_technique is the primary variant; paper_ingestion
 # is supporting); this base.yaml carries the shared structure, and the
-# variants under ./variants/ specialize.
+# variants under ./variants/ specialize tool surface + prompt content.
 #
-# This file ships placeholder content per implementation_plan.md §1.4 —
-# production prompt content is iterative work post-M2.
+# The base intentionally does not declare a tool list — variants
+# replace tools wholesale per §10.2 (replace-not-append semantics). The
+# base ships system_prompt + initial_user_message_template just enough
+# to be a valid composable layer; in production every load call passes
+# variant_name and the variant's tool list wins.
 
 layer: base
 name: planner/base
@@ -15,37 +18,46 @@ name: planner/base
 role: planner
 
 system_prompt: |
-  You are the SMAI experiment planner. Your job is to produce a
-  verified ExperimentDefinition for the compiler given the input
-  source (a novel technique description or a paper).
+  You are the SMAI experiment planner.
 
-  This base prompt is a PLACEHOLDER. Production content is iterated
-  separately and lives in deployment-selected variants under
-  ./variants/.
+  You drive a buffer-and-validate planning loop: every drafting tool
+  validates its input against the methodology data model and returns
+  errors to you in real time so you can correct mistakes within the
+  conversation. You finalize by calling the variant-specific
+  finalize tool, which runs a structural-soundness check on the
+  complete buffer; if any rule fails you receive the error context
+  and may retry once before the loop terminates.
+
+  You do NOT write directly to the metadata store. The buffer is
+  persisted as a JSON artifact when finalize succeeds; a downstream
+  deterministic registration step commits the buffer to the store
+  atomically (per DEC-032 OQ2 a single proposal can produce one or
+  many comparison groups).
+
+  This base prompt is shared structure. Each load specifies a variant
+  (novel_technique or paper_ingestion) that supplies the planning
+  task, the input format, and the tool surface.
 
 initial_user_message_template: |
   Source kind: {{ source_kind }}
   Source id: {{ source_id }}
 
-  This template is a placeholder; deployment variants override it
-  with the production messaging shape.
+  This is the planner's base initial-user-message template. Variants
+  override this with task-specific messaging (the novel-technique
+  variant frames the user's submitted description; the paper-ingestion
+  variant frames the paper's extracted text + figures + tables).
 
-# Planner does not have run_experiment per §12.3 — its loop is in-memory
-# reasoning. The base lists the file ops + search + list_files + execute
-# inventory; variants may replace this list (replace-semantics per §10.2).
-tools:
-  - name: read_file
-  - name: write_file
-  - name: edit_file
-  - name: search
-  - name: list_files
-  - name: execute
-  - name: finish
+# Variants override this list per §10.2 (replace, not append). Listed
+# here as an empty list so the composed PromptConfig has a typed
+# tools list even when the variant fails to declare one (a no-tools
+# variant would be a bug, but the loader's surface stays well-formed).
+tools: []
 
 structured_output_tool: null
 
 notes: >-
-  PLACEHOLDER content. The novel-technique variant (./variants/novel_technique.yaml)
-  is the primary planner variant per DEC-032; the paper-ingestion variant
-  (./variants/paper_ingestion.yaml) is loaded when the planner is consuming
-  a paper source.
+  Per DEC-032: the novel-technique variant is the primary planner
+  (drafts ExperimentDefinitions and CGs); the paper-ingestion variant
+  is supporting (produces TechniqueRefs only — no CGs). The agent
+  loop and tool registry are shared; the variants differ in tool
+  inventory, system prompt content, and input shape.

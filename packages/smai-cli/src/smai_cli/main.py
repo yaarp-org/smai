@@ -1,10 +1,11 @@
-"""``smai`` CLI entry point — the seven Phase-2 verbs.
+"""``smai`` CLI entry point — Phase-2 + Phase-3 (Task 3.E1) verbs.
 
-Per ``designs/smai/09-cli.md`` §1: ``dev``, ``run``, ``status``,
-``compile``, ``init``, ``plugins``, ``version``. Phase-3 verbs
-(``start``, ``serve``, ``submit-proposal``, ``approve-proposal``,
-``reject-proposal``, ``ingest``, ``migrate``) are explicitly absent
-per Task 2.D2's scope.
+Per ``designs/smai/09-cli.md`` §1: Phase-2 ships ``dev``, ``run``,
+``status``, ``compile``, ``init``, ``plugins``, ``version``. Phase-3
+Task 3.E1 adds ``submit-proposal``, ``approve-proposal``, and
+``reject-proposal`` (per DEC-032 — proposal submission is the v2
+primary input verb). Other Phase-3 verbs (``start``, ``serve``,
+``ingest``, ``migrate``) ship in their own Phase-3 tasks.
 
 The CLI is a thin adapter over :mod:`smai_cli.runtime` (per `09` §9 /
 §1.2 — the verb-to-service mapping). Each verb does just enough to
@@ -46,7 +47,13 @@ from smai_cli.config import (
     dev_defaults,
     load_runtime_config,
 )
-from smai_cli.runtime import CGNotFoundError, Runtime, WaitTimeoutError
+from smai_cli.runtime import (
+    CGNotFoundError,
+    ProposalNotFoundError,
+    ProposalStateError,
+    Runtime,
+    WaitTimeoutError,
+)
 
 app = typer.Typer(
     name="smai",
@@ -576,6 +583,210 @@ def smai_plugins(
     typer.echo("Registered pipeline-specs:")
     for spec_name in specs:
         typer.echo(f"  - {spec_name}")
+
+
+# === Verb 8: submit-proposal =================================================
+
+
+def _generate_proposal_id() -> str:
+    """Generate a deterministic-shaped proposal id.
+
+    v1 uses ``proposal-<unix_ms>-<rand4>``; the format-validator
+    accepts ULID-shaped strings or any non-whitespace ASCII ≤ 64
+    chars per ``01-data-model.md`` §5.2.2. Tests pass an explicit
+    ``--id`` override to make assertions deterministic.
+    """
+    import secrets  # noqa: PLC0415
+    import time  # noqa: PLC0415
+
+    return f"proposal-{int(time.time() * 1000)}-{secrets.token_hex(4)}"
+
+
+@app.command("submit-proposal")
+def smai_submit_proposal(
+    description: Annotated[
+        str | None,
+        typer.Argument(
+            help=(
+                "Inline JSON technique description. Pass `-` to read from "
+                "stdin. Mutually exclusive with --description-file and "
+                "--reproduce-paper."
+            ),
+        ),
+    ] = None,
+    description_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--description-file",
+            "-f",
+            help="Path to a JSON file with the technique description.",
+            exists=True,
+            dir_okay=False,
+            readable=True,
+        ),
+    ] = None,
+    reproduce_paper: Annotated[
+        str | None,
+        typer.Option(
+            "--reproduce-paper",
+            help=(
+                "ArXiv id to reproduce. The paper must already be ingested "
+                "via `smai ingest <arxiv-id>` per DEC-032 OQ1."
+            ),
+        ),
+    ] = None,
+    proposal_id: Annotated[
+        str | None,
+        typer.Option(
+            "--id",
+            help="Override the auto-generated proposal id (useful for tests).",
+        ),
+    ] = None,
+    config: Annotated[
+        Path | None,
+        typer.Option("--config", "-c", help="Path to a smai.yaml."),
+    ] = None,
+) -> None:
+    """Submit a novel-technique or reproduce-paper proposal (`09` §1).
+
+    The PRIMARY input verb per DEC-032. Synchronously creates the
+    :class:`ProposalRecord` in ``proposal_submitted`` and persists the
+    submission artifact. The next worker cycle picks it up and fires
+    the planner.
+    """
+    if reproduce_paper is None and description is None and description_file is None:
+        _err(
+            "submit-proposal requires one of: a description argument, "
+            "--description-file, or --reproduce-paper."
+        )
+    if reproduce_paper is not None and (description is not None or description_file is not None):
+        _err(
+            "submit-proposal: --reproduce-paper is mutually exclusive with "
+            "an inline description argument or --description-file."
+        )
+
+    submission_kind = "reproduce_paper" if reproduce_paper is not None else "novel_technique"
+    technique_payload: Any = None
+    if description_file is not None:
+        technique_payload = description_file.read_text(encoding="utf-8")
+    elif description == "-":
+        technique_payload = sys.stdin.read()
+    elif description is not None:
+        technique_payload = description
+
+    final_proposal_id = proposal_id or _generate_proposal_id()
+
+    overrides: dict[str, Any] = _apply_dev_filesystem_defaults({})
+    try:
+        runtime_config = load_runtime_config(
+            config_path=config,
+            defaults=dev_defaults(),
+            flag_overrides=overrides,
+        )
+    except (ConfigFileError, ConfigValidationError) as exc:
+        _err(str(exc))
+
+    async def _run() -> None:
+        async with Runtime.start_in_band(runtime_config, run_worker=False) as runtime:
+            submission = await runtime.proposals.submit(
+                proposal_id=final_proposal_id,
+                submission_kind=submission_kind,
+                technique_description=technique_payload,
+                reproduce_paper_arxiv_id=reproduce_paper,
+            )
+            typer.echo(submission.proposal_id)
+
+    asyncio.run(_run())
+
+
+# === Verb 9: approve-proposal ================================================
+
+
+@app.command("approve-proposal")
+def smai_approve_proposal(
+    proposal_id: Annotated[str, typer.Argument(help="Proposal identifier.")],
+    config: Annotated[
+        Path | None,
+        typer.Option("--config", "-c", help="Path to a smai.yaml."),
+    ] = None,
+) -> None:
+    """Approve a proposal in the ``designed`` resting state (`09` §1).
+
+    Per ``03-state-machine.md`` §4.2 (edge 5,
+    ``proposal.user_approved``). The next worker cycle fires the
+    ``designed → registered`` edge — the registration handler atomically
+    writes the methodology + tracking entities and the CGs land in
+    ``draft`` ready for the CG-execution spec.
+    """
+    overrides: dict[str, Any] = _apply_dev_filesystem_defaults({})
+    try:
+        runtime_config = load_runtime_config(
+            config_path=config,
+            defaults=dev_defaults(),
+            flag_overrides=overrides,
+        )
+    except (ConfigFileError, ConfigValidationError) as exc:
+        _err(str(exc))
+
+    async def _run() -> None:
+        async with Runtime.start_in_band(runtime_config, run_worker=False) as runtime:
+            try:
+                record = await runtime.proposals.approve(proposal_id)
+            except ProposalNotFoundError as exc:
+                _err(str(exc), exit_code=2)
+                return
+            except ProposalStateError as exc:
+                _err(str(exc), exit_code=4)
+                return
+            typer.echo(f"approved: {record.id} (state={record.state})")
+
+    asyncio.run(_run())
+
+
+# === Verb 10: reject-proposal ================================================
+
+
+@app.command("reject-proposal")
+def smai_reject_proposal(
+    proposal_id: Annotated[str, typer.Argument(help="Proposal identifier.")],
+    reason: Annotated[
+        str | None,
+        typer.Option("--reason", "-r", help="Free-text rejection reason."),
+    ] = None,
+    config: Annotated[
+        Path | None,
+        typer.Option("--config", "-c", help="Path to a smai.yaml."),
+    ] = None,
+) -> None:
+    """Reject a proposal in the ``designed`` resting state (`09` §1).
+
+    Per ``03-state-machine.md`` §4.2 (edge 6,
+    ``proposal.user_rejected``). The proposal transitions to
+    ``rejected`` (terminal). The draft buffer artifact is preserved.
+    """
+    overrides: dict[str, Any] = _apply_dev_filesystem_defaults({})
+    try:
+        runtime_config = load_runtime_config(
+            config_path=config,
+            defaults=dev_defaults(),
+            flag_overrides=overrides,
+        )
+    except (ConfigFileError, ConfigValidationError) as exc:
+        _err(str(exc))
+
+    async def _run() -> None:
+        async with Runtime.start_in_band(runtime_config, run_worker=False) as runtime:
+            try:
+                record = await runtime.proposals.reject(proposal_id, reason=reason)
+            except ProposalNotFoundError as exc:
+                _err(str(exc), exit_code=2)
+                return
+            except ProposalStateError as exc:
+                _err(str(exc), exit_code=4)
+                return
+            typer.echo(f"rejected: {record.id} (state={record.state})")
+
+    asyncio.run(_run())
 
 
 # === Verb 7: version =========================================================

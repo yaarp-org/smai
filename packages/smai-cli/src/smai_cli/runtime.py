@@ -29,6 +29,7 @@ ships only the in-band Runtime + experiments + status surfaces.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
@@ -58,11 +59,16 @@ from smai_orchestrator import (
     InstantiatedPlugins,
     PipelineSpec,
     PluginOverrides,
+    ProposalRecord,
     RuntimeConfig,
     instantiate_plugins,
+    register_proposal_pipeline,
     register_run_record_spec,
     register_smai_specs,
     reset_registry,
+)
+from smai_orchestrator.specs.proposal import (
+    TECHNIQUE_DESCRIPTION_KEY_TEMPLATE as PROPOSAL_TECHNIQUE_DESCRIPTION_KEY_TEMPLATE,
 )
 from smai_orchestrator.worker.loop import (
     WorkerCycleStats,
@@ -109,6 +115,35 @@ class CGNotFoundError(LookupError):
     def __init__(self, cg_id: str) -> None:
         self.cg_id = cg_id
         super().__init__(f"no CG with id {cg_id!r} found in MetadataStore")
+
+
+class ProposalNotFoundError(LookupError):
+    """Raised by :class:`ProposalsService` when a proposal id is unknown.
+
+    Carries :attr:`proposal_id` for the CLI surface.
+    """
+
+    def __init__(self, proposal_id: str) -> None:
+        self.proposal_id = proposal_id
+        super().__init__(f"no proposal with id {proposal_id!r} found in MetadataStore")
+
+
+class ProposalStateError(RuntimeError):
+    """Raised when a proposal-state operation is illegal.
+
+    E.g. ``approve_proposal`` on a proposal not in the ``designed``
+    resting state, or ``reject_proposal`` on an already-terminal
+    proposal.
+    """
+
+    def __init__(self, proposal_id: str, current_state: str, attempted: str) -> None:
+        self.proposal_id = proposal_id
+        self.current_state = current_state
+        self.attempted = attempted
+        super().__init__(
+            f"proposal {proposal_id!r} is in state {current_state!r}; "
+            f"{attempted} requires state 'designed'"
+        )
 
 
 class WaitTimeoutError(TimeoutError):
@@ -285,6 +320,145 @@ class StatusService:
                     f"{timeout:.1f}s; current state: {snapshot.state}"
                 )
             await asyncio.sleep(poll_interval_seconds)
+
+
+# === ProposalsService =======================================================
+
+
+@dataclass(frozen=True)
+class ProposalSubmission:
+    """Immutable bundle returned by :meth:`ProposalsService.submit`.
+
+    Per `09-cli.md` §1 / DEC-032: ``submit-proposal`` is the v2 primary
+    input verb. The synchronous return shape mirrors the v1 API
+    convention — the proposal exists in :class:`MetadataStore` and the
+    submission artifact is persisted in :class:`ArtifactStore`; the
+    pipeline-spec's ``proposal_submitted → designing`` edge fires on
+    the next worker cycle.
+    """
+
+    proposal_id: str
+    state: str
+    submission_kind: str
+    technique_description_artifact_key: str | None
+    reproduce_paper_arxiv_id: str | None
+
+
+class ProposalsService:
+    """Verb-to-service surface for ``smai submit-proposal`` /
+    ``smai approve-proposal`` / ``smai reject-proposal`` (`09` §1.2 /
+    DEC-032).
+    """
+
+    def __init__(self, *, plugins: InstantiatedPlugins) -> None:
+        self._plugins = plugins
+
+    async def submit(
+        self,
+        *,
+        proposal_id: str,
+        submission_kind: str = "novel_technique",
+        technique_description: dict[str, Any] | str | None = None,
+        reproduce_paper_arxiv_id: str | None = None,
+        submitted_by: str | None = None,
+    ) -> ProposalSubmission:
+        """Create a :class:`ProposalRecord` in ``proposal_submitted``.
+
+        Per ``08-novel-technique-pipeline.md`` §3.1 / `09` §1: the
+        submission step is synchronous in the API surface and runs
+        BEFORE the entity enters the pipeline-spec. Persists the
+        user's submitted technique description (or reproduce-paper
+        reference) to ArtifactStore at
+        :data:`PROPOSAL_TECHNIQUE_DESCRIPTION_KEY_TEMPLATE`, then
+        creates the :class:`ProposalRecord` in ``proposal_submitted``.
+        """
+        if submission_kind not in {"novel_technique", "reproduce_paper"}:
+            raise ValueError(
+                f"submission_kind {submission_kind!r} must be "
+                "'novel_technique' or 'reproduce_paper'"
+            )
+        artifact_key: str | None = None
+        if technique_description is not None:
+            artifact_key = PROPOSAL_TECHNIQUE_DESCRIPTION_KEY_TEMPLATE.format(
+                proposal_id=proposal_id,
+            )
+            payload: bytes
+            if isinstance(technique_description, str):
+                payload = technique_description.encode("utf-8")
+            else:
+                payload = json.dumps(technique_description, indent=2, sort_keys=True).encode(
+                    "utf-8"
+                )
+            await self._plugins.artifact_store.put(artifact_key, payload)
+        now = datetime.now(UTC)
+        record = ProposalRecord(
+            id=proposal_id,
+            submitted_by=submitted_by,
+            submission_kind=submission_kind,  # type: ignore[arg-type]
+            technique_description_artifact_key=artifact_key,
+            reproduce_paper_arxiv_id=reproduce_paper_arxiv_id,
+            state="proposal_submitted",
+            created_at=now,
+            updated_at=now,
+        )
+        await self._plugins.metadata_store.create_proposal(record)
+        return ProposalSubmission(
+            proposal_id=proposal_id,
+            state=record.state,
+            submission_kind=record.submission_kind,
+            technique_description_artifact_key=artifact_key,
+            reproduce_paper_arxiv_id=reproduce_paper_arxiv_id,
+        )
+
+    async def get(self, proposal_id: str) -> ProposalRecord:
+        """Read the :class:`ProposalRecord` (raises if missing)."""
+        record = await self._plugins.metadata_store.get_proposal(proposal_id)
+        if record is None:
+            raise ProposalNotFoundError(proposal_id)
+        return record
+
+    async def approve(self, proposal_id: str) -> ProposalRecord:
+        """Approve a proposal in the ``designed`` resting state.
+
+        Per ``03-state-machine.md`` §4.2 (edge 5,
+        ``proposal.user_approved``) / `09` §1: writes
+        ``user_decision = "approved"`` to the proposal record. The
+        worker's next cycle picks up the ``designed → registered`` gate
+        and fires the registration handler.
+        """
+        record = await self.get(proposal_id)
+        if record.state != "designed":
+            raise ProposalStateError(proposal_id, record.state, "approve_proposal")
+        return await self._plugins.metadata_store.transition_proposal_state(
+            proposal_id,
+            record.version,
+            "designed",
+            user_decision="approved",
+            user_decided_at=datetime.now(UTC),
+        )
+
+    async def reject(self, proposal_id: str, *, reason: str | None = None) -> ProposalRecord:
+        """Reject a proposal in the ``designed`` resting state.
+
+        Per ``03`` §4.2 (edge 6, ``proposal.user_rejected``). Writes
+        ``user_decision = "rejected"``; the next worker cycle fires
+        the ``designed → rejected`` edge.
+        """
+        record = await self.get(proposal_id)
+        if record.state != "designed":
+            raise ProposalStateError(proposal_id, record.state, "reject_proposal")
+        # ``reason`` is currently informational — surfaced as
+        # last_error per the LeaseableRecord audit shape; the
+        # design-time gate body doesn't read it.
+        last_error = f"rejected by user: {reason}" if reason is not None else "rejected by user"
+        return await self._plugins.metadata_store.transition_proposal_state(
+            proposal_id,
+            record.version,
+            "designed",
+            user_decision="rejected",
+            user_decided_at=datetime.now(UTC),
+            last_error=last_error,
+        )
 
 
 # === Persistence helpers (used by ExperimentsService.submit_text) ===========
@@ -507,17 +681,40 @@ class Runtime:
             # pipeline-spec) lands too — keeping the registration
             # explicit here for now avoids a multi-task signature change
             # collision.
+            # Register the :class:`RunRecord` sub-state-machine spec
+            # alongside the Phase-2 specs (per Task 3.E3 / DEC-034 #3).
+            # The supervisor merges this into :func:`register_smai_specs`
+            # at commit time once the parallel Task 3.E1 (proposal
+            # pipeline-spec) lands too — keeping the registration
+            # explicit here for now avoids a multi-task signature change
+            # collision.
             run_spec = register_run_record_spec(runtime_image=runtime_image)
-            # Drive the per-entry spec before the CG-level spec each
-            # cycle so phase-1 advancement of in-flight entries lands
-            # before the CG spec re-evaluates its all-children-terminal
-            # gate. The run sub-spec drives newly-pending runs to
-            # ``submitted`` and phase-1-polls already-in-flight runs to
-            # terminal. All specs share the same shutdown_event in the
-            # background-worker path (`_run_worker_until_shutdown`).
+            # Register the proposal pipeline-spec (per Task 3.E1 /
+            # DEC-032 — the v2 primary input path). Same supervisor-
+            # merge note as the run-record registration above.
+            llm_for_planner = plugins.llm_providers["planner"]
+            proposal_spec = register_proposal_pipeline(
+                workspace_root=workspace_root,
+                llm_for_planner=llm_for_planner,
+                # `smai dev` defaults to require_human_approval=True
+                # (the laptop deployment shape); production overrides
+                # via the same flag.
+                require_human_approval=True,
+            )
+            # Drive specs in this order each cycle:
+            #   1. proposal spec — advance proposals through designing
+            #      / designed / registered (creates new CGs in draft)
+            #   2. entry spec — advance per-entry implementation phase-1
+            #   3. cg spec — phase-1 (harness) + phase-2/3 (gate trio,
+            #      runs creation, evaluation dispatch)
+            #   4. run spec — drive newly-pending runs to ``submitted``
+            #      and phase-1-poll already-in-flight runs to terminal
+            # so within one cycle a proposal that lands in ``registered``
+            # has its CGs created before the next cycle reads them via
+            # the CG-execution spec's ``draft → implementing`` gate.
             state = _RuntimeState(
                 plugins=plugins,
-                specs=[entry_spec, cg_spec, run_spec],
+                specs=[proposal_spec, entry_spec, cg_spec, run_spec],
                 config=config,
                 workspace_root=workspace_root,
             )
@@ -547,6 +744,7 @@ class Runtime:
         self._state = state
         self._experiments = ExperimentsService(plugins=state.plugins)
         self._status = StatusService(plugins=state.plugins)
+        self._proposals = ProposalsService(plugins=state.plugins)
 
     @property
     def experiments(self) -> ExperimentsService:
@@ -555,6 +753,10 @@ class Runtime:
     @property
     def status(self) -> StatusService:
         return self._status
+
+    @property
+    def proposals(self) -> ProposalsService:
+        return self._proposals
 
     @property
     def workspace_root(self) -> Path:
@@ -674,6 +876,11 @@ __all__ = [
     "EXPERIMENT_PLAN_KEY_TEMPLATE",
     "ExperimentsService",
     "HARNESS_CONTRACT_KEY_TEMPLATE",
+    "PROPOSAL_TECHNIQUE_DESCRIPTION_KEY_TEMPLATE",
+    "ProposalNotFoundError",
+    "ProposalStateError",
+    "ProposalSubmission",
+    "ProposalsService",
     "Runtime",
     "RuntimeNotStartedError",
     "StatusService",

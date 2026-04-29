@@ -54,6 +54,24 @@ from smai_orchestrator.specs.cg_execution import (
     VALIDATION_CONFIG_KEY_TEMPLATE,
     build_cg_execution_spec,
 )
+from smai_orchestrator.specs.proposal import (
+    APPROVAL_KEY_TEMPLATE as PROPOSAL_APPROVAL_KEY_TEMPLATE,
+)
+from smai_orchestrator.specs.proposal import (
+    DESIGN_PLAN_KEY_TEMPLATE,
+    POOL_PROPOSAL_PIPELINE,
+    POOL_PROPOSAL_PIPELINE_LIMIT,
+    POOL_PROPOSAL_PIPELINE_PRIORITY,
+    PROPOSAL_PIPELINE_SPEC_NAME,
+    build_proposal_pipeline_spec,
+    register_proposal_pipeline,
+)
+from smai_orchestrator.specs.proposal import (
+    REJECTION_KEY_TEMPLATE as PROPOSAL_REJECTION_KEY_TEMPLATE,
+)
+from smai_orchestrator.specs.proposal import (
+    TECHNIQUE_DESCRIPTION_KEY_TEMPLATE as PROPOSAL_TECHNIQUE_DESCRIPTION_KEY_TEMPLATE,
+)
 from smai_orchestrator.specs.run_record import (
     RUN_RECORD_SPEC_NAME,
     build_run_record_spec,
@@ -113,6 +131,7 @@ __all__ = [
     "CG_EXECUTION_SPEC_NAME",
     "CODE_REVIEW_KEY_TEMPLATE",
     "CONTEXTUAL_VERDICT_KEY_TEMPLATE",
+    "DESIGN_PLAN_KEY_TEMPLATE",
     "EVALUATION_ERROR_KEY_TEMPLATE",
     "EVALUATION_RESULT_KEY_TEMPLATE",
     "HARNESS_CONTRACT_KEY_TEMPLATE",
@@ -120,7 +139,14 @@ __all__ = [
     "HARNESS_VALIDATION_KEY_TEMPLATE",
     "POOL_AGENTS",
     "POOL_INLINE",
+    "POOL_PROPOSAL_PIPELINE",
+    "POOL_PROPOSAL_PIPELINE_LIMIT",
+    "POOL_PROPOSAL_PIPELINE_PRIORITY",
     "POOL_RUNS",
+    "PROPOSAL_APPROVAL_KEY_TEMPLATE",
+    "PROPOSAL_PIPELINE_SPEC_NAME",
+    "PROPOSAL_REJECTION_KEY_TEMPLATE",
+    "PROPOSAL_TECHNIQUE_DESCRIPTION_KEY_TEMPLATE",
     "RUN_IN_PROGRESS_STATES",
     "RUN_METRICS_KEY_TEMPLATE",
     "RUN_RECORD_SPEC_NAME",
@@ -130,7 +156,9 @@ __all__ = [
     "VALIDATION_CONFIG_KEY_TEMPLATE",
     "build_cg_entries_spec",
     "build_cg_execution_spec",
+    "build_proposal_pipeline_spec",
     "build_run_record_spec",
+    "register_proposal_pipeline",
     "register_run_record_spec",
     "register_smai_specs",
 ]

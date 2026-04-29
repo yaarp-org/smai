@@ -475,19 +475,26 @@ class MetadataStore(Protocol):
         polling."""
         ...
 
-    async def get_pending_proposal_user_decision(
+    async def get_proposals_at_human_gate(
         self,
         limit: int = 100,
         cursor: str | None = None,
     ) -> CursorPage[ProposalRecord]:
-        """Proposals in state ``designed`` with no user-decision flag
-        set (§5.6.4).
+        """Proposals parked in state ``designed`` (§5.6.4).
 
-        Per ``03`` §4.5 / ``08`` §2.4. The engine observes these but
-        does not act — work fires when the user signals
-        approval/rejection via the API surface (per ``09-cli.md``);
-        this query exists so the orchestrator can surface "what's
-        awaiting human gate?" to operational tooling.
+        Returns ALL proposals in ``designed`` regardless of
+        :attr:`ProposalRecord.user_decision`. The worker drives
+        gate-rule evaluation each cycle: the three ``dispatch_time``
+        edges out of ``designed`` (``proposal.user_approved``,
+        ``proposal.user_rejected``, ``proposal.registration_exhausted``
+        per ``03`` §4.2 / ``08`` §2.2) read ``user_decision`` from the
+        record and determine fire/wait. Registration runs as the
+        on-entry dispatch of ``registered``.
+
+        Note: ``08`` §2.4 line 113's "with no user-decision flag set"
+        phrasing predates the gate-driven dispatch model in §2.2 line 86
+        and is slated for Yaarp-side reconciliation; this Protocol
+        surface follows §2.2.
         """
         ...
 

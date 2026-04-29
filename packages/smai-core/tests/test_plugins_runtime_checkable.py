@@ -118,7 +118,7 @@ _METADATA_STORE_METHODS = (
     "get_in_flight_evaluation",
     "get_ready_for_proposal_design",
     "get_in_flight_proposal_design",
-    "get_pending_proposal_user_decision",
+    "get_proposals_at_human_gate",
     "get_ready_for_paper_fetch",
     "get_in_flight_paper_fetch",
     "get_ready_for_paper_screen",

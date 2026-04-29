@@ -234,7 +234,7 @@ def test_scheduling_query_method_enumeration() -> None:
         # proposal (3)
         "get_ready_for_proposal_design",
         "get_in_flight_proposal_design",
-        "get_pending_proposal_user_decision",
+        "get_proposals_at_human_gate",
         # paper-ingestion (7)
         "get_ready_for_paper_fetch",
         "get_in_flight_paper_fetch",

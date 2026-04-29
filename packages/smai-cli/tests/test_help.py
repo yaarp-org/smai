@@ -1,9 +1,12 @@
-"""``smai --help`` lists exactly the seven Phase-2 verbs.
+"""``smai --help`` lists exactly the verbs landed so far.
 
-Per `09-cli.md` §1 / Task 2.D2 acceptance: Phase-3 verbs (``start``,
-``serve``, ``submit-proposal``, ``approve-proposal``,
-``reject-proposal``, ``ingest``, ``migrate``) must NOT appear in the
-help output. This test is the canonical surface-control gate.
+Per `09-cli.md` §1: this is the canonical surface-control gate.
+Phase-2 landed seven verbs (``dev``, ``run``, ``status``,
+``compile``, ``init``, ``plugins``, ``version``); Task 3.E1
+(Phase-3 W1.a) landed three proposal verbs (``submit-proposal``,
+``approve-proposal``, ``reject-proposal``) per DEC-032's primary-
+input-path framing. Remaining Phase-3 verbs (``start``, ``serve``,
+``ingest``, ``migrate``) must NOT appear yet.
 """
 
 from __future__ import annotations
@@ -11,17 +14,27 @@ from __future__ import annotations
 from smai_cli.main import app
 from typer.testing import CliRunner
 
-PHASE_2_VERBS: frozenset[str] = frozenset(
-    {"dev", "run", "status", "compile", "init", "plugins", "version"}
-)
-
-PHASE_3_VERBS: frozenset[str] = frozenset(
+EXPECTED_VERBS: frozenset[str] = frozenset(
     {
-        "start",
-        "serve",
+        # Phase-2
+        "dev",
+        "run",
+        "status",
+        "compile",
+        "init",
+        "plugins",
+        "version",
+        # Phase-3 W1.a / Task 3.E1 (DEC-032)
         "submit-proposal",
         "approve-proposal",
         "reject-proposal",
+    }
+)
+
+FORBIDDEN_PHASE_3_VERBS: frozenset[str] = frozenset(
+    {
+        "start",
+        "serve",
         "ingest",
         "migrate",
     }
@@ -62,31 +75,33 @@ def _help_command_lines(output: str) -> list[str]:
     return verbs
 
 
-def test_help_lists_only_phase_2_verbs() -> None:
-    """The top-level ``smai --help`` lists exactly the seven Phase-2 verbs."""
+def test_help_lists_only_expected_verbs() -> None:
+    """The top-level ``smai --help`` lists exactly the verbs landed so far."""
     output = _run_help()
     listed = set(_help_command_lines(output))
-    assert listed == PHASE_2_VERBS, (
-        f"--help command list is {sorted(listed)}; expected exactly {sorted(PHASE_2_VERBS)}"
+    assert listed == EXPECTED_VERBS, (
+        f"--help command list is {sorted(listed)}; expected exactly {sorted(EXPECTED_VERBS)}"
     )
-    for verb in PHASE_3_VERBS:
+    for verb in FORBIDDEN_PHASE_3_VERBS:
         assert verb not in listed, (
-            f"Phase-3 verb {verb!r} leaked into --help command list (Task 2.D2 forbids)"
+            f"Forbidden Phase-3 verb {verb!r} leaked into --help command list"
         )
 
 
-def test_each_phase_2_verb_has_help() -> None:
-    """``smai <verb> --help`` works for every Phase-2 verb."""
-    for verb in PHASE_2_VERBS:
+def test_each_expected_verb_has_help() -> None:
+    """``smai <verb> --help`` works for every landed verb."""
+    for verb in EXPECTED_VERBS:
         output = _run_help(verb)
         # Each verb's help mentions the verb itself somewhere.
         assert output, f"{verb} --help produced empty output"
 
 
-def test_no_phase_3_verb_resolves() -> None:
-    """Invoking a Phase-3 verb name fails."""
+def test_no_forbidden_verb_resolves() -> None:
+    """Invoking a not-yet-landed Phase-3 verb name fails."""
     runner = CliRunner()
-    for verb in PHASE_3_VERBS:
+    for verb in FORBIDDEN_PHASE_3_VERBS:
         result = runner.invoke(app, [verb])
         # Typer / Click exit with 2 on unknown commands.
-        assert result.exit_code != 0, f"Phase-3 verb {verb!r} should not resolve in Phase-2 CLI"
+        assert result.exit_code != 0, (
+            f"Forbidden Phase-3 verb {verb!r} should not resolve in current CLI"
+        )

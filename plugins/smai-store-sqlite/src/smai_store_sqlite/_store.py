@@ -545,13 +545,20 @@ def _predicate_in_flight_proposal_design() -> tuple[Table, ColumnElement[bool], 
     )
 
 
-def _predicate_pending_proposal_user_decision() -> tuple[Table, ColumnElement[bool], type[Any]]:
+def _predicate_proposals_at_human_gate() -> tuple[Table, ColumnElement[bool], type[Any]]:
+    """All proposals in state ``designed`` regardless of decision flag.
+
+    Per ``08`` §2.2: the worker's three ``dispatch_time`` edges out of
+    ``designed`` need to evaluate ``user_decision`` each cycle, so the
+    predicate must include decided-but-not-yet-transitioned proposals.
+    The earlier ``user_decision IS NULL`` clause (matching ``08`` §2.4
+    line 113's parking phrasing) starved the gates and prevented
+    registration; the §2.4 parking framing is slated for a Yaarp-side
+    doc reconciliation.
+    """
     return (
         proposals_table,
-        and_(
-            proposals_table.c.state == "designed",
-            proposals_table.c.user_decision.is_(None),
-        ),
+        proposals_table.c.state == "designed",
         ProposalRecord,
     )
 
@@ -982,12 +989,10 @@ class SqliteStore:
     ) -> CursorPage[ProposalRecord]:
         return await self._paginate_predicate(_predicate_in_flight_proposal_design(), limit, cursor)
 
-    async def get_pending_proposal_user_decision(
+    async def get_proposals_at_human_gate(
         self, limit: int = 100, cursor: str | None = None
     ) -> CursorPage[ProposalRecord]:
-        return await self._paginate_predicate(
-            _predicate_pending_proposal_user_decision(), limit, cursor
-        )
+        return await self._paginate_predicate(_predicate_proposals_at_human_gate(), limit, cursor)
 
     # === Scheduling queries — paper-ingestion (§5.6.5) ======================
 

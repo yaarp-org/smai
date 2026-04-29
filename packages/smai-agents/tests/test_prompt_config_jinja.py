@@ -96,12 +96,13 @@ def test_render_substitutes_loop_variables(tmp_path: Path) -> None:
 
 
 def test_render_planner_paper_ingestion_variant() -> None:
-    """The paper_ingestion variant inherits base's template."""
+    """The paper_ingestion variant renders with its paper-specific
+    template variables (``paper_arxiv_id`` + ``pool_summary``)."""
     config = load_prompt_config("planner", variant_name="paper_ingestion")
     rendered = render_initial_user_message(
         config,
-        source_kind="paper",
-        source_id="2401.12345",
+        paper_arxiv_id="2401.12345",
+        pool_summary="(empty)",
     )
-    assert "paper" in rendered
+    assert "paper" in rendered.lower()
     assert "2401.12345" in rendered
