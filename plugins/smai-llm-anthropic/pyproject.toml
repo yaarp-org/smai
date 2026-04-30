@@ -1,12 +1,18 @@
 [project]
 name = "smai-llm-anthropic"
 version = "0.1.0"
-description = "LlmProvider plugin: Anthropic SDK adapter."
+description = "LlmProvider plugin: Anthropic native API adapter."
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "smai-core",
+    "anthropic>=0.40",
+]
 
 [project.entry-points."smai.llm_providers"]
 anthropic = "smai_llm_anthropic:AnthropicProvider"
+
+[tool.uv.sources]
+smai-core = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]

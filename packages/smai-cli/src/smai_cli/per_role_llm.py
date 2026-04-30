@@ -101,11 +101,12 @@ def _construct_provider(
 ) -> LlmProvider:
     """Construct one :class:`LlmProvider` for the given ``(provider, model_id)`` tuple.
 
-    Phase 2 supports ``bedrock`` only; other providers raise
-    :class:`UnsupportedLlmProvider` so the CLI surface fails-fast
-    rather than mid-agent-loop. Other plugin types land in Phase 3
-    Task 3.F5 alongside the :class:`AnthropicProvider` /
-    :class:`OpenAIProvider` plugins.
+    Phase 3 Task 3.F5 lifted the previous Phase-2 bedrock-only
+    restriction: ``anthropic`` and ``openai`` now ship alongside
+    ``bedrock``. Provider-specific construction kwargs are pulled
+    selectively from ``base_kwargs`` (Bedrock needs ``region``;
+    Anthropic / OpenAI read auth from the env, so neither accepts a
+    ``region``-shaped kwarg).
     """
     if provider_name == "bedrock":
         from smai_llm_bedrock import BedrockProvider  # noqa: PLC0415 — lazy import
@@ -115,11 +116,32 @@ def _construct_provider(
         if "region" not in kwargs:
             kwargs["region"] = "us-east-1"
         return BedrockProvider(**kwargs)
+    if provider_name == "anthropic":
+        from smai_llm_anthropic import AnthropicProvider  # noqa: PLC0415 — lazy import
+
+        kwargs = _select_kwargs(base_kwargs, allow={"max_tokens_default"})
+        return AnthropicProvider(model_id=model_id, **kwargs)
+    if provider_name == "openai":
+        from smai_llm_openai import OpenAIProvider  # noqa: PLC0415 — lazy import
+
+        kwargs = _select_kwargs(base_kwargs, allow={"max_tokens_default"})
+        return OpenAIProvider(model_id=model_id, **kwargs)
     raise UnsupportedLlmProvider(
         f"per-role LLM provider {provider_name!r} (model_id={model_id!r}) is not "
-        f"shipped in Phase 2; only 'bedrock' is supported (anthropic / openai land "
-        f"in Task 3.F5)"
+        f"shipped; supported names are 'bedrock', 'anthropic', 'openai'."
     )
+
+
+def _select_kwargs(base: dict[str, Any], *, allow: set[str]) -> dict[str, Any]:
+    """Return a fresh dict containing only the keys in ``allow``.
+
+    Bedrock-only kwargs (``region``) silently drop when constructing
+    Anthropic / OpenAI providers — the caller's ``smai.yaml`` may carry
+    a single ``llm_provider_config`` block that's mostly Bedrock-shaped
+    even when a sibling role routes to Anthropic / OpenAI via
+    ``SMAI_MODEL_<ROLE>``.
+    """
+    return {k: v for k, v in base.items() if k in allow}
 
 
 __all__ = [

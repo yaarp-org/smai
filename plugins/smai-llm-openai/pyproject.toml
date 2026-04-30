@@ -1,12 +1,18 @@
 [project]
 name = "smai-llm-openai"
 version = "0.1.0"
-description = "LlmProvider plugin: OpenAI SDK adapter."
+description = "LlmProvider plugin: OpenAI Chat Completions adapter."
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "smai-core",
+    "openai>=1.50",
+]
 
 [project.entry-points."smai.llm_providers"]
 openai = "smai_llm_openai:OpenAIProvider"
+
+[tool.uv.sources]
+smai-core = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]

@@ -73,12 +73,56 @@ def test_explicit_overrides_take_precedence_over_env() -> None:
 
 
 def test_unsupported_provider_raises() -> None:
-    """Phase 2 only ships ``bedrock``; ``anthropic``/``openai`` raise."""
+    """Unknown provider names raise :class:`UnsupportedLlmProvider`.
+
+    Phase 3 Task 3.F5 lifted the previous bedrock-only constraint;
+    ``anthropic`` / ``openai`` are now supported. An unrecognised name
+    (e.g., ``"vertex"``) still raises so the CLI surface fails-fast
+    rather than mid-agent-loop.
+    """
     overrides: dict[TaskRole, tuple[str, str]] = {
-        cast(TaskRole, "planner"): ("anthropic", "claude-3.7"),
+        cast(TaskRole, "planner"): ("vertex", "gemini-2.5"),
     }
     with pytest.raises(UnsupportedLlmProvider):
         build_per_role_llm_providers(_selection(), env={}, overrides=overrides)
+
+
+def test_anthropic_provider_constructs_via_overrides() -> None:
+    """Anthropic-rooted overrides build a real
+    :class:`smai_llm_anthropic.AnthropicProvider` instance —
+    bedrock-only kwargs (``region``) are silently dropped on the way
+    in."""
+    from smai_llm_anthropic import AnthropicProvider  # noqa: PLC0415
+
+    overrides: dict[TaskRole, tuple[str, str]] = {
+        cast(TaskRole, "planner"): ("anthropic", "claude-opus-4-7"),
+    }
+    providers = build_per_role_llm_providers(_selection(), env={}, overrides=overrides)
+    planner = providers["planner"]
+    assert isinstance(planner, AnthropicProvider)
+    assert planner.model_id == "claude-opus-4-7"
+
+
+def test_openai_provider_constructs_via_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same shape against OpenAI.
+
+    The OpenAI SDK demands ``OPENAI_API_KEY`` at construction time
+    (the Anthropic SDK is lazy about this check). We seed a sentinel
+    key so the constructor does not error before
+    :func:`build_per_role_llm_providers` returns the instance.
+    """
+    from smai_llm_openai import OpenAIProvider  # noqa: PLC0415
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-not-real")
+    overrides: dict[TaskRole, tuple[str, str]] = {
+        cast(TaskRole, "planner"): ("openai", "gpt-4o"),
+    }
+    providers = build_per_role_llm_providers(_selection(), env={}, overrides=overrides)
+    planner = providers["planner"]
+    assert isinstance(planner, OpenAIProvider)
+    assert planner.model_id == "gpt-4o"
 
 
 def test_base_kwargs_pass_through_minus_model_id() -> None:

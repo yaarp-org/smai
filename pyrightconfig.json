@@ -47,6 +47,22 @@
       ]
     },
     {
+      "root": "plugins/smai-llm-anthropic",
+      "reportMissingImports": "error",
+      "extraPaths": [
+        "plugins/smai-llm-anthropic/src",
+        "packages/smai-core/src"
+      ]
+    },
+    {
+      "root": "plugins/smai-llm-openai",
+      "reportMissingImports": "error",
+      "extraPaths": [
+        "plugins/smai-llm-openai/src",
+        "packages/smai-core/src"
+      ]
+    },
+    {
       "root": "plugins/smai-store-sqlite",
       "reportMissingImports": "error",
       "extraPaths": [
@@ -73,6 +89,8 @@
         "packages/smai-agents/src",
         "packages/smai-runtime/src",
         "plugins/smai-llm-bedrock/src",
+        "plugins/smai-llm-anthropic/src",
+        "plugins/smai-llm-openai/src",
         "plugins/smai-store-sqlite/src",
         "plugins/smai-artifacts-localfs/src",
         "plugins/smai-compute-localgpu/src"
@@ -86,6 +104,8 @@
     "packages/smai-agents/src",
     "packages/smai-cli/src",
     "plugins/smai-llm-bedrock/src",
+    "plugins/smai-llm-anthropic/src",
+    "plugins/smai-llm-openai/src",
     "plugins/smai-store-sqlite/src",
     "plugins/smai-compute-localgpu/src"
   ]
