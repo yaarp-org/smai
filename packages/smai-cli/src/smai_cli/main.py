@@ -1047,6 +1047,36 @@ async def _check_schema_at_head(runtime_config: Any) -> None:
         )
 
 
+def _enforce_lease_capability(runtime: Any) -> None:
+    """Refuse multi-worker boot against a non-lease-capable ``MetadataStore``
+    (`09-cli.md` §6.2).
+
+    Phase-3 dispatch wraps every entity-driving step in
+    ``acquire_lease`` / ``release_lease`` so concurrent workers cannot
+    both fire the dispatch handler for the same entity (DEC-035 #2 /
+    Task 3.G1). If the configured store reports
+    ``capabilities.supports_leasing=False``, that ABA-safety contract
+    is unmet and a multi-worker deployment can double-fire the dispatch
+    handler — silent corruption is unacceptable, so we hard-exit 1
+    rather than boot. Single-worker deployments (``worker_count == 1``)
+    are allowed against non-lease-capable stores; the contention only
+    materializes across workers.
+    """
+    worker_count = runtime.config.engine.worker_count
+    capabilities = runtime.plugins.metadata_store.capabilities
+    if worker_count > 1 and not capabilities.supports_leasing:
+        plugin_name = runtime.config.plugins.metadata_store
+        _err(
+            "smai start: refusing to boot — "
+            f"engine.worker_count={worker_count} but the configured "
+            f"MetadataStore plugin {plugin_name!r} reports "
+            "supports_leasing=False. Multi-worker deployments require "
+            "a lease-capable store (per `09-cli.md` §6.2 / DEC-035 #2). "
+            "Either set engine.worker_count=1, or switch to a "
+            "lease-capable plugin (e.g., postgres, sqlite)."
+        )
+
+
 @app.command("start")
 def smai_start(
     config: Annotated[
@@ -1124,6 +1154,8 @@ def smai_start(
             worker_id=resolved_worker_id,
             workspace_root=workspace_root,
         ) as runtime:
+            _enforce_lease_capability(runtime)
+
             stop_event = asyncio.Event()
 
             def _signal_handler(*_: Any) -> None:
@@ -1211,7 +1243,13 @@ def smai_verify(
     _validate_plugin_completeness(runtime_config)
 
     async def _run() -> dict[str, VerifyResult]:
-        async with instantiate_plugins(runtime_config.plugins) as plugins:
+        # ``skip_migrate=True`` keeps the verify probe strictly read-only
+        # per `09-cli.md` §1: the per-plugin ping helpers below are
+        # read-only, and we MUST NOT mutate the configured store's
+        # schema as a side effect of probing connectivity. Operators
+        # invoke ``smai migrate`` explicitly; ``smai verify`` should
+        # not do it for them.
+        async with instantiate_plugins(runtime_config.plugins, skip_migrate=True) as plugins:
             # Pick the first per-role provider — every role resolves
             # to the same instance unless per-role overrides apply,
             # and `smai verify` is a single-shot pre-flight, not a

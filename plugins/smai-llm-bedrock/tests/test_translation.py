@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 
-from _fakes import FakeBedrockClient  # type: ignore[import-not-found]
+from _bedrock_fakes import FakeBedrockClient  # type: ignore[import-not-found]
 from smai_core.plugins import (
     CacheConfig,
     LlmCapabilities,

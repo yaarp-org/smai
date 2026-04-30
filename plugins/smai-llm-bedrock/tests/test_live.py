@@ -21,6 +21,7 @@ from smai_llm_bedrock import BedrockProvider
 _SKIP_REASON = "live AWS Bedrock test — set BEDROCK_LIVE_TESTS=1 to run"
 
 
+@pytest.mark.credentialed
 @pytest.mark.skipif(
     os.environ.get("BEDROCK_LIVE_TESTS") != "1",
     reason=_SKIP_REASON,

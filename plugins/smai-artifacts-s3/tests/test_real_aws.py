@@ -25,14 +25,17 @@ from smai_artifacts_s3 import S3Store
 AWS_TEST_BUCKET_ENV: str = "AWS_TEST_BUCKET"
 AWS_TEST_REGION_ENV: str = "AWS_TEST_REGION"
 
-pytestmark = pytest.mark.skipif(
-    AWS_TEST_BUCKET_ENV not in os.environ,
-    reason=(
-        f"Set ${AWS_TEST_BUCKET_ENV} (and AWS credentials via the boto3 "
-        "default chain) to run real-AWS validation. See "
-        "plugins/smai-artifacts-s3/README.md for setup."
+pytestmark = [
+    pytest.mark.credentialed,
+    pytest.mark.skipif(
+        AWS_TEST_BUCKET_ENV not in os.environ,
+        reason=(
+            f"Set ${AWS_TEST_BUCKET_ENV} (and AWS credentials via the boto3 "
+            "default chain) to run real-AWS validation. See "
+            "plugins/smai-artifacts-s3/README.md for setup."
+        ),
     ),
-)
+]
 
 
 @pytest.fixture

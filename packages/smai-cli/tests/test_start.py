@@ -337,6 +337,111 @@ def test_validate_plugin_completeness_rejects_empty_strings() -> None:
         _validate_plugin_completeness(_Cfg())
 
 
+# === Lease-capability enforcement (Task R4 fix #1) ===========================
+
+
+def test_enforce_lease_capability_rejects_multi_worker_against_non_leasing_store() -> None:
+    """``_enforce_lease_capability`` exits 1 when ``worker_count > 1`` but
+    the configured store reports ``supports_leasing=False`` (per `09` §6.2
+    / DEC-035 #2)."""
+    import typer
+    from smai_cli.main import _enforce_lease_capability
+    from smai_core.plugins.metadata_store._capabilities import MetadataStoreCapabilities
+
+    class _Store:
+        capabilities = MetadataStoreCapabilities(
+            is_tenant_aware=False,
+            supports_transactions=True,
+            supports_leasing=False,
+        )
+
+    class _Plugins:
+        metadata_store = _Store()
+
+    class _RuntimePlugins:
+        metadata_store = "fakestore"
+
+    class _EngineCfg:
+        worker_count = 4
+
+    class _Config:
+        engine = _EngineCfg()
+        plugins = _RuntimePlugins()
+
+    class _Runtime:
+        config = _Config()
+        plugins = _Plugins()
+
+    with pytest.raises(typer.Exit):
+        _enforce_lease_capability(_Runtime())
+
+
+def test_enforce_lease_capability_allows_single_worker_against_non_leasing_store() -> None:
+    """Single-worker deployments are allowed against non-lease-capable
+    stores — the lease contention only materializes across workers."""
+    from smai_cli.main import _enforce_lease_capability
+    from smai_core.plugins.metadata_store._capabilities import MetadataStoreCapabilities
+
+    class _Store:
+        capabilities = MetadataStoreCapabilities(
+            is_tenant_aware=False,
+            supports_transactions=True,
+            supports_leasing=False,
+        )
+
+    class _Plugins:
+        metadata_store = _Store()
+
+    class _RuntimePlugins:
+        metadata_store = "fakestore"
+
+    class _EngineCfg:
+        worker_count = 1
+
+    class _Config:
+        engine = _EngineCfg()
+        plugins = _RuntimePlugins()
+
+    class _Runtime:
+        config = _Config()
+        plugins = _Plugins()
+
+    # No raise — single-worker is allowed.
+    _enforce_lease_capability(_Runtime())
+
+
+def test_enforce_lease_capability_allows_multi_worker_against_leasing_store() -> None:
+    """Multi-worker is allowed when the store reports ``supports_leasing=True``."""
+    from smai_cli.main import _enforce_lease_capability
+    from smai_core.plugins.metadata_store._capabilities import MetadataStoreCapabilities
+
+    class _Store:
+        capabilities = MetadataStoreCapabilities(
+            is_tenant_aware=False,
+            supports_transactions=True,
+            supports_leasing=True,
+        )
+
+    class _Plugins:
+        metadata_store = _Store()
+
+    class _RuntimePlugins:
+        metadata_store = "postgres"
+
+    class _EngineCfg:
+        worker_count = 8
+
+    class _Config:
+        engine = _EngineCfg()
+        plugins = _RuntimePlugins()
+
+    class _Runtime:
+        config = _Config()
+        plugins = _Plugins()
+
+    _enforce_lease_capability(_Runtime())
+
+
 # === SIGINT/SIGTERM signal handling ==========================================
 
 

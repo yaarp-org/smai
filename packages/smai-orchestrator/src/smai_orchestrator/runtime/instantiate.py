@@ -301,7 +301,7 @@ async def _maybe_dispose(plugin: object) -> None:
 
 
 async def _construct_metadata_store(
-    selection: PluginSelection, stack: AsyncExitStack
+    selection: PluginSelection, stack: AsyncExitStack, *, skip_migrate: bool
 ) -> MetadataStore:
     group = "smai.metadata_stores"
     cls = _load_entry_point(group, selection.metadata_store)
@@ -312,13 +312,14 @@ async def _construct_metadata_store(
         kwargs=selection.metadata_store_config,
     )
     _check_protocol(instance, group=group, name=selection.metadata_store, interface=MetadataStore)
-    await _maybe_migrate(instance)
+    if not skip_migrate:
+        await _maybe_migrate(instance)
     stack.push_async_callback(_maybe_dispose, instance)
     return instance
 
 
 async def _construct_artifact_store(
-    selection: PluginSelection, stack: AsyncExitStack
+    selection: PluginSelection, stack: AsyncExitStack, *, skip_migrate: bool
 ) -> ArtifactStore:
     group = "smai.artifact_stores"
     cls = _load_entry_point(group, selection.artifact_store)
@@ -329,12 +330,15 @@ async def _construct_artifact_store(
         kwargs=selection.artifact_store_config,
     )
     _check_protocol(instance, group=group, name=selection.artifact_store, interface=ArtifactStore)
-    await _maybe_migrate(instance)
+    if not skip_migrate:
+        await _maybe_migrate(instance)
     stack.push_async_callback(_maybe_dispose, instance)
     return instance
 
 
-async def _construct_compute(selection: PluginSelection, stack: AsyncExitStack) -> Compute:
+async def _construct_compute(
+    selection: PluginSelection, stack: AsyncExitStack, *, skip_migrate: bool
+) -> Compute:
     group = "smai.computes"
     cls = _load_entry_point(group, selection.compute)
     instance = _construct_with_kwargs(
@@ -344,7 +348,8 @@ async def _construct_compute(selection: PluginSelection, stack: AsyncExitStack) 
         kwargs=selection.compute_config,
     )
     _check_protocol(instance, group=group, name=selection.compute, interface=Compute)
-    await _maybe_migrate(instance)
+    if not skip_migrate:
+        await _maybe_migrate(instance)
     stack.push_async_callback(_maybe_dispose, instance)
     return instance
 
@@ -369,7 +374,7 @@ DEFAULT_TASK_ROLES: tuple[str, ...] = (
 
 
 async def _construct_llm_providers(
-    selection: PluginSelection, stack: AsyncExitStack
+    selection: PluginSelection, stack: AsyncExitStack, *, skip_migrate: bool
 ) -> dict[str, LlmProvider]:
     """Construct one :class:`LlmProvider` per :data:`DEFAULT_TASK_ROLES`,
     sharing instances when multiple roles resolve to the same
@@ -406,7 +411,8 @@ async def _construct_llm_providers(
         kwargs=selection.llm_provider_config,
     )
     _check_protocol(instance, group=group, name=selection.llm_provider, interface=LlmProvider)
-    await _maybe_migrate(instance)
+    if not skip_migrate:
+        await _maybe_migrate(instance)
     stack.push_async_callback(_maybe_dispose, instance)
     return {role: instance for role in DEFAULT_TASK_ROLES}
 
@@ -419,6 +425,7 @@ async def instantiate_plugins(
     selection: PluginSelection,
     *,
     overrides: PluginOverrides | None = None,
+    skip_migrate: bool = False,
 ) -> AsyncGenerator[InstantiatedPlugins, None]:
     """Discover and instantiate the four plugins per ``selection``.
 
@@ -444,28 +451,36 @@ async def instantiate_plugins(
     responsibility (we don't ``dispose`` what we didn't construct);
     use :attr:`PluginOverrides.extra_teardown` to register additional
     callbacks if needed.
+
+    ``skip_migrate=True`` suppresses the post-construction
+    ``await migrate()`` lifecycle hook on every discovered plugin.
+    Production callers (``smai dev``, ``smai start``) leave this at
+    ``False`` so the storage-layer schema is brought up to head as part
+    of boot. Read-only probes (``smai verify`` per `09` §1) flip this
+    to ``True`` so the verify probe is strictly read-only — surfacing
+    a misconfigured store without mutating its schema.
     """
     overrides = overrides or PluginOverrides()
     async with AsyncExitStack() as stack:
         metadata_store = (
             overrides.metadata_store
             if overrides.metadata_store is not None
-            else await _construct_metadata_store(selection, stack)
+            else await _construct_metadata_store(selection, stack, skip_migrate=skip_migrate)
         )
         artifact_store = (
             overrides.artifact_store
             if overrides.artifact_store is not None
-            else await _construct_artifact_store(selection, stack)
+            else await _construct_artifact_store(selection, stack, skip_migrate=skip_migrate)
         )
         compute = (
             overrides.compute
             if overrides.compute is not None
-            else await _construct_compute(selection, stack)
+            else await _construct_compute(selection, stack, skip_migrate=skip_migrate)
         )
         llm_providers = (
             overrides.llm_providers
             if overrides.llm_providers is not None
-            else await _construct_llm_providers(selection, stack)
+            else await _construct_llm_providers(selection, stack, skip_migrate=skip_migrate)
         )
         for callback in overrides.extra_teardown:
             stack.push_async_callback(callback)

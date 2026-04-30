@@ -816,3 +816,25 @@ class MetadataStoreConformance:
     def test_capabilities_are_capabilities_model(self, store: MetadataStore) -> None:
         """Capability attribute is the right Pydantic model."""
         assert isinstance(store.capabilities, MetadataStoreCapabilities)
+
+    async def test_supports_leasing_matches_behavior(self, store: MetadataStore) -> None:
+        """When ``capabilities.supports_leasing=True``, the lease
+        primitives MUST function (per §5.6.7 / DEC-035 #2). When
+        ``False``, this test skips per the §5.8 gating rule.
+
+        The lease-semantics group above (acquire/release/extend) already
+        exercises every primitive in detail; this case pins the
+        capability-to-behavior linkage explicitly so a plugin that
+        reports ``True`` while leaving the primitives unimplemented
+        fails the conformance suite at this single point rather than
+        seven lease tests deep.
+        """
+        if not store.capabilities.supports_leasing:
+            pytest.skip(
+                "plugin reports supports_leasing=False; lease-primitive contract not exercised"
+            )
+        cg = make_record(ComparisonGroupRecord, id="cg_caps_lease", state="draft", version=1)
+        await store.create_cg(cg)
+        token = await store.acquire_lease("cg", "cg_caps_lease", 60, "worker-caps")
+        assert token is not None
+        await store.release_lease(token)

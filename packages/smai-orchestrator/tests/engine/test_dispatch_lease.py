@@ -391,7 +391,7 @@ async def test_lease_held_outcome_does_not_invoke_compute(
 
 
 async def test_heartbeat_extends_lease_during_long_dispatch(
-    store: SqliteStore, fake_compute: FakeCompute, fake_artifact_store: FakeArtifactStore
+    tmp_path, fake_compute: FakeCompute, fake_artifact_store: FakeArtifactStore
 ) -> None:
     """Heartbeat fires at least once during a long dispatch and bumps
     ``lease_expires_at`` past the original window.
@@ -400,55 +400,70 @@ async def test_heartbeat_extends_lease_during_long_dispatch(
     the heartbeat fires immediately after the dispatch starts; one
     extension call adds another 2 seconds to the window. We assert the
     lease's nonce was rotated and the expiry pushed out.
+
+    Uses a tempfile-backed SQLite store rather than the shared
+    ``:memory:`` ``store`` fixture (Task R4 fix #5): the heartbeat task
+    fires concurrent ``extend_lease`` UPDATEs while the dispatch handler
+    is mid-await, and on aiosqlite + ``:memory:`` that intermixing can
+    leak shared connection-pool state across tests run earlier in the
+    session under ``pytest-randomly`` ordering. A file-backed store
+    keeps each test's schema fully isolated (mirroring the
+    ``test_lease_lost_mid_dispatch_aborts_and_surfaces_conflict`` fix).
     """
-    cg = await _seed_cg(store, cg_id="cg_heartbeat")
+    db_path = tmp_path / "heartbeat.db"
+    store = SqliteStore(f"sqlite+aiosqlite:///{db_path}")
+    await store.migrate()
+    try:
+        cg = await _seed_cg(store, cg_id="cg_heartbeat")
 
-    # Pre-acquire to capture the original (post-acquire) state.
-    pre_token = await store.acquire_lease("cg", cg.id, 60, "worker-pre")
-    assert pre_token is not None
-    await store.release_lease(pre_token)
+        # Pre-acquire to capture the original (post-acquire) state.
+        pre_token = await store.acquire_lease("cg", cg.id, 60, "worker-pre")
+        assert pre_token is not None
+        await store.release_lease(pre_token)
 
-    extends_observed = 0
-    real_extend = store.extend_lease
+        extends_observed = 0
+        real_extend = store.extend_lease
 
-    async def _counting_extend(token: LeaseToken, additional_seconds: int) -> LeaseToken:
-        nonlocal extends_observed
-        extends_observed += 1
-        return await real_extend(token, additional_seconds=additional_seconds)
+        async def _counting_extend(token: LeaseToken, additional_seconds: int) -> LeaseToken:
+            nonlocal extends_observed
+            extends_observed += 1
+            return await real_extend(token, additional_seconds=additional_seconds)
 
-    # Monkey-patch the bound method on this instance.
-    store.extend_lease = _counting_extend  # type: ignore[method-assign]
+        # Monkey-patch the bound method on this instance.
+        store.extend_lease = _counting_extend  # type: ignore[method-assign]
 
-    handler_done = asyncio.Event()
+        handler_done = asyncio.Event()
 
-    async def _slow_handler(_ctx) -> object:  # noqa: ARG001
-        # Sleep long enough for at least two heartbeat extensions.
-        await asyncio.sleep(0.05)
-        handler_done.set()
-        from smai_orchestrator.engine import DispatchOutcome
+        async def _slow_handler(_ctx) -> object:  # noqa: ARG001
+            # Sleep long enough for at least two heartbeat extensions.
+            await asyncio.sleep(0.05)
+            handler_done.set()
+            from smai_orchestrator.engine import DispatchOutcome
 
-        return DispatchOutcome(submitted_handles=[make_job_handle("h-heartbeat")])
+            return DispatchOutcome(submitted_handles=[make_job_handle("h-heartbeat")])
 
-    spec = _spec(handler=_slow_handler)
-    config = EngineConfig(lease_seconds=60, extend_lease_interval_seconds=0)
+        spec = _spec(handler=_slow_handler)
+        config = EngineConfig(lease_seconds=60, extend_lease_interval_seconds=0)
 
-    outcome = await drive_entity_phase3(
-        spec=spec,
-        metadata_store=store,
-        artifact_store=fake_artifact_store,
-        compute=fake_compute,
-        llm=None,
-        config=config,
-        record=cg,
-        worker_id="worker-hb",
-    )
+        outcome = await drive_entity_phase3(
+            spec=spec,
+            metadata_store=store,
+            artifact_store=fake_artifact_store,
+            compute=fake_compute,
+            llm=None,
+            config=config,
+            record=cg,
+            worker_id="worker-hb",
+        )
 
-    assert outcome.status == "advanced"
-    assert handler_done.is_set()
-    assert extends_observed >= 1, (
-        "the heartbeat task should have called extend_lease at least once "
-        "during a >0-duration dispatch with extend_lease_interval_seconds=0"
-    )
+        assert outcome.status == "advanced"
+        assert handler_done.is_set()
+        assert extends_observed >= 1, (
+            "the heartbeat task should have called extend_lease at least once "
+            "during a >0-duration dispatch with extend_lease_interval_seconds=0"
+        )
+    finally:
+        await store.dispose()
 
 
 # === Lease expiry → other worker can recover ================================

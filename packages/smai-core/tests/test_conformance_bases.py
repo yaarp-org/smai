@@ -205,6 +205,7 @@ _METADATA_EXPECTED_METHODS = {
     "test_unknown_token_release_noop",
     "test_tenant_fairness_contract",
     "test_capabilities_are_capabilities_model",
+    "test_supports_leasing_matches_behavior",
 }
 
 

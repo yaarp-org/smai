@@ -10,7 +10,7 @@ and queuing Bedrock-specific exceptions through it.
 
 from __future__ import annotations
 
-from _fakes import FakeBedrockClient  # type: ignore[import-not-found]
+from _bedrock_fakes import FakeBedrockClient  # type: ignore[import-not-found]
 from smai_core.plugins.conformance.test_llm_provider import LlmProviderConformance
 from smai_llm_bedrock import BedrockProvider
 

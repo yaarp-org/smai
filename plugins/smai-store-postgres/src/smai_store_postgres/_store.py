@@ -819,6 +819,7 @@ class PostgresStore:
         self.capabilities: MetadataStoreCapabilities = MetadataStoreCapabilities(
             is_tenant_aware=tenant_aware,
             supports_transactions=True,
+            supports_leasing=True,
         )
 
     async def migrate(self) -> None:

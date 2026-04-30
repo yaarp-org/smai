@@ -300,7 +300,7 @@ def test_smai_verify_cli_text_output_all_pass(monkeypatch: pytest.MonkeyPatch) -
         compute=_JobNotFoundCompute(),
     )
 
-    def _fake_instantiate_plugins(_selection: object) -> _StubInstantiate:
+    def _fake_instantiate_plugins(_selection: object, **_kwargs: object) -> _StubInstantiate:
         return _StubInstantiate(plugins)
 
     monkeypatch.setattr(
@@ -358,7 +358,7 @@ def test_smai_verify_cli_exits_one_on_any_fail(monkeypatch: pytest.MonkeyPatch) 
         compute=_AuthFailedCompute(),  # the failing plugin
     )
 
-    def _fake_instantiate_plugins(_selection: object) -> _StubInstantiate:
+    def _fake_instantiate_plugins(_selection: object, **_kwargs: object) -> _StubInstantiate:
         return _StubInstantiate(plugins)
 
     monkeypatch.setattr(
@@ -390,6 +390,144 @@ pipelines: ["smai_cg_execution", "smai_cg_entries"]
     assert "ComputeUnavailable" in result.output
 
 
+def test_smai_verify_passes_skip_migrate_true(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``smai verify`` invokes ``instantiate_plugins`` with
+    ``skip_migrate=True`` so the read-only probe does not mutate the
+    configured store's schema (Task R4 fix #2).
+    """
+    from smai_cli.main import app
+    from smai_orchestrator import InstantiatedPlugins
+    from typer.testing import CliRunner
+
+    class _StubInstantiate:
+        def __init__(self, plugins: InstantiatedPlugins) -> None:
+            self._plugins = plugins
+
+        async def __aenter__(self) -> InstantiatedPlugins:
+            return self._plugins
+
+        async def __aexit__(self, *_: object) -> None:
+            del _
+
+    plugins = InstantiatedPlugins(
+        llm_providers={"planner": StubLlmProvider()},
+        metadata_store=_OkMetadataStub(),  # type: ignore[arg-type]
+        artifact_store=InMemoryArtifactStore(),  # type: ignore[arg-type]
+        compute=_JobNotFoundCompute(),
+    )
+
+    captured_kwargs: dict[str, object] = {}
+
+    def _capturing_instantiate_plugins(_selection: object, **kwargs: object) -> _StubInstantiate:
+        captured_kwargs.update(kwargs)
+        return _StubInstantiate(plugins)
+
+    monkeypatch.setattr(
+        "smai_orchestrator.instantiate_plugins",
+        _capturing_instantiate_plugins,
+    )
+
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        smai_yaml = Path(tmp_dir) / "smai.yaml"
+        smai_yaml.write_text(
+            """
+engine: {}
+plugins:
+  llm_provider: bedrock
+  metadata_store: sqlite
+  artifact_store: localfs
+  compute: localgpu
+pipelines: ["smai_cg_execution", "smai_cg_entries"]
+""",
+            encoding="utf-8",
+        )
+        runner = CliRunner()
+        result = runner.invoke(app, ["verify", "-c", str(smai_yaml)])
+    assert result.exit_code == 0, result.output
+    assert captured_kwargs.get("skip_migrate") is True, (
+        f"smai verify must call instantiate_plugins with skip_migrate=True; "
+        f"observed kwargs={captured_kwargs}"
+    )
+
+
+def test_smai_verify_does_not_call_migrate_on_metadata_store(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End-to-end: ``smai verify`` against a stub MetadataStore that
+    exposes a ``migrate`` method must NOT trigger that method (Task R4
+    fix #2 — verify is strictly read-only).
+    """
+    from smai_cli.main import app
+    from smai_orchestrator import InstantiatedPlugins
+    from typer.testing import CliRunner
+
+    migrate_calls: list[str] = []
+
+    class _MigrateRecordingStore(_OkMetadataStub):
+        async def migrate(self) -> None:
+            migrate_calls.append("called")
+
+    class _StubInstantiate:
+        def __init__(self, plugins: InstantiatedPlugins, *, skip_migrate: bool) -> None:
+            self._plugins = plugins
+            self._skip_migrate = skip_migrate
+
+        async def __aenter__(self) -> InstantiatedPlugins:
+            # Mirror the production helper's lifecycle hook gating: only
+            # call migrate() when skip_migrate=False.
+            if not self._skip_migrate:
+                await self._plugins.metadata_store.migrate()  # type: ignore[attr-defined]
+            return self._plugins
+
+        async def __aexit__(self, *_: object) -> None:
+            del _
+
+    store = _MigrateRecordingStore()
+    plugins = InstantiatedPlugins(
+        llm_providers={"planner": StubLlmProvider()},
+        metadata_store=store,  # type: ignore[arg-type]
+        artifact_store=InMemoryArtifactStore(),  # type: ignore[arg-type]
+        compute=_JobNotFoundCompute(),
+    )
+
+    def _fake_instantiate_plugins(
+        _selection: object, *, skip_migrate: bool = False, **_kwargs: object
+    ) -> _StubInstantiate:
+        return _StubInstantiate(plugins, skip_migrate=skip_migrate)
+
+    monkeypatch.setattr(
+        "smai_orchestrator.instantiate_plugins",
+        _fake_instantiate_plugins,
+    )
+
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        smai_yaml = Path(tmp_dir) / "smai.yaml"
+        smai_yaml.write_text(
+            """
+engine: {}
+plugins:
+  llm_provider: bedrock
+  metadata_store: sqlite
+  artifact_store: localfs
+  compute: localgpu
+pipelines: ["smai_cg_execution", "smai_cg_entries"]
+""",
+            encoding="utf-8",
+        )
+        runner = CliRunner()
+        result = runner.invoke(app, ["verify", "-c", str(smai_yaml)])
+    assert result.exit_code == 0, result.output
+    assert migrate_calls == [], (
+        f"smai verify must not trigger migrate(); observed {len(migrate_calls)} call(s)"
+    )
+
+
 def test_smai_verify_cli_json_format(monkeypatch: pytest.MonkeyPatch) -> None:
     """``--format=json`` emits a parseable JSON document with one entry
     per plugin interface."""
@@ -416,7 +554,7 @@ def test_smai_verify_cli_json_format(monkeypatch: pytest.MonkeyPatch) -> None:
         compute=_JobNotFoundCompute(),
     )
 
-    def _fake_instantiate_plugins(_selection: object) -> _StubInstantiate:
+    def _fake_instantiate_plugins(_selection: object, **_kwargs: object) -> _StubInstantiate:
         return _StubInstantiate(plugins)
 
     monkeypatch.setattr(

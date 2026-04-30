@@ -47,7 +47,7 @@ if str(_BEDROCK_TESTS_DIR) not in sys.path:
     sys.path.append(str(_BEDROCK_TESTS_DIR))
 
 # ruff: noqa: E402 — must come after the sys.path tweak above.
-from _fakes import FakeBedrockClient  # type: ignore[import-not-found]
+from _bedrock_fakes import FakeBedrockClient  # type: ignore[import-not-found]
 from smai_llm_bedrock import BedrockProvider
 
 

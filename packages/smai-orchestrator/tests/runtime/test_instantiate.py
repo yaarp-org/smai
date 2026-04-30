@@ -169,6 +169,42 @@ async def test_sqlite_store_migrate_runs_post_construction() -> None:
         assert page.items == []
 
 
+async def test_skip_migrate_suppresses_schema_creation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``skip_migrate=True`` keeps :meth:`SqliteStore.migrate` from being
+    called during plugin construction (Task R4 fix #2).
+
+    Read-only probes (``smai verify`` per `09-cli.md` §1) flip this kwarg
+    so the verify pings are strictly read-only — surfacing a stale
+    schema as a probe failure rather than silently mutating the store
+    as a boot side-effect.
+    """
+    migrate_calls: list[str] = []
+    real_migrate = SqliteStore.migrate
+
+    async def recording_migrate(self: SqliteStore) -> None:
+        migrate_calls.append("called")
+        await real_migrate(self)
+
+    monkeypatch.setattr(SqliteStore, "migrate", recording_migrate)
+
+    selection = _all_real_selection()
+    async with instantiate_plugins(selection, skip_migrate=True):
+        pass
+    assert migrate_calls == [], (
+        "SqliteStore.migrate must NOT be called when skip_migrate=True; "
+        f"observed {len(migrate_calls)} call(s)"
+    )
+
+    # Sanity check: with skip_migrate=False (the default), migrate IS
+    # called — establishes that the kwarg is the load-bearing toggle.
+    migrate_calls.clear()
+    async with instantiate_plugins(selection):
+        pass
+    assert migrate_calls == ["called"]
+
+
 async def test_dispose_runs_on_context_exit(monkeypatch: pytest.MonkeyPatch) -> None:
     """SqliteStore's ``dispose`` is called as a teardown callback on
     ``AsyncExitStack`` exit. Wrap the method to record the call rather

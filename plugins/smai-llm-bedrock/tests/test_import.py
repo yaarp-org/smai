@@ -20,7 +20,7 @@ def test_bedrock_provider_runtime_checkable_against_protocol() -> None:
     needing instantiation, which would touch boto3 + AWS).
     """
     # Construct against an in-memory fake so we don't reach for AWS.
-    from _fakes import FakeBedrockClient  # type: ignore[import-not-found]
+    from _bedrock_fakes import FakeBedrockClient  # type: ignore[import-not-found]
 
     instance = BedrockProvider(
         region="us-east-1",

@@ -659,6 +659,7 @@ class SqliteStore:
     capabilities: MetadataStoreCapabilities = MetadataStoreCapabilities(
         is_tenant_aware=False,
         supports_transactions=True,
+        supports_leasing=True,
     )
 
     def __init__(self, uri: str = DEFAULT_URI) -> None:
