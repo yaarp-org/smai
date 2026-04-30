@@ -33,6 +33,9 @@ dev = [
 testpaths = ["packages", "plugins", "tests"]
 addopts = "--import-mode=importlib"
 asyncio_mode = "auto"
+markers = [
+    "credentialed: requires real cloud / API credentials (AWS, Modal, Anthropic, etc.). Local-manual only — never run on CI. Each marked test ALSO carries an @pytest.mark.skipif on the relevant `*_TEST_*` env var so the test skips cleanly when creds are absent. Per Task 3.G3's no-credentials-in-CI convention.",
+]
 
 [tool.ruff]
 target-version = "py311"

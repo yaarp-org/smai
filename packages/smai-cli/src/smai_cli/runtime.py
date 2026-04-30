@@ -1039,6 +1039,70 @@ class Runtime:
 
     @classmethod
     @asynccontextmanager
+    async def start_worker(  # noqa: PLR0913
+        cls,
+        config: RuntimeConfig,
+        *,
+        worker_id: str,
+        workspace_root: Path | None = None,
+        plugin_overrides: PluginOverrides | None = None,
+        per_role_overrides: dict[str, str] | None = None,
+        env: Mapping[str, str] | None = None,
+        runtime_image: str = "smai-runtime:dev",
+        paper_fetcher: PaperFetcher | None = None,
+    ) -> AsyncGenerator[Runtime, None]:
+        """Out-of-band production worker (`09` §6 / `05` §7.2 / DEC-024).
+
+        The :meth:`start_in_band` counterpart for ``smai start``: same
+        spec registration + plugin instantiation + worker-loop machinery,
+        but production-shaped — the :class:`Runtime` yielded by this
+        context manager is meant to be observed (e.g., for a graceful
+        SIGTERM signal-handler that sets ``state.shutdown_event``), not
+        used as a one-stop shell. Submit verbs / dashboards run as
+        separate processes against the same :class:`MetadataStore`.
+
+        Implementation choice: the worker runs as a separate
+        :class:`asyncio.Task` within this CLI process — same shape as
+        :meth:`start_in_band`. The "out-of-band" framing of `09` §6.1
+        is operational, not implementation-level: the *deployment*
+        boundary (this CLI process == the worker process) is enforced
+        by systemd / supervisor / launchd running ``smai start`` as
+        its own long-lived service, with submit verbs / dashboards
+        invoked separately. A separate-OS-process design was
+        considered but rejected: it would require ``multiprocessing``-
+        style fork/spawn semantics which complicate signal handling
+        and plugin-state pickling, and adds no operational benefit
+        over "run ``smai start`` under systemd, kill it with SIGTERM"
+        — the same code, different config principle (`00` §4 #7) is
+        preserved with the asyncio-task design.
+
+        ``worker_id`` is **required** here (vs auto-generated in
+        :meth:`start_in_band`): production deployments pin a stable
+        identity per `01` §5.6 / DEC-035 #2 so the lease-holder field
+        on each entity row is human-readable in operator queries.
+        :func:`smai_cli.main.smai_start` resolves this from the
+        ``--worker-id`` flag, the ``SMAI_WORKER_ID`` env var, or a
+        ``f"{hostname}-{pid}-{uuid8}"`` fallback.
+
+        Other parameters mirror :meth:`start_in_band` exactly. The
+        body delegates to it with ``run_worker=True``; the only
+        difference is the docstring + the required ``worker_id``.
+        """
+        async with cls.start_in_band(
+            config,
+            workspace_root=workspace_root,
+            plugin_overrides=plugin_overrides,
+            per_role_overrides=per_role_overrides,
+            env=env,
+            runtime_image=runtime_image,
+            run_worker=True,
+            paper_fetcher=paper_fetcher,
+            worker_id=worker_id,
+        ) as runtime:
+            yield runtime
+
+    @classmethod
+    @asynccontextmanager
     async def start_in_band(  # noqa: PLR0913
         cls,
         config: RuntimeConfig,

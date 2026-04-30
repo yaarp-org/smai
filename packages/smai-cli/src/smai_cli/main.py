@@ -959,6 +959,304 @@ def smai_serve(
     asyncio.run(_run())
 
 
+# === Verb 13a: start (production worker process) =============================
+
+
+def _resolve_worker_id(*, override: str | None) -> str:
+    """Resolve the production worker identity per Task 3.G1's pattern.
+
+    Resolution order: explicit ``--worker-id`` flag > ``SMAI_WORKER_ID``
+    env > a ``f"{hostname}-{pid}-{uuid8}"`` host-pid-uuid fallback.
+    The lease-holder field on each entity row carries this value per
+    `01` §5.6 / DEC-035 #2 so operators can read it back from the DB.
+    """
+    if override is not None:
+        return override
+    env_override = os.environ.get("SMAI_WORKER_ID")
+    if env_override:
+        return env_override
+    import socket  # noqa: PLC0415
+    import uuid  # noqa: PLC0415
+
+    hostname = socket.gethostname() or "unknown"
+    return f"{hostname}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+
+
+def _validate_plugin_completeness(runtime_config: Any) -> None:
+    """Refuse to boot if any of the four plugin selections is empty.
+
+    Per `09-cli.md` §6.2 "smai start requires that all four plugin
+    selections be set to non-default values". The CLI's
+    :class:`PluginSelection` Pydantic model already requires non-empty
+    string fields at parse time (every config_layering test catches
+    this); this helper exists so the verb can surface a clear
+    actionable error if a future config-loading path lets an empty
+    string through. The downstream catches are the entry-point
+    discovery (:class:`PluginNotFound`) and the plugin constructor —
+    each surfaces a typed exception the verb already renders.
+    """
+    selection = runtime_config.plugins
+    missing: list[str] = []
+    if not selection.llm_provider:
+        missing.append("plugins.llm_provider")
+    if not selection.metadata_store:
+        missing.append("plugins.metadata_store")
+    if not selection.artifact_store:
+        missing.append("plugins.artifact_store")
+    if not selection.compute:
+        missing.append("plugins.compute")
+    if missing:
+        _err(
+            "smai start: incomplete plugin selection — "
+            f"missing required field(s): {', '.join(missing)}. "
+            "Set each in your smai.yaml or via SMAI_* env vars (see "
+            "`smai init` for a starter template)."
+        )
+
+
+async def _check_schema_at_head(runtime_config: Any) -> None:
+    """Refuse to boot against a stale schema (`smai start` pre-flight).
+
+    Mirrors ``smai migrate --check``'s programmatic shape — equivalent
+    in failure-mode coverage but doesn't shell out to a subprocess.
+    Per Task 3.H2's status-note carry-forward, ``smai start`` runs
+    this check before any plugin instantiation so a stale-schema
+    deployment fails with a clear actionable error rather than dying
+    mid-dispatch when a SQL feature added in a newer revision is
+    missing.
+    """
+    from smai_orchestrator.migrations import (  # noqa: PLC0415
+        get_current_revision,
+        get_head_revision,
+    )
+    from sqlalchemy.ext.asyncio import create_async_engine  # noqa: PLC0415
+
+    uri = _resolve_metadata_store_uri(runtime_config)
+    engine = create_async_engine(uri)
+    try:
+        current = await get_current_revision(engine)
+        head = get_head_revision()
+    finally:
+        await engine.dispose()
+    if current != head:
+        shown_current = current if current is not None else "<unstamped>"
+        _err(
+            "smai start: schema NOT at head — "
+            f"current={shown_current}, head={head}. "
+            "Run `smai migrate` to upgrade, then re-run `smai start`."
+        )
+
+
+@app.command("start")
+def smai_start(
+    config: Annotated[
+        Path | None,
+        typer.Option("--config", "-c", help="Path to a smai.yaml; overrides search order."),
+    ] = None,
+    worker_id: Annotated[
+        str | None,
+        typer.Option(
+            "--worker-id",
+            help=(
+                "Stable lease-holder identity for this worker process. "
+                "Resolution order: --worker-id flag > SMAI_WORKER_ID env "
+                "> f'{hostname}-{pid}-{uuid8}' fallback. The value lands "
+                "on every leased entity row's `leased_by` column per "
+                "DEC-035 #2; pin a stable id (e.g., the systemd unit "
+                "name) for production deployments so operators can read "
+                "it back."
+            ),
+        ),
+    ] = None,
+) -> None:
+    """Boot the production-mode worker process (`09` §6 / `05` §7.2).
+
+    The out-of-band counterpart to ``smai dev``: this CLI process IS
+    the worker, and runs until killed. It does NOT serve a dashboard
+    (`smai serve` is the dashboard verb), does NOT submit foreground
+    experiments (`smai run` / `smai submit-proposal` / `smai ingest`
+    are the submit verbs), and does NOT pretend to be a one-stop
+    shell. A typical deployment runs ``smai start`` as the entrypoint
+    of a long-lived container or systemd service.
+
+    Pre-flight refuses to boot on any of:
+
+    * Incomplete plugin selection (`09` §6.2): all four plugin slots
+      MUST be set in the resolved :class:`RuntimeConfig`. The Pydantic
+      model rejects empty strings at config parse time; this is a
+      defense-in-depth check.
+    * Stale schema: the ``MetadataStore``'s ``alembic_version`` row
+      MUST match the migrations head. Equivalent to
+      ``smai migrate --check`` but programmatic (no subprocess shell-
+      out). Run ``smai migrate`` to upgrade.
+
+    Operational guidance for systemd / supervisord / launchd unit
+    examples + recommended connection-pool sizing + log handling lives
+    in ``packages/smai-cli/OPERATIONS.md``. Production deployments
+    should use a Postgres ``MetadataStore`` (multi-worker leasing
+    requires lease-capability per `09` §6.2); single-worker
+    SQLite-backed deployments are allowed (single-VM self-hosted) but
+    MUST keep ``EngineConfig.worker_count=1``.
+
+    Multi-worker deployments per Task 3.G1 / DEC-035 #2: each worker
+    pins a stable ``worker_id``; the CAS-leased phase-3 dispatch
+    wrapper round-trips it as the ``leased_by`` column. Concurrent
+    workers against the same Postgres are supported.
+    """
+    try:
+        runtime_config = load_runtime_config(
+            config_path=config,
+            defaults=base_defaults(),
+        )
+    except (ConfigFileError, ConfigValidationError) as exc:
+        _err(str(exc))
+
+    _validate_plugin_completeness(runtime_config)
+    asyncio.run(_check_schema_at_head(runtime_config))
+
+    resolved_worker_id = _resolve_worker_id(override=worker_id)
+
+    workspace_root, _artifacts, _sqlite = _dev_artifact_paths()
+
+    async def _run() -> None:
+        async with Runtime.start_worker(
+            runtime_config,
+            worker_id=resolved_worker_id,
+            workspace_root=workspace_root,
+        ) as runtime:
+            stop_event = asyncio.Event()
+
+            def _signal_handler(*_: Any) -> None:
+                stop_event.set()
+
+            loop = asyncio.get_running_loop()
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                loop.add_signal_handler(sig, _signal_handler)
+
+            typer.echo(
+                "smai start: production worker running. "
+                f"worker_id={runtime.worker_id} "
+                f"workspace_root={runtime.workspace_root} "
+                f"poll_interval={runtime.config.engine.poll_interval_seconds}s "
+                f"worker_count={runtime.config.engine.worker_count}. "
+                "Send SIGTERM to drain gracefully."
+            )
+            await stop_event.wait()
+            typer.echo("smai start: shutdown signal received; draining...")
+
+    asyncio.run(_run())
+
+
+# === Verb 13b: verify (plugin-ping pre-flight) ===============================
+
+
+@app.command("verify")
+def smai_verify(
+    config: Annotated[
+        Path | None,
+        typer.Option("--config", "-c", help="Path to a smai.yaml; overrides search order."),
+    ] = None,
+    output_format: Annotated[
+        str,
+        typer.Option("--format", help="Output format: 'text' or 'json'."),
+    ] = "text",
+) -> None:
+    """Ping each configured plugin (`09` §6.2 — pre-flight).
+
+    Sibling of ``smai start``: instantiates the four plugins from the
+    resolved :class:`RuntimeConfig` and calls a minimal read-only
+    "ping" probe per interface. Surfaces misconfigured ``smai.yaml``
+    (bad creds, unreachable bucket, network issue, wrong region) with
+    a clear per-plugin diagnostic before a worker boots and starts
+    dispatching jobs.
+
+    Probe semantics (from :mod:`smai_cli.verify`):
+
+    * **LlmProvider** — single 1-token completion. **This costs real
+      tokens** (typically <10 in + 1 out, but provider-billed). The
+      operator gets one round-trip's worth of token usage per
+      ``smai verify`` invocation.
+    * **MetadataStore** — read-only count_in_state probe; surfaces
+      DB connectivity + auth + schema-at-head. Equivalent in failure
+      coverage to ``smai migrate --check``.
+    * **ArtifactStore** — read-only ``exists`` against a non-existent
+      key; surfaces bucket reachability + creds.
+    * **Compute** — read-only ``status`` against a non-existent
+      handle; expects :class:`JobNotFound`. Surfaces auth +
+      substrate reachability.
+
+    Exit code: 0 iff all four plugins ping clean. Non-zero (1) if
+    any plugin fails — the per-plugin reason is printed to stdout,
+    and the verb exits with code 1 so CI / deployment scripts can
+    gate on it.
+    """
+    from smai_orchestrator import instantiate_plugins  # noqa: PLC0415
+
+    from smai_cli.verify import (  # noqa: PLC0415
+        VerifyResult,
+        verify_artifact_store,
+        verify_compute,
+        verify_llm_provider,
+        verify_metadata_store,
+    )
+
+    try:
+        runtime_config = load_runtime_config(
+            config_path=config,
+            defaults=base_defaults(),
+        )
+    except (ConfigFileError, ConfigValidationError) as exc:
+        _err(str(exc))
+
+    _validate_plugin_completeness(runtime_config)
+
+    async def _run() -> dict[str, VerifyResult]:
+        async with instantiate_plugins(runtime_config.plugins) as plugins:
+            # Pick the first per-role provider — every role resolves
+            # to the same instance unless per-role overrides apply,
+            # and `smai verify` is a single-shot pre-flight, not a
+            # per-role health check.
+            llm_provider = next(iter(plugins.llm_providers.values()))
+            results = {
+                "llm_provider": await verify_llm_provider(llm_provider),
+                "metadata_store": await verify_metadata_store(plugins.metadata_store),
+                "artifact_store": await verify_artifact_store(plugins.artifact_store),
+                "compute": await verify_compute(plugins.compute),
+            }
+        return results
+
+    try:
+        results = asyncio.run(_run())
+    except Exception as exc:  # noqa: BLE001 — pre-construction failure is a fail
+        # Plugin instantiation failed before we reached the per-plugin
+        # ping helpers. Surface as a single-line FAIL so the operator
+        # sees the construction error verbatim.
+        _err(f"smai verify: plugin instantiation failed: {type(exc).__name__}: {exc}")
+
+    if output_format == "json":
+        typer.echo(
+            json.dumps(
+                {
+                    name: {
+                        "ok": result.ok,
+                        "reason": result.reason,
+                        "latency_ms": result.latency_ms,
+                    }
+                    for name, result in results.items()
+                },
+                indent=2,
+            )
+        )
+    else:
+        for name, result in results.items():
+            tag = "PASS" if result.ok else "FAIL"
+            latency = f" ({result.latency_ms:.1f}ms)" if result.latency_ms is not None else ""
+            typer.echo(f"{tag} {name}{latency}: {result.reason}")
+
+    if not all(result.ok for result in results.values()):
+        raise typer.Exit(code=1)
+
+
 # === Verb 13: migrate ========================================================
 
 
