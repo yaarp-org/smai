@@ -3,10 +3,39 @@ name = "smai-compute-runpod"
 version = "0.1.0"
 description = "Compute plugin: RunPod implementation."
 requires-python = ">=3.11"
-dependencies = []
+# Per Task 3.F4 / ``07-plugin-interfaces.md`` §7. The plugin talks to
+# RunPod's REST API directly via ``httpx`` rather than depending on the
+# ``runpod`` SDK — same flavor of decision as ``smai-compute-localgpu``
+# (shells out to the ``docker`` CLI rather than depending on the Python
+# Docker SDK). Rationale:
+#
+# * Keeps the runtime dep set minimal (``smai-core`` + ``httpx``);
+#   ``httpx`` is already a workspace dev-dep and a near-ubiquitous
+#   modern Python HTTP client.
+# * The ``runpod`` SDK pulls FastAPI / asyncio-throwaway shims that the
+#   plugin doesn't need; v1 only exercises a small surface (4 REST
+#   endpoints) and a thin client + clear translation layer is easier
+#   to maintain than tracking SDK version drift.
+# * Mocking ``httpx`` via ``httpx.MockTransport`` is a first-class shape
+#   the conformance suite uses — no extra ``pytest-httpx`` dep required.
+dependencies = [
+    "smai-core",
+    "httpx>=0.27",
+]
+
+[tool.uv.sources]
+smai-core = { workspace = true }
 
 [project.entry-points."smai.computes"]
 runpod = "smai_compute_runpod:RunPodCompute"
+
+[project.optional-dependencies]
+conformance = ["smai-core[conformance]"]
+
+[dependency-groups]
+dev = [
+    "smai-core[conformance]",
+]
 
 [build-system]
 requires = ["hatchling"]
