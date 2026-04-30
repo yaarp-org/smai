@@ -3,10 +3,37 @@ name = "smai-compute-modal"
 version = "0.1.0"
 description = "Compute plugin: Modal Sandboxes implementation."
 requires-python = ">=3.11"
-dependencies = []
+# Per Task 3.F3 / ``07-plugin-interfaces.md`` §7 + DEC-021. The plugin
+# wraps the Modal SDK's sync surface with ``asyncio.to_thread`` rather
+# than reaching for the ``.aio`` method-attribute shims — same flavor
+# of decision as ``smai-llm-bedrock`` and ``smai-artifacts-s3``.
+# Rationale:
+#
+# * Mocking shape stays simple — a duck-typed module fake exposes
+#   plain ``MagicMock``-compatible callables instead of async
+#   coroutines with both ``.aio`` and sync entrypoints.
+# * Pattern parity with the two other production plugins keeps the
+#   codebase coherent for plugin authors writing the next one.
+# * Per-call latency is dominated by the Modal RPC, not in-process
+#   scheduling — ``to_thread`` adds negligible overhead at v1 scale.
+dependencies = [
+    "smai-core",
+    "modal>=1.0",
+]
+
+[tool.uv.sources]
+smai-core = { workspace = true }
 
 [project.entry-points."smai.computes"]
 modal = "smai_compute_modal:ModalCompute"
+
+[project.optional-dependencies]
+conformance = ["smai-core[conformance]"]
+
+[dependency-groups]
+dev = [
+    "smai-core[conformance]",
+]
 
 [build-system]
 requires = ["hatchling"]
