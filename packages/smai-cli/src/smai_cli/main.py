@@ -1031,6 +1031,23 @@ def smai_migrate(
             ),
         ),
     ] = False,
+    upgrade_to: Annotated[
+        str | None,
+        typer.Option(
+            "--upgrade-to",
+            help=(
+                "Target a specific Alembic branch's head instead of the "
+                "default canonical OSS chain (Task 3.G2). Currently the "
+                "only non-default value is `tenant_aware`, which applies "
+                "the opt-in tenant_id schema extension (revision "
+                "0002_tenant_aware_schema). Required before flipping "
+                "`PostgresStore(tenant_aware=True)` on an existing "
+                "deployment if you prefer the explicit migration path; "
+                "constructor-driven boot-time migrate is idempotent and "
+                "works equally."
+            ),
+        ),
+    ] = None,
     config: Annotated[
         Path | None,
         typer.Option("--config", "-c", help="Path to a smai.yaml."),
@@ -1038,12 +1055,16 @@ def smai_migrate(
 ) -> None:
     """Run schema migrations against the configured ``MetadataStore`` (`09` §1).
 
-    Default (no flags): equivalent to ``alembic upgrade head``.
-    Idempotent — safe to run repeatedly.
+    Default (no flags): equivalent to ``alembic upgrade default@head`` —
+    the OSS canonical schema chain. Idempotent — safe to run repeatedly.
 
     Per Task 3.H2 / DEC-036: drives the shared Alembic env at
     :mod:`smai_orchestrator.migrations`. The same code path runs at
     `smai dev` boot via the plugin's ``migrate()`` method.
+
+    Per Task 3.G2: pass ``--upgrade-to=tenant_aware`` to apply the
+    opt-in tenant_id schema extension (`07` §5.5 / §5.6.8). Default
+    `smai migrate` (no flag) **never** touches the tenant_aware branch.
 
     Rollback policy: v2 does not implement ``alembic downgrade``;
     operators recover from a bad migration by restoring from backup.
@@ -1053,6 +1074,8 @@ def smai_migrate(
     exclusive_count = sum([check, dry_run, prune])
     if exclusive_count > 1:
         _err("smai migrate: --check, --dry-run, and --prune are mutually exclusive.")
+    if upgrade_to is not None and (check or prune):
+        _err("smai migrate: --upgrade-to is incompatible with --check / --prune.")
 
     # Unlike ``smai dev`` / ``smai run`` we DO NOT apply
     # :func:`_apply_dev_filesystem_defaults` here — those defaults are
@@ -1084,7 +1107,8 @@ def smai_migrate(
     from sqlalchemy.ext.asyncio import create_async_engine  # noqa: PLC0415
 
     if dry_run:
-        sql = render_offline_sql(uri)
+        target = f"{upgrade_to}@head" if upgrade_to is not None else None
+        sql = render_offline_sql(uri, target=target)
         typer.echo(sql, nl=False)
         return
 
@@ -1108,9 +1132,12 @@ def smai_migrate(
     async def _run_upgrade() -> None:
         engine = create_async_engine(uri)
         try:
-            await upgrade_to_head(engine)
-            head = get_head_revision()
-            typer.echo(f"smai migrate: schema upgraded to head ({head}).")
+            await upgrade_to_head(engine, branch=upgrade_to)
+            head = get_head_revision(branch=upgrade_to)
+            if upgrade_to is None:
+                typer.echo(f"smai migrate: schema upgraded to head ({head}).")
+            else:
+                typer.echo(f"smai migrate: schema upgraded to {upgrade_to}@head ({head}).")
         finally:
             await engine.dispose()
 

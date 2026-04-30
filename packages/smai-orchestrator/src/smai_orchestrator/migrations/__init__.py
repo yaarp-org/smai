@@ -36,7 +36,9 @@ from smai_orchestrator.migrations.metadata import (
     transition_log_table,
 )
 from smai_orchestrator.migrations.runner import (
+    DEFAULT_BRANCH,
     DEFAULT_RETENTION_DAYS,
+    TENANT_AWARE_BRANCH,
     get_current_revision,
     get_head_revision,
     is_at_head,
@@ -46,10 +48,12 @@ from smai_orchestrator.migrations.runner import (
 )
 
 __all__ = [
+    "DEFAULT_BRANCH",
     "DEFAULT_RETENTION_DAYS",
     "ENTITY_PK_COLUMN",
     "ENTITY_TABLE",
     "RETENTION_TABLES",
+    "TENANT_AWARE_BRANCH",
     "agent_sessions_table",
     "cgs_table",
     "entries_table",

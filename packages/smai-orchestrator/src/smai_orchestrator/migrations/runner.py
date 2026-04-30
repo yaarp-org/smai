@@ -61,6 +61,25 @@ DEFAULT_RETENTION_DAYS: dict[str, int] = {
 }
 
 
+# Branch labels for the Alembic revision graph (Task 3.G2 / `07` §5.6.8).
+#
+# The default OSS schema chain is the ``default`` branch — every reference
+# plugin (``SqliteStore``, OSS ``PostgresStore``) targets it at boot. The
+# opt-in tenant-aware schema extension (``tenant_id`` column on every
+# pipeline-tracking table per `07` §5.5 / §5.6.8) lives on the
+# ``tenant_aware`` branch as a separate-root revision with
+# ``depends_on=0001_initial_schema`` — Alembic enforces 0001 runs first
+# when ``tenant_aware@head`` is the upgrade target.
+#
+# Operators wanting tenant-aware ordering construct the plugin with
+# ``tenant_aware=True`` (which dispatches ``upgrade_to_head(branch=
+# "tenant_aware")``) or invoke ``smai migrate --upgrade-to=tenant_aware``
+# explicitly. The default ``smai migrate`` command stays on the default
+# branch.
+DEFAULT_BRANCH: str = "default"
+TENANT_AWARE_BRANCH: str = "tenant_aware"
+
+
 def _migrations_dir() -> Path:
     """Resolve the directory containing :mod:`env.py` + ``versions/``."""
     return Path(__file__).resolve().parent
@@ -82,35 +101,70 @@ def _build_config(*, url: str | None = None) -> Config:
     return cfg
 
 
-def _do_upgrade(connection: Connection, cfg: Config) -> None:
+def _do_upgrade(connection: Connection, cfg: Config, target: str) -> None:
     """Sync helper used inside :meth:`AsyncConnection.run_sync`."""
     cfg.attributes["connection"] = connection
-    command.upgrade(cfg, "head")
+    command.upgrade(cfg, target)
 
 
-async def upgrade_to_head(engine: AsyncEngine) -> None:
-    """Run ``alembic upgrade head`` against ``engine``.
+def _resolve_branch_target(branch: str | None) -> str:
+    """Translate ``branch`` into the Alembic ``<label>@head`` target.
 
-    Idempotent: the upgrade against a head schema is a no-op (Alembic
-    consults ``alembic_version`` and skips revisions whose
-    ``down_revision`` chain is already applied).
+    Branch-aware targeting (per Task 3.G2) is the cleanest way to keep
+    the opt-in tenant-aware schema extension out of the default upgrade
+    path. ``branch=None`` resolves to the default branch so callers that
+    pre-date 3.G2 (every reference plugin's ``migrate()``) keep their
+    pre-3.G2 behavior.
     """
+    label = branch if branch is not None else DEFAULT_BRANCH
+    return f"{label}@head"
+
+
+async def upgrade_to_head(engine: AsyncEngine, branch: str | None = None) -> None:
+    """Run ``alembic upgrade <branch>@head`` against ``engine``.
+
+    ``branch=None`` (default): targets the ``default`` branch — the OSS
+    canonical schema (revision ``0001_initial_schema``). This preserves
+    the pre-3.G2 boot-time behavior every reference plugin's
+    ``migrate()`` relies on.
+
+    ``branch="tenant_aware"``: targets the opt-in tenant-aware branch
+    (revision ``0002_tenant_aware_schema``). Alembic walks the
+    ``depends_on=0001_initial_schema`` chain so 0001 is applied first,
+    then 0002 adds ``tenant_id`` columns + indexes to every pipeline-
+    tracking table per `07` §5.5 / §5.6.8. Used by
+    :class:`PostgresStore(tenant_aware=True)` at boot and by
+    ``smai migrate --upgrade-to=tenant_aware``.
+
+    Idempotent in both modes: a re-run against a head-stamped database
+    is a no-op (Alembic consults ``alembic_version`` and skips revisions
+    whose dep graph is already applied).
+    """
+    target = _resolve_branch_target(branch)
     cfg = _build_config()
     async with engine.begin() as conn:
-        await conn.run_sync(_do_upgrade, cfg)
+        await conn.run_sync(_do_upgrade, cfg, target)
 
 
-def get_head_revision() -> str:
-    """Return the ``rev_id`` of the most recent revision on this branch."""
+def get_head_revision(branch: str | None = None) -> str:
+    """Return the ``rev_id`` of the head revision on ``branch``.
+
+    Per Task 3.G2's branch-aware Alembic graph: the default ``branch=
+    None`` returns the ``default`` branch's head (the OSS canonical
+    schema, ``0001_initial_schema``). Pass ``branch="tenant_aware"`` for
+    the opt-in tenant-aware extension's head.
+    """
+    label = branch if branch is not None else DEFAULT_BRANCH
     cfg = _build_config()
     script = ScriptDirectory.from_config(cfg)
-    head = script.get_current_head()
-    if head is None:
+    try:
+        rev = script.get_revision(f"{label}@head")
+    except Exception as exc:  # noqa: BLE001 — re-wrap with our context
         raise RuntimeError(
-            "smai_orchestrator.migrations: no Alembic revisions found under "
-            f"{_migrations_dir() / 'versions'}."
-        )
-    return head
+            f"smai_orchestrator.migrations: no Alembic head found for branch "
+            f"{label!r} under {_migrations_dir() / 'versions'}."
+        ) from exc
+    return rev.revision
 
 
 def _do_get_current(connection: Connection) -> str | None:
@@ -124,25 +178,33 @@ async def get_current_revision(engine: AsyncEngine) -> str | None:
         return await conn.run_sync(_do_get_current)
 
 
-async def is_at_head(engine: AsyncEngine) -> bool:
-    """``True`` iff the database's revision matches the migrations' head."""
+async def is_at_head(engine: AsyncEngine, branch: str | None = None) -> bool:
+    """``True`` iff the database's revision matches the head of ``branch``.
+
+    ``branch=None`` checks against the default branch (the OSS
+    canonical schema). Pass ``branch="tenant_aware"`` to verify the
+    opt-in tenant-aware extension is at head.
+    """
     current = await get_current_revision(engine)
     if current is None:
         return False
-    return current == get_head_revision()
+    return current == get_head_revision(branch)
 
 
-def render_offline_sql(url: str, *, target: str = "head") -> str:
+def render_offline_sql(url: str, *, target: str | None = None) -> str:
     """Render ``alembic upgrade <target>`` SQL for ``url`` without executing.
 
     Honors the dialect inferred from the URL — SQLite emits SQLite SQL,
     Postgres (``postgresql://...`` or ``postgresql+asyncpg://...``)
     emits Postgres SQL.
 
-    The ``target`` defaults to ``"head"``; callers can pass ``"base:head"``
-    for the full from-scratch upgrade emission. The Alembic ``--sql``
-    flag is what powers ``smai migrate --dry-run``.
+    The ``target`` defaults to ``"default@head"`` so the opt-in
+    tenant-aware extension stays out of the dry-run unless asked for
+    explicitly. Callers wanting the tenant-aware DDL pass
+    ``target="tenant_aware@head"``; the Alembic ``--sql`` flag is what
+    powers ``smai migrate --dry-run``.
     """
+    resolved_target = target if target is not None else _resolve_branch_target(None)
     cfg = _build_config(url=_strip_async_driver(url))
     buf = io.StringIO()
     # Alembic emits offline SQL to ``stdout`` by default; redirect it
@@ -151,7 +213,7 @@ def render_offline_sql(url: str, *, target: str = "head") -> str:
     # ``config.output_buffer`` attribute, which has shifted across
     # minor versions.
     with contextlib.redirect_stdout(buf):
-        command.upgrade(cfg, target, sql=True)
+        command.upgrade(cfg, resolved_target, sql=True)
     return buf.getvalue()
 
 
@@ -239,7 +301,9 @@ async def prune_retention_tables(
 
 
 __all__ = [
+    "DEFAULT_BRANCH",
     "DEFAULT_RETENTION_DAYS",
+    "TENANT_AWARE_BRANCH",
     "get_current_revision",
     "get_head_revision",
     "is_at_head",

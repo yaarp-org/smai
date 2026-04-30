@@ -39,9 +39,16 @@ from alembic import op
 from smai_orchestrator.migrations.metadata import metadata as target_metadata
 
 # revision identifiers, used by Alembic.
+#
+# Per Task 3.G2: the canonical OSS schema lives on the ``default``
+# branch. The opt-in tenant-aware extension (revision
+# ``0002_tenant_aware_schema``) is a separate-root revision on the
+# ``tenant_aware`` branch that ``depends_on`` this one — Alembic
+# enforces 0001 ships before 0002 when ``tenant_aware@head`` is the
+# upgrade target.
 revision: str = "0001_initial_schema"
 down_revision: str | None = None
-branch_labels: str | Sequence[str] | None = None
+branch_labels: str | Sequence[str] | None = ("default",)
 depends_on: str | Sequence[str] | None = None
 
 

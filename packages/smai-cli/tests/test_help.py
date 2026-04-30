@@ -9,8 +9,8 @@ input-path framing. Task 3.E2 (Phase-3 W1.b) landed ``ingest``
 per DEC-032 OQ1's "explicit `smai ingest` only" rule. Task 3.H1
 landed the read-only dashboard verb ``serve`` (`09` §5.4); Task
 3.H2 landed ``migrate`` (`09` §1) for production-deployment
-schema management. The remaining Phase-3 verb (``start``) is not
-yet shipped.
+schema management. The remaining Phase-3 verbs (``start``,
+``verify``) are not yet shipped.
 """
 
 from __future__ import annotations
@@ -41,11 +41,7 @@ EXPECTED_VERBS: frozenset[str] = frozenset(
     }
 )
 
-FORBIDDEN_PHASE_3_VERBS: frozenset[str] = frozenset(
-    {
-        "start",
-    }
-)
+FORBIDDEN_PHASE_3_VERBS: frozenset[str] = frozenset({"start", "verify"})
 
 
 def _run_help(*args: str) -> str:

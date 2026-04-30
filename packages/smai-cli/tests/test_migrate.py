@@ -155,6 +155,78 @@ def test_migrate_flags_are_mutually_exclusive(smai_home: Path) -> None:
     assert "mutually exclusive" in combined
 
 
+def test_migrate_upgrade_to_tenant_aware_applies_0002(smai_home: Path) -> None:
+    """``smai migrate --upgrade-to=tenant_aware`` runs the opt-in 0002
+    revision (Task 3.G2 / `07` §5.5 / §5.6.8).
+
+    Default ``smai migrate`` (no flag) targets ``default@head`` and
+    stamps the DB at ``0001_initial_schema``; the explicit ``--upgrade-
+    to=tenant_aware`` walks the depends_on chain (0001 first, then
+    0002) and stamps at ``0002_tenant_aware_schema``. The schema then
+    carries a ``tenant_id`` column on every pipeline-tracking table.
+    """
+    sqlite_path = smai_home / "state.db"
+    smai_yaml = _write_smai_yaml(smai_home, sqlite_path=sqlite_path)
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["migrate", "--upgrade-to", "tenant_aware", "-c", str(smai_yaml)],
+    )
+    assert result.exit_code == 0, result.output
+    assert "tenant_aware@head" in result.output
+    assert "0002_tenant_aware_schema" in result.output
+
+    # Verify the tenant_id column landed on a representative table.
+    async def _check() -> bool:
+        engine = create_async_engine(f"sqlite+aiosqlite:///{sqlite_path}")
+        try:
+            from sqlalchemy import text
+
+            async with engine.connect() as conn:
+                result_rows = await conn.execute(text("PRAGMA table_info(proposals)"))
+                columns = [row[1] for row in result_rows.all()]
+                return "tenant_id" in columns
+        finally:
+            await engine.dispose()
+
+    assert asyncio.run(_check()), "tenant_id column missing after --upgrade-to=tenant_aware"
+
+
+def test_migrate_default_does_not_apply_tenant_aware(smai_home: Path) -> None:
+    """Default ``smai migrate`` (no ``--upgrade-to``) targets only the
+    ``default`` branch — it must NOT apply the opt-in 0002 revision.
+
+    Regression guard for the branch-selection wiring: before Task 3.G2
+    the canonical OSS schema was the only chain in the migrations env;
+    after 3.G2 there are two branches, and the default upgrade must not
+    accidentally pick up the tenant_aware extension.
+    """
+    sqlite_path = smai_home / "state.db"
+    smai_yaml = _write_smai_yaml(smai_home, sqlite_path=sqlite_path)
+    runner = CliRunner()
+    result = runner.invoke(app, ["migrate", "-c", str(smai_yaml)])
+    assert result.exit_code == 0, result.output
+    assert "0001_initial_schema" in result.output
+    assert "tenant_aware" not in result.output
+
+    async def _check() -> bool:
+        engine = create_async_engine(f"sqlite+aiosqlite:///{sqlite_path}")
+        try:
+            from sqlalchemy import text
+
+            async with engine.connect() as conn:
+                result_rows = await conn.execute(text("PRAGMA table_info(proposals)"))
+                columns = [row[1] for row in result_rows.all()]
+                return "tenant_id" in columns
+        finally:
+            await engine.dispose()
+
+    assert not asyncio.run(_check()), (
+        "tenant_id column unexpectedly present after default migrate — "
+        "the tenant_aware branch leaked into the default upgrade chain"
+    )
+
+
 def test_migrate_prune_deletes_old_rows(smai_home: Path) -> None:
     sqlite_path = smai_home / "state.db"
     # Tighten the retention window to 1 day so the seeded "100 days

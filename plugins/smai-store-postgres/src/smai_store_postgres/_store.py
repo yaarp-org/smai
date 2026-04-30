@@ -30,16 +30,24 @@ What this plugin adds over the shared shape:
   the SQLite plugin generates nonces in Python via ``uuid4()``. Both
   produce the same shape token surface (a 36-char string).
 
-What this plugin does NOT add:
+What this plugin adds with the **opt-in** ``tenant_aware=True`` mode
+(Task 3.G2):
 
-* **Tenant-aware scheduling.** Per §5.5 / §5.6.8, the OSS PostgresStore
-  reports ``is_tenant_aware=False`` and returns scheduling-query results
-  in FIFO order; the schema has no ``tenant_id`` column. The
-  window-function pattern (``ROW_NUMBER() OVER (PARTITION BY
-  tenant_bucket ORDER BY created_at)`` interleaving across tenants) is
-  documented in this module's "Tenant-fair scheduling carry-forward"
-  comment as a seam for the closed ``AuroraStore`` plugin to subclass /
-  share. See the Task 3.F1 status note for the carry-forward.
+* **Tenant-aware scheduling.** Per §5.5 / §5.6.8 the default OSS
+  PostgresStore reports ``is_tenant_aware=False`` and returns
+  scheduling-query results in FIFO order. Constructing
+  ``PostgresStore(tenant_aware=True)`` flips ``capabilities.is_tenant_aware``
+  to ``True``, runs the opt-in ``tenant_aware`` Alembic branch (adding
+  ``tenant_id VARCHAR(64)`` + composite indexes to every pipeline-
+  tracking table), and overrides ``_paginate_predicate`` with the
+  ``ROW_NUMBER() OVER (PARTITION BY tenant_id ORDER BY created_at, id)``
+  window-function shape — interleaving (``fair_scheduling="round_robin"``)
+  or weight-modulating (``fair_scheduling="weighted"``) across tenants.
+  Single-tenant deployments leave the flag at the default
+  ``tenant_aware=False`` and pay zero cost (the schema stays identical
+  to the canonical OSS shape; the queries take the FIFO path
+  unchanged). See the Task 3.G2 status note for the design carry-
+  forward, including the closed ``AuroraStore`` subclass relationship.
 
 Connection pooling. SQLAlchemy's :class:`AsyncEngine` ships with a
 built-in pool (``QueuePool`` defaults: ``pool_size=5``,
@@ -90,6 +98,7 @@ from smai_orchestrator.entities.tracking import (
 from smai_orchestrator.migrations import (
     ENTITY_PK_COLUMN,
     ENTITY_TABLE,
+    TENANT_AWARE_BRANCH,
     cgs_table,
     entries_table,
     metadata,
@@ -102,12 +111,17 @@ from smai_orchestrator.migrations import (
 from smai_orchestrator.migrations.serde import row_to_record
 from sqlalchemy import (
     ColumnElement,
+    Float,
     Select,
+    String,
     Table,
     and_,
+    case,
+    column,
     exists,
     func,
     insert,
+    literal,
     not_,
     or_,
     select,
@@ -659,38 +673,37 @@ def _predicate_partial_pending_promotion() -> tuple[Table, ColumnElement[bool], 
     return (papers_table, papers_table.c.state == "partial", PaperRecord)
 
 
-# === Tenant-fair scheduling carry-forward (closed AuroraStore seam) ==========
+# === Tenant-fair scheduling (opt-in tenant_aware=True mode) ==================
 #
 # Per ``07-plugin-interfaces.md`` §5.5 / §5.6.8: tenancy-aware fairness
-# ordering is an *implementation* concern — the closed ``AuroraStore``
-# plugin owns it. The OSS PostgresStore reports
-# ``is_tenant_aware=False``; its scheduling queries return FIFO by
-# ``created_at`` (per the ``_paginate_predicate`` helper below).
-#
-# The window-function pattern AuroraStore is expected to use:
+# ordering is an *implementation* concern. The default OSS PostgresStore
+# (``tenant_aware=False``) reports ``is_tenant_aware=False`` and returns
+# FIFO ordering by ``(created_at, id)``. Setting
+# ``PostgresStore(tenant_aware=True)`` (Task 3.G2) opts in to the
+# tenant-aware schema (the ``tenant_aware`` Alembic branch adds a
+# ``tenant_id`` column + composite index to every pipeline-tracking
+# table) and the window-function ordering shape:
 #
 #     SELECT *,
 #            ROW_NUMBER() OVER (
-#                PARTITION BY tenant_bucket
+#                PARTITION BY tenant_id
 #                ORDER BY created_at, id
 #            ) AS tenant_rank
 #       FROM <table>
 #      WHERE <predicate>
-#      ORDER BY tenant_rank, created_at, id
+#      ORDER BY tenant_rank, tenant_id, created_at, id
 #      LIMIT :limit
 #
-# The seam: ``_paginate_predicate`` below builds a plain
-# ``SELECT ... ORDER BY created_at, id LIMIT N`` for the OSS shape;
-# AuroraStore subclasses :class:`PostgresStore` and overrides
-# ``_paginate_predicate`` (or layers a separate ``_paginate_tenant_fair``
-# helper) to render the window-function shape against its own
-# ``tenant_id``-bearing schema. The shared predicate functions above
-# are reused — only the ordering / pagination layer differs.
+# For ``fair_scheduling="weighted"`` the ``ROW_NUMBER`` is divided by a
+# per-tenant weight (a CASE expression built from
+# :attr:`fair_scheduling_weights`); see :meth:`_tenant_fair_rank_expr`
+# for the math + ordering tie-break.
 #
-# This is why the OSS plugin keeps the predicates as plugin-local
-# constants rather than re-importing from the SQLite plugin: each plugin
-# owns its scheduling-query construction layer; the schema is the
-# shared piece (DEC-036).
+# The closed ``AuroraStore`` plugin (post-M4 per DEC-027) subclasses
+# :class:`PostgresStore` and overrides ``_paginate_predicate`` further
+# (e.g., per-tenant priority weights, fairness windowing). The
+# tenant-aware schema produced by 0002 is the substrate AuroraStore
+# inherits.
 
 
 # === PostgresStore ===========================================================
@@ -701,8 +714,7 @@ class PostgresStore:
 
     Construction takes a SQLAlchemy URL targeting Postgres via asyncpg
     (``postgresql+asyncpg://...``). Callers must ``await store.migrate()``
-    before issuing any other call — ``migrate()`` is idempotent (uses
-    ``metadata.create_all()`` with ``checkfirst=True``).
+    before issuing any other call — ``migrate()`` is idempotent.
 
     Implementation-internal Postgres-specific paths:
 
@@ -711,22 +723,34 @@ class PostgresStore:
       acquire (per the §5.6.7 illustrative SQL); Python-side ``uuid4()``
       is the fallback when ``use_advisory_locks=False``.
 
-    Per ``07-plugin-interfaces.md`` §5.5 / §5.6.8 the OSS plugin reports
-    ``is_tenant_aware=False``. Tenant-fair scheduling lives in the
-    closed ``AuroraStore`` plugin.
+    Per ``07-plugin-interfaces.md`` §5.5 / §5.6.8 the default plugin
+    reports ``is_tenant_aware=False`` and returns FIFO scheduling-query
+    results. The opt-in ``tenant_aware=True`` mode (Task 3.G2):
+
+    * flips ``capabilities.is_tenant_aware`` to ``True``,
+    * runs the ``tenant_aware`` Alembic branch (revision
+      ``0002_tenant_aware_schema``) at boot, adding ``tenant_id``
+      columns + composite indexes to every pipeline-tracking table,
+    * routes scheduling-query pagination through a window-function
+      ordering shape that interleaves (``fair_scheduling="round_robin"``)
+      or weight-modulates (``fair_scheduling="weighted"``) candidates
+      across tenants.
+
+    Default OSS deployments leave ``tenant_aware=False`` and pay zero
+    cost — the schema and queries are unchanged from the canonical OSS
+    shape.
     """
 
     name: str = "postgres"
-    capabilities: MetadataStoreCapabilities = MetadataStoreCapabilities(
-        is_tenant_aware=False,
-        supports_transactions=True,
-    )
 
     def __init__(
         self,
         uri: str = DEFAULT_URI,
         *,
         use_advisory_locks: bool = True,
+        tenant_aware: bool = False,
+        fair_scheduling: Literal["off", "round_robin", "weighted"] = "off",
+        fair_scheduling_weights: dict[str, float] | None = None,
         engine_kwargs: dict[str, Any] | None = None,
     ) -> None:
         """Construct a Postgres-backed :class:`MetadataStore` plugin.
@@ -741,6 +765,39 @@ class PostgresStore:
         Tests that want to exercise the fallback path (no advisory lock)
         pass ``False``.
 
+        ``tenant_aware`` (Task 3.G2 / `07` §5.5 / §5.6.8): When ``True``,
+        :meth:`migrate` upgrades to the ``tenant_aware`` Alembic branch
+        head (which depends on ``0001_initial_schema``, so the upgrade
+        runs both 0001 and 0002 in order against a fresh database; on
+        an already-canonical-OSS database the upgrade adds 0002's
+        ``tenant_id`` columns + indexes idempotently). The plugin then
+        reports ``is_tenant_aware=True`` and routes scheduling-query
+        pagination through the window-function ordering shape per
+        :meth:`_tenant_fair_rank_expr`. ``False`` (default): canonical
+        OSS shape — single ``upgrade_to_head`` against the default
+        branch, FIFO scheduling-query ordering. **Operators must apply
+        ``smai migrate --upgrade-to=tenant_aware`` against an existing
+        deployment before flipping this flag** if they prefer the
+        explicit migration path; constructor-driven boot-time migrate is
+        idempotent and works equally.
+
+        ``fair_scheduling`` (Task 3.G2 / `05` §6 / `07` §5.5): The
+        scheduling-query ordering policy. ``"off"`` is FIFO regardless
+        of ``tenant_aware``; ``"round_robin"`` and ``"weighted"`` only
+        apply when ``tenant_aware=True`` (silently ignored otherwise per
+        the brief's "single-tenant deployments pay zero cost" contract).
+        ``EngineConfig.fair_scheduling`` is the engine-side documented
+        surface; operators set both values consistently via the same
+        config-layering pipeline (env → smai.yaml → flags).
+
+        ``fair_scheduling_weights``: Per-tenant weight map for
+        ``fair_scheduling="weighted"`` (`05` §6). Tenant id → weight
+        (positive float). A higher weight schedules that tenant's rows
+        earlier in the dispatch queue. Empty / ``None`` is treated as
+        uniform weights (== ``"round_robin"`` semantically). Tenants
+        absent from the map default to weight ``1.0``. See
+        :meth:`_tenant_fair_rank_expr` for the math.
+
         ``engine_kwargs``: Extra kwargs passed to
         ``create_async_engine``. Useful for production deployments that
         want to override the SQLAlchemy default pool settings —
@@ -754,6 +811,15 @@ class PostgresStore:
             kwargs.update(engine_kwargs)
         self._engine: AsyncEngine = create_async_engine(uri, **kwargs)
         self._use_advisory_locks: bool = use_advisory_locks
+        self._tenant_aware: bool = tenant_aware
+        self._fair_scheduling: Literal["off", "round_robin", "weighted"] = fair_scheduling
+        self._fair_scheduling_weights: dict[str, float] = (
+            dict(fair_scheduling_weights) if fair_scheduling_weights else {}
+        )
+        self.capabilities: MetadataStoreCapabilities = MetadataStoreCapabilities(
+            is_tenant_aware=tenant_aware,
+            supports_transactions=True,
+        )
 
     async def migrate(self) -> None:
         """Apply boot-time DDL via Alembic upgrade-to-head.
@@ -762,11 +828,19 @@ class PostgresStore:
         :mod:`smai_orchestrator.migrations` against this plugin's
         :class:`AsyncEngine`. Idempotent — re-running against a
         head-stamped database is a no-op (Alembic consults
-        ``alembic_version``). The initial revision uses
-        ``checkfirst=True`` so a one-time upgrade against a pre-3.H2
-        ``create_all``-only database does not double-create.
+        ``alembic_version``).
+
+        Branch selection (Task 3.G2):
+
+        * ``tenant_aware=False`` (default): upgrades to the ``default``
+          branch's head (``0001_initial_schema``).
+        * ``tenant_aware=True``: upgrades to the ``tenant_aware``
+          branch's head (``0002_tenant_aware_schema``); Alembic walks
+          the ``depends_on=0001`` chain so 0001 runs first then 0002
+          adds ``tenant_id`` + indexes.
         """
-        await upgrade_to_head(self._engine)
+        branch = TENANT_AWARE_BRANCH if self._tenant_aware else None
+        await upgrade_to_head(self._engine, branch=branch)
 
     async def drop_all(self) -> None:
         """Drop every table — for test cleanup and fixture rebuilds.
@@ -1277,22 +1351,102 @@ class PostgresStore:
 
     # === Internal pagination helper =========================================
 
+    def _tenant_fair_rank_expr(self, table: Table, pk_col: ColumnElement[Any]) -> Any:
+        """Build the tenant-fair effective-rank expression for ``table``.
+
+        Per Task 3.G2 / `07` §5.5: for ``fair_scheduling="round_robin"``
+        the effective rank is just ``ROW_NUMBER() OVER (PARTITION BY
+        tenant_id ORDER BY created_at, id)`` cast to float. For
+        ``fair_scheduling="weighted"`` the row-number is divided by a
+        per-tenant weight from :attr:`fair_scheduling_weights` (rendered
+        as a SQL ``CASE`` expression keyed on ``tenant_id``); tenants
+        absent from the map default to weight ``1.0``. Lower effective
+        rank schedules earlier — so a tenant with weight ``2.0`` gets
+        ranks ``0.5, 1.0, 1.5, ...`` and is interleaved twice as densely
+        as a tenant with weight ``1.0`` whose ranks are ``1.0, 2.0,
+        3.0, ...``.
+
+        Worked example: weights ``{"tenant_a": 2.0, "tenant_b": 1.0}``
+        with three rows per tenant produces the order::
+
+            a1 (0.5), a2 (1.0), b1 (1.0), a3 (1.5), b2 (2.0), b3 (3.0)
+
+        The tie-break for equal effective ranks is ``tenant_id`` ASC
+        then ``created_at`` ASC then ``<pk>`` ASC — making the ordering
+        fully deterministic.
+
+        Returns the rank expression (a SQLAlchemy column expression
+        usable in ``.order_by()`` / cursor predicates). Caller selects
+        ``tenant_id`` separately.
+
+        Implementation note: ``tenant_id`` is added to the table by the
+        opt-in 0002 Alembic revision but is NOT declared on the shared
+        :class:`Table` object in :mod:`smai_orchestrator.migrations` —
+        keeping it out of the shared schema preserves the "OSS pays
+        zero cost" contract. Here we reference it via
+        :func:`sqlalchemy.column` (an unbound column reference resolved
+        at SQL render time) so the expression compiles correctly
+        regardless of whether the column is declared on the Table.
+        """
+        tenant_col = column("tenant_id", String(64))
+        created_at_col = table.c["created_at"]
+        row_number = func.row_number().over(
+            partition_by=tenant_col,
+            order_by=(created_at_col, pk_col),
+        )
+        # Cast to float so the divide-by-weight branch returns a
+        # consistent type across modes; Postgres FLOAT keeps the
+        # comparison lex-clean against cursor-encoded floats.
+        rank_as_float = func.cast(row_number, Float)
+        if self._fair_scheduling == "weighted" and self._fair_scheduling_weights:
+            # Build the per-tenant weight CASE: WHEN tenant_id = 'X'
+            # THEN <weight> ... ELSE 1.0. Tenants absent from the map
+            # take weight 1.0 — same as round-robin for those rows.
+            weight_expr = case(
+                {
+                    tenant: literal(float(weight))
+                    for tenant, weight in self._fair_scheduling_weights.items()
+                },
+                value=tenant_col,
+                else_=literal(1.0),
+            )
+            return rank_as_float / weight_expr
+        return rank_as_float
+
     async def _paginate_predicate(
         self,
         predicate_spec: tuple[Table, ColumnElement[bool], type[Any]],
         limit: int,
         cursor: str | None,
     ) -> CursorPage[Any]:
-        """Cursor-paginated FIFO ordering by ``(created_at, id)``.
+        """Cursor-paginated scheduling-query result page.
 
-        OSS plugin: FIFO. The closed AuroraStore overrides this to layer
-        the window-function-derived tenant-fair ordering on top of the
-        same predicate spec — see the "Tenant-fair scheduling
-        carry-forward" comment above for the seam description.
+        Default mode (``tenant_aware=False`` or ``fair_scheduling="off"``):
+        FIFO ordering by ``(created_at, <pk>)`` — the canonical OSS
+        single-tenant shape per `07` §5.6.10. The closed
+        ``AuroraStore`` plugin (post-M4 per DEC-027) subclasses this
+        method to layer additional tenant-priority logic on top.
+
+        Tenant-fair mode (``tenant_aware=True`` and
+        ``fair_scheduling != "off"``): renders the
+        :meth:`_tenant_fair_rank_expr` window-function CTE, ordering by
+        ``(effective_rank, tenant_id, created_at, <pk>)``. Cursor
+        encoding switches to the rank-tuple shape so pagination across
+        pages stays well-defined under steady-state writes.
         """
         table, predicate, record_type = predicate_spec
         pk_name = "arxiv_id" if "arxiv_id" in {c.name for c in table.columns} else "id"
         pk_col = table.c[pk_name]
+        if self._is_tenant_fair_mode():
+            return await self._paginate_predicate_tenant_fair(
+                table=table,
+                predicate=predicate,
+                record_type=record_type,
+                pk_name=pk_name,
+                pk_col=pk_col,
+                limit=limit,
+                cursor=cursor,
+            )
         created_at_col = table.c["created_at"]
         stmt: Select[Any] = (
             select(table).where(predicate).order_by(created_at_col, pk_col).limit(limit + 1)
@@ -1324,6 +1478,119 @@ class PostgresStore:
                 {
                     "created_at": _parse_dt(last["created_at"]).isoformat(),
                     "id": last[pk_name],
+                }
+            )
+        return CursorPage(items=items, next_cursor=next_cursor)
+
+    def _is_tenant_fair_mode(self) -> bool:
+        """``True`` when scheduling-query results should follow the
+        tenant-fair ordering (`07` §5.5 / §5.6.8).
+
+        Both flags must align: the schema needs a ``tenant_id`` column
+        (``tenant_aware=True``) and the policy must be on
+        (``fair_scheduling != "off"``). Single-tenant deployments
+        (``tenant_aware=False``) silently take the FIFO path regardless
+        of ``fair_scheduling`` — per the brief's "single-tenant
+        deployments pay zero cost" contract.
+        """
+        return self._tenant_aware and self._fair_scheduling != "off"
+
+    async def _paginate_predicate_tenant_fair(  # noqa: PLR0913
+        self,
+        *,
+        table: Table,
+        predicate: ColumnElement[bool],
+        record_type: type[Any],
+        pk_name: str,
+        pk_col: ColumnElement[Any],
+        limit: int,
+        cursor: str | None,
+    ) -> CursorPage[Any]:
+        """Render the tenant-fair window-function CTE for ``table``.
+
+        See :meth:`_tenant_fair_rank_expr` for the rank formula. The
+        cursor encodes ``(effective_rank, tenant_id, created_at, pk)``
+        so cross-page iteration filters lex-greater than the last seen
+        anchor.
+        """
+        rank_expr = self._tenant_fair_rank_expr(table, pk_col).label("effective_rank")
+        # ``tenant_id`` is added by the opt-in 0002 Alembic revision but
+        # is not declared on the shared :class:`Table` object — see
+        # :meth:`_tenant_fair_rank_expr`'s implementation note. Pull it
+        # in via :func:`column` so the CTE projects it for the cursor
+        # tie-break + ORDER BY.
+        tenant_col_ref = column("tenant_id", String(64)).label("tenant_id")
+        # Build a CTE so the rank expression is a real column we can
+        # filter / sort on twice without re-rendering the window
+        # function.
+        ranked_cte = (
+            select(table, tenant_col_ref, rank_expr).where(predicate).cte(name="tenant_ranked")
+        )
+        ranked_rank = ranked_cte.c["effective_rank"]
+        ranked_tenant = ranked_cte.c["tenant_id"]
+        ranked_created = ranked_cte.c["created_at"]
+        ranked_pk = ranked_cte.c[pk_name]
+        stmt: Select[Any] = (
+            select(ranked_cte)
+            .order_by(ranked_rank, ranked_tenant, ranked_created, ranked_pk)
+            .limit(limit + 1)
+        )
+        if cursor is not None:
+            anchor = _decode_cursor(cursor)
+            anchor_rank = float(anchor["rank"])
+            anchor_tenant = anchor["tenant_id"]
+            anchor_dt = _parse_dt(anchor["created_at"])
+            anchor_pk = anchor[pk_name]
+            # Lexicographic "greater than" on the 4-tuple ordering key,
+            # expanded into chained ANDs / ORs since SQLAlchemy doesn't
+            # render multi-column row-value tuple comparisons portably
+            # across all the cases we hit (NULL-safe handling for
+            # tenant_id varies by dialect; the expanded form is
+            # explicit).
+            stmt = stmt.where(
+                or_(
+                    ranked_rank > anchor_rank,
+                    and_(
+                        ranked_rank == anchor_rank,
+                        ranked_tenant > anchor_tenant,
+                    ),
+                    and_(
+                        ranked_rank == anchor_rank,
+                        ranked_tenant == anchor_tenant,
+                        ranked_created > anchor_dt,
+                    ),
+                    and_(
+                        ranked_rank == anchor_rank,
+                        ranked_tenant == anchor_tenant,
+                        ranked_created == anchor_dt,
+                        ranked_pk > anchor_pk,
+                    ),
+                )
+            )
+        async with self._engine.connect() as conn:
+            result = await conn.execute(stmt)
+            rows = result.mappings().all()
+        # The CTE includes two non-record columns (``tenant_id`` is on
+        # the row but absent from the Pydantic ``record_type`` since the
+        # OSS records are tenancy-agnostic per `07` §5.6.8;
+        # ``effective_rank`` is the rank we computed). Project the row
+        # mapping down to just the declared :class:`Table` columns
+        # before ``row_to_record`` so Pydantic's ``extra="forbid"``
+        # discipline doesn't raise.
+        record_columns: set[str] = {c.name for c in table.columns}
+        items: list[Any] = []
+        for row in rows[:limit]:
+            projected = {k: v for k, v in row.items() if k in record_columns}
+            items.append(row_to_record(record_type, projected))
+        next_cursor: str | None = None
+        if len(rows) > limit:
+            last = rows[limit - 1]
+            next_cursor = _encode_cursor(
+                {
+                    "rank": float(last["effective_rank"]),
+                    "tenant_id": last["tenant_id"],
+                    "created_at": _parse_dt(last["created_at"]).isoformat(),
+                    pk_name: last[pk_name],
                 }
             )
         return CursorPage(items=items, next_cursor=next_cursor)

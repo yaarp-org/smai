@@ -174,3 +174,65 @@ but Alembic's autogenerate is sync-only):
 5. Run the conformance suite against both reference plugins (SQLite
    in-process; Postgres against the docker-compose fixture). The
    suite catches schema-shape regressions across both dialects.
+
+---
+
+## Branch graph (Task 3.G2: opt-in tenant_aware extension)
+
+The Alembic env carries **two branches** as of 3.G2:
+
+| Branch label | Head revision | Applied by |
+|--------------|---------------|------------|
+| `default` | `0001_initial_schema` | Every reference plugin's `migrate()` at boot; `smai migrate` (no flag); `smai dev`. |
+| `tenant_aware` | `0002_tenant_aware_schema` | `PostgresStore(tenant_aware=True).migrate()`; `smai migrate --upgrade-to=tenant_aware`. |
+
+The `tenant_aware` branch is a **separate-root** revision with
+`depends_on="0001_initial_schema"`. Alembic enforces the dependency:
+upgrading to `tenant_aware@head` against an unstamped database applies
+0001 first then 0002; against a 0001-stamped database it applies only
+0002. The shape keeps the OSS canonical schema (`default@head` =
+0001 only) decoupled from the opt-in extension.
+
+### What 0002 adds
+
+A nullable `tenant_id VARCHAR(64)` column on each pipeline-tracking
+table (`cgs`, `entries`, `runs`, `proposals`, `papers`) plus a composite
+index `(tenant_id, created_at, <pk>)` on each. The column anchors the
+`ROW_NUMBER() OVER (PARTITION BY tenant_id ORDER BY created_at, id)`
+window-function ordering the `PostgresStore(tenant_aware=True)` queries
+emit when `fair_scheduling != "off"`.
+
+Operators populating `tenant_id` is their concern — the OSS plugin
+treats NULL as a single `<no-tenant>` partition. The closed
+`AuroraStore` plugin (post-M4 per DEC-027) inherits this schema and
+layers tenant-priority semantics on top.
+
+### Running the tenant-aware migration
+
+Either:
+
+```bash
+# Operator-driven explicit upgrade — preferred for production.
+smai migrate --upgrade-to=tenant_aware
+```
+
+…or just construct the plugin with `tenant_aware=True` and let
+`migrate()` do it:
+
+```python
+store = PostgresStore(uri=..., tenant_aware=True, fair_scheduling="round_robin")
+await store.migrate()  # upgrades to tenant_aware@head idempotently
+```
+
+The default `smai migrate` (no flag) targets `default@head` only —
+running it against a tenant-aware-stamped database is a no-op (0002 is
+on a separate branch the default upgrade chain never visits).
+
+### Rolling back from tenant_aware
+
+Per the forward-only policy: restore from a backup taken before the
+0002 upgrade. Alternatively, flipping `PostgresStore(tenant_aware=
+False)` against an already-extended schema is operationally fine — the
+`tenant_id` column / index sit unused and the queries take the FIFO
+path — but the Alembic version row pins `0002_tenant_aware_schema`, so
+`smai migrate --check` against the default branch would flag drift.
