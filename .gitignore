@@ -26,3 +26,6 @@ venv/
 
 # Runtime artifacts
 .smai/
+
+# Claude Code
+CLAUDE.md
