@@ -1,0 +1,103 @@
+{
+  "$defs": {
+    "ValidationIssue": {
+      "additionalProperties": false,
+      "description": "One problem inside a ``VALIDATION_ERROR`` response.\n\nMirrors :class:`pydantic.ValidationError`'s per-error shape so the\ncentral FastAPI exception handler can translate Pydantic errors with\nminimal massaging. ``loc`` is a JSON-pointer-shaped list (string\nfield names + integer list indices); ``type`` is the Pydantic\nvalidator identifier (e.g. ``\"value_error\"`` / ``\"missing\"``).",
+      "properties": {
+        "loc": {
+          "items": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          },
+          "title": "Loc",
+          "type": "array"
+        },
+        "msg": {
+          "title": "Msg",
+          "type": "string"
+        },
+        "type": {
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "loc",
+        "msg",
+        "type"
+      ],
+      "title": "ValidationIssue",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Body of an :class:`ErrorEnvelope`.\n\n``code`` \u2014 drawn from :data:`ErrorCode`.\n``message`` \u2014 human-readable; safe to render in a UI.\n``issues`` \u2014 populated only for ``VALIDATION_ERROR`` (one entry per\n    Pydantic per-field failure). ``None`` for every other code.\n``retryable`` \u2014 populated only for plugin failures (5xx). ``True``\n    when a retry-with-backoff has a chance of succeeding (transient\n    network blip, throttled upstream); ``False`` when the failure\n    will recur (auth misconfig, missing resource).",
+  "properties": {
+    "code": {
+      "enum": [
+        "CG_NOT_FOUND",
+        "PROPOSAL_NOT_FOUND",
+        "PAPER_NOT_FOUND",
+        "RUN_NOT_FOUND",
+        "ENTRY_NOT_FOUND",
+        "INVALID_STATE",
+        "CAS_CONFLICT",
+        "VALIDATION_ERROR",
+        "LLM_UPSTREAM",
+        "RUNTIME_NOT_READY",
+        "TIMEOUT",
+        "ARTIFACT_NOT_FOUND",
+        "JOB_NOT_FOUND",
+        "FORBIDDEN",
+        "HOST_REJECTED",
+        "INTERNAL_ERROR",
+        "PAPER_NOT_READY"
+      ],
+      "title": "Code",
+      "type": "string"
+    },
+    "issues": {
+      "anyOf": [
+        {
+          "items": {
+            "$ref": "#/$defs/ValidationIssue"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Issues"
+    },
+    "message": {
+      "title": "Message",
+      "type": "string"
+    },
+    "retryable": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Retryable"
+    }
+  },
+  "required": [
+    "code",
+    "message"
+  ],
+  "title": "APIError",
+  "type": "object"
+}

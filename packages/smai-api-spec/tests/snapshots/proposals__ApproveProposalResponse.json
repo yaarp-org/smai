@@ -1,0 +1,42 @@
+{
+  "additionalProperties": false,
+  "description": "``200 OK`` body for ``POST /api/v1/proposals/{id}/approve``.\n\nThe ``designed \u2192 registered`` transition is synchronous (per ``08``\n\u00a73.3) \u2014 the user-decision write + 1+ CG inserts happen atomically.",
+  "properties": {
+    "cg_ids": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Cg Ids",
+      "type": "array"
+    },
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "state": {
+      "enum": [
+        "proposal_submitted",
+        "designing",
+        "designed",
+        "registered",
+        "rejected",
+        "failed"
+      ],
+      "title": "State",
+      "type": "string"
+    },
+    "user_decided_at": {
+      "format": "date-time",
+      "title": "User Decided At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "state",
+    "cg_ids",
+    "user_decided_at"
+  ],
+  "title": "ApproveProposalResponse",
+  "type": "object"
+}

@@ -1,0 +1,74 @@
+{
+  "$defs": {
+    "PluginInfo": {
+      "additionalProperties": false,
+      "description": "One row in :class:`SystemPluginsResponse`.\n\n``selected`` is ``True`` when this plugin is the currently-active\nselection for its interface namespace; ``False`` for other\ndiscovered plugins in the same namespace.",
+      "properties": {
+        "distribution": {
+          "title": "Distribution",
+          "type": "string"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "selected": {
+          "title": "Selected",
+          "type": "boolean"
+        },
+        "version": {
+          "title": "Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "distribution",
+        "version",
+        "selected"
+      ],
+      "title": "PluginInfo",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Discovered + selected plugins, grouped by Protocol namespace.\n\nNamespaces match the four entry-point groups per DEC-026:\n``smai.llm_providers`` / ``smai.metadata_stores`` /\n``smai.artifact_stores`` / ``smai.computes``.",
+  "properties": {
+    "artifact_stores": {
+      "items": {
+        "$ref": "#/$defs/PluginInfo"
+      },
+      "title": "Artifact Stores",
+      "type": "array"
+    },
+    "computes": {
+      "items": {
+        "$ref": "#/$defs/PluginInfo"
+      },
+      "title": "Computes",
+      "type": "array"
+    },
+    "llm_providers": {
+      "items": {
+        "$ref": "#/$defs/PluginInfo"
+      },
+      "title": "Llm Providers",
+      "type": "array"
+    },
+    "metadata_stores": {
+      "items": {
+        "$ref": "#/$defs/PluginInfo"
+      },
+      "title": "Metadata Stores",
+      "type": "array"
+    }
+  },
+  "required": [
+    "llm_providers",
+    "metadata_stores",
+    "artifact_stores",
+    "computes"
+  ],
+  "title": "SystemPluginsResponse",
+  "type": "object"
+}

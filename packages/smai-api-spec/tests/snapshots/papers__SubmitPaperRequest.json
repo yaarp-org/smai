@@ -1,0 +1,15 @@
+{
+  "additionalProperties": false,
+  "description": "Submit a paper for ingestion by ``arxiv_id``.\n\nIdempotent per ``11`` \u00a74.2 / \u00a74.8: creates a new record on first\nsubmit, promotes a ``partial`` record to ``submitted`` on resubmit,\nor no-ops when the paper is already in flight or in a terminal\nstate.\n\n``arxiv_id`` format is intentionally not locked down here \u2014 both\n``YYMM.NNNNN[v#]`` and the legacy ``archive/YYMM###`` shapes exist\nand the plugin layer enforces per-substrate.",
+  "properties": {
+    "arxiv_id": {
+      "title": "Arxiv Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "arxiv_id"
+  ],
+  "title": "SubmitPaperRequest",
+  "type": "object"
+}

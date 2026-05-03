@@ -1,0 +1,30 @@
+{
+  "additionalProperties": false,
+  "description": "``200 OK`` body for ``POST /api/v1/papers/{arxiv_id}/promote-partial``.\n\nPer ``11`` \u00a713 OQ3 (open): the request body is currently empty for\nv1; an ``audit_reason`` field may be added in a minor bump if Yaarp\nv2 wants the audit hook.",
+  "properties": {
+    "arxiv_id": {
+      "title": "Arxiv Id",
+      "type": "string"
+    },
+    "state": {
+      "enum": [
+        "submitted",
+        "fetching",
+        "screening",
+        "planning",
+        "registered",
+        "rejected",
+        "failed",
+        "partial"
+      ],
+      "title": "State",
+      "type": "string"
+    }
+  },
+  "required": [
+    "arxiv_id",
+    "state"
+  ],
+  "title": "PromotePartialResponse",
+  "type": "object"
+}

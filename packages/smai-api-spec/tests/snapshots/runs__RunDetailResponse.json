@@ -1,0 +1,139 @@
+{
+  "additionalProperties": false,
+  "description": "Run detail \u2014 superset of :class:`RunSummary` adding the audit\nfields from :class:`BaseAuditedResponse`.",
+  "properties": {
+    "cg_id": {
+      "title": "Cg Id",
+      "type": "string"
+    },
+    "completed_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Completed At"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "duration_seconds": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Duration Seconds"
+    },
+    "entry_id": {
+      "title": "Entry Id",
+      "type": "string"
+    },
+    "failure_reason": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Failure Reason"
+    },
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "last_error": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Last Error"
+    },
+    "raw_metrics_artifact_key": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Raw Metrics Artifact Key"
+    },
+    "run_attempt": {
+      "title": "Run Attempt",
+      "type": "integer"
+    },
+    "seed": {
+      "title": "Seed",
+      "type": "integer"
+    },
+    "started_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Started At"
+    },
+    "state": {
+      "enum": [
+        "pending",
+        "submitted",
+        "running",
+        "succeeded",
+        "failed",
+        "inconclusive"
+      ],
+      "title": "State",
+      "type": "string"
+    },
+    "updated_at": {
+      "format": "date-time",
+      "title": "Updated At",
+      "type": "string"
+    },
+    "version": {
+      "title": "Version",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "created_at",
+    "updated_at",
+    "version",
+    "id",
+    "cg_id",
+    "entry_id",
+    "seed",
+    "state",
+    "duration_seconds",
+    "raw_metrics_artifact_key",
+    "started_at",
+    "completed_at",
+    "failure_reason",
+    "run_attempt"
+  ],
+  "title": "RunDetailResponse",
+  "type": "object"
+}

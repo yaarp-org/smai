@@ -1,0 +1,62 @@
+{
+  "$defs": {
+    "CompiledArtifacts": {
+      "additionalProperties": false,
+      "description": "The four contract artifacts emitted per compiled CG.\n\nPer ``02-dsl-and-contracts.md`` \u00a71: the methodology compiler emits\n``ExperimentPlan``, ``HarnessContract``, ``TechniqueContract[]`` and\n``ValidationConfig``. The wire form here is a JSON projection\nsuitable for downstream tooling (UI rendering, contract-diff in a\nreview tool, codegen). The exact field shape inside each artifact\nis the methodology compiler's output and is not re-asserted here \u2014\nit is opaque to this contract package.",
+      "properties": {
+        "cg_id": {
+          "title": "Cg Id",
+          "type": "string"
+        },
+        "experiment_plan": {
+          "additionalProperties": true,
+          "title": "Experiment Plan",
+          "type": "object"
+        },
+        "harness_contract": {
+          "additionalProperties": true,
+          "title": "Harness Contract",
+          "type": "object"
+        },
+        "technique_contracts": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Technique Contracts",
+          "type": "array"
+        },
+        "validation_config": {
+          "additionalProperties": true,
+          "title": "Validation Config",
+          "type": "object"
+        }
+      },
+      "required": [
+        "cg_id",
+        "experiment_plan",
+        "harness_contract",
+        "technique_contracts",
+        "validation_config"
+      ],
+      "title": "CompiledArtifacts",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "``200 OK`` body for ``POST /api/v1/experiments/compile``.\n\nFlat list per ``11`` \u00a713 OQ4 \u2014 easier to type than the CLI's\ndict-keyed form. ``compilations`` is non-empty: the smallest valid\nDSL document yields a single ``ExperimentDefinition`` and therefore\none compilation; factor models (``02`` \u00a73) yield N.",
+  "properties": {
+    "compilations": {
+      "items": {
+        "$ref": "#/$defs/CompiledArtifacts"
+      },
+      "title": "Compilations",
+      "type": "array"
+    }
+  },
+  "required": [
+    "compilations"
+  ],
+  "title": "CompileExperimentResponse",
+  "type": "object"
+}

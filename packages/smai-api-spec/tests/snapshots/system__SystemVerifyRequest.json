@@ -1,0 +1,29 @@
+{
+  "additionalProperties": false,
+  "description": "Optional body for ``POST /api/v1/system/verify``.\n\nPer ``11`` \u00a713 OQ5 (open): the ``plugins`` filter is a forward-\ncompatibility hook. For v1, both implementations may ignore it and\nalways run all four probes; if real workflows want partial verify,\na minor-version bump tightens the behavior.",
+  "properties": {
+    "plugins": {
+      "anyOf": [
+        {
+          "items": {
+            "enum": [
+              "llm_provider",
+              "metadata_store",
+              "artifact_store",
+              "compute"
+            ],
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Plugins"
+    }
+  },
+  "title": "SystemVerifyRequest",
+  "type": "object"
+}

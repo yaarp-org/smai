@@ -1,0 +1,54 @@
+{
+  "additionalProperties": false,
+  "description": "Query-param model for ``GET /api/v1/proposals``.",
+  "properties": {
+    "cursor": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Cursor"
+    },
+    "limit": {
+      "anyOf": [
+        {
+          "maximum": 500,
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Limit"
+    },
+    "state": {
+      "anyOf": [
+        {
+          "enum": [
+            "proposal_submitted",
+            "designing",
+            "designed",
+            "registered",
+            "rejected",
+            "failed"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "State"
+    }
+  },
+  "title": "ListProposalsParams",
+  "type": "object"
+}

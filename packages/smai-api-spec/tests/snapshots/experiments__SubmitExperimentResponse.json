@@ -1,0 +1,51 @@
+{
+  "$defs": {
+    "CreatedCGRef": {
+      "additionalProperties": false,
+      "description": "One CG created by ``POST /api/v1/experiments``.",
+      "properties": {
+        "cg_id": {
+          "title": "Cg Id",
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "draft",
+            "implementing",
+            "implemented",
+            "running",
+            "evaluating",
+            "complete",
+            "implementation_failed",
+            "running_failed",
+            "evaluation_failed"
+          ],
+          "title": "State",
+          "type": "string"
+        }
+      },
+      "required": [
+        "cg_id",
+        "state"
+      ],
+      "title": "CreatedCGRef",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "``202 Accepted`` body for ``POST /api/v1/experiments``.\n\nThe CGs land in ``draft``; the worker's CG-execution pipeline-spec\ndrives them to ``implementing`` on its own cadence.",
+  "properties": {
+    "cgs": {
+      "items": {
+        "$ref": "#/$defs/CreatedCGRef"
+      },
+      "title": "Cgs",
+      "type": "array"
+    }
+  },
+  "required": [
+    "cgs"
+  ],
+  "title": "SubmitExperimentResponse",
+  "type": "object"
+}

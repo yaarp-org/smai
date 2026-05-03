@@ -1,0 +1,57 @@
+{
+  "additionalProperties": false,
+  "description": "Mirrors what the harness builder writes to ``harness/status.json``.\n\nThe full schema is owned by ``04-agents.md``; the contract surface\nhere is a narrow projection of the fields the SPA renders. Each\nfield is optional so partial / in-progress writes parse cleanly.\n\nPer ``11`` \u00a75.2.3 the joining + parsing happens server-side so the\nSPA gets one round-trip instead of fanning out to N artifact reads.",
+  "properties": {
+    "cost_usd": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Cost Usd"
+    },
+    "last_message_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Last Message At"
+    },
+    "state": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "State"
+    },
+    "turn": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Turn"
+    }
+  },
+  "title": "HarnessAgentStatus",
+  "type": "object"
+}

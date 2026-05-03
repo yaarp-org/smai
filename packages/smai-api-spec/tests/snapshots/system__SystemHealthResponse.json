@@ -1,0 +1,16 @@
+{
+  "additionalProperties": false,
+  "description": "Liveness probe \u2014 the only endpoint that does not touch any plugin.\n\n``status`` is the literal string ``\"ok\"`` when the process is up.\nProcess supervisors and load balancers should treat any non-200\nresponse as unhealthy.",
+  "properties": {
+    "status": {
+      "const": "ok",
+      "title": "Status",
+      "type": "string"
+    }
+  },
+  "required": [
+    "status"
+  ],
+  "title": "SystemHealthResponse",
+  "type": "object"
+}

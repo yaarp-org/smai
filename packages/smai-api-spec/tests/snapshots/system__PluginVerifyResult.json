@@ -1,0 +1,32 @@
+{
+  "additionalProperties": false,
+  "description": "Per-plugin probe outcome.\n\nMirrors :class:`smai_cli.verify.VerifyResult`. ``latency_ms`` is\n``None`` when the probe didn't issue an I/O round-trip (e.g. a\nconstruction error before the ping fired).",
+  "properties": {
+    "latency_ms": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Latency Ms"
+    },
+    "ok": {
+      "title": "Ok",
+      "type": "boolean"
+    },
+    "reason": {
+      "title": "Reason",
+      "type": "string"
+    }
+  },
+  "required": [
+    "ok",
+    "reason",
+    "latency_ms"
+  ],
+  "title": "PluginVerifyResult",
+  "type": "object"
+}

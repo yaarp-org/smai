@@ -1,0 +1,35 @@
+{
+  "additionalProperties": false,
+  "description": "Per-entry agent-status projection.\n\n``status`` is the parsed contents of\n``entries/{id}/code/status.json`` (a free-form JSON object whose\nschema is owned by ``04-agents.md``); ``None`` if the agent has not\nyet written it.",
+  "properties": {
+    "status": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Status"
+    },
+    "technique_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Technique Id"
+    }
+  },
+  "required": [
+    "technique_id",
+    "status"
+  ],
+  "title": "EntryAgentStatus",
+  "type": "object"
+}

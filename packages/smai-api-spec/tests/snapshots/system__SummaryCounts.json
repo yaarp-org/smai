@@ -1,0 +1,30 @@
+{
+  "additionalProperties": false,
+  "description": "In-flight entity counts (the dashboard count pills).\n\nMembership in \"in-flight\" is per the ``_*_IN_FLIGHT_STATES``\nfrozensets in :mod:`smai_cli.runtime` \u2014 proposals in\n{``proposal_submitted``, ``designing``, ``designed``}; CGs in\n{``draft``, ``implementing``, ``implemented``, ``running``,\n``evaluating``}; runs in {``pending``, ``submitted``, ``running``};\npapers in {``submitted``, ``fetching``, ``screening``, ``planning``,\n``partial``}.",
+  "properties": {
+    "cgs_in_flight": {
+      "title": "Cgs In Flight",
+      "type": "integer"
+    },
+    "papers_in_flight": {
+      "title": "Papers In Flight",
+      "type": "integer"
+    },
+    "proposals_in_flight": {
+      "title": "Proposals In Flight",
+      "type": "integer"
+    },
+    "runs_in_flight": {
+      "title": "Runs In Flight",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "proposals_in_flight",
+    "cgs_in_flight",
+    "runs_in_flight",
+    "papers_in_flight"
+  ],
+  "title": "SummaryCounts",
+  "type": "object"
+}

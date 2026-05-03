@@ -1,0 +1,43 @@
+{
+  "additionalProperties": false,
+  "description": "Fired on every successful state-machine transition.\n\nWire shape per ``11`` \u00a78.1::\n\n    {\"kind\": \"comparison_group\", \"id\": \"cg_abc\",\n     \"from\": \"implementing\", \"to\": \"implemented\",\n     \"ts\": \"2026-04-30T17:23:11Z\"}\n\nLightweight by design \u2014 the SPA's TanStack Query layer treats each\nevent as an invalidation signal and refetches the entity body via\nREST (per ``11`` \u00a78.2: SSE-as-invalidator, not SSE-as-data-pusher).\n\n``from_state`` / ``to_state`` are the Python attribute names;\n``from`` / ``to`` are the JSON wire names (Pydantic field aliases \u2014\n``from`` is a reserved keyword in Python). Use\n``model_dump(by_alias=True)`` / ``model_dump_json(by_alias=True)``\nwhen serializing for the wire; alias forms are accepted on\ndeserialization regardless of ``by_alias``.",
+  "properties": {
+    "from": {
+      "title": "From",
+      "type": "string"
+    },
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "kind": {
+      "enum": [
+        "proposal",
+        "paper",
+        "comparison_group",
+        "entry",
+        "run"
+      ],
+      "title": "Kind",
+      "type": "string"
+    },
+    "to": {
+      "title": "To",
+      "type": "string"
+    },
+    "ts": {
+      "format": "date-time",
+      "title": "Ts",
+      "type": "string"
+    }
+  },
+  "required": [
+    "kind",
+    "id",
+    "from",
+    "to",
+    "ts"
+  ],
+  "title": "StateChangeEvent",
+  "type": "object"
+}

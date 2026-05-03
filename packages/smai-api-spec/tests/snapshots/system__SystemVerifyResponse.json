@@ -1,0 +1,65 @@
+{
+  "$defs": {
+    "PluginVerifyResult": {
+      "additionalProperties": false,
+      "description": "Per-plugin probe outcome.\n\nMirrors :class:`smai_cli.verify.VerifyResult`. ``latency_ms`` is\n``None`` when the probe didn't issue an I/O round-trip (e.g. a\nconstruction error before the ping fired).",
+      "properties": {
+        "latency_ms": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Latency Ms"
+        },
+        "ok": {
+          "title": "Ok",
+          "type": "boolean"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "ok",
+        "reason",
+        "latency_ms"
+      ],
+      "title": "PluginVerifyResult",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "``200 OK`` body for ``POST /api/v1/system/verify``.\n\nPer ``11`` \u00a75.2.5: 200 always (not 503 when one plugin fails) \u2014 the\nbody carries the diagnostic and clients want to render per-plugin\nstatus, not retry on a single 503. ``overall_ok`` is the AND of the\nfour ``.ok`` fields.",
+  "properties": {
+    "artifact_store": {
+      "$ref": "#/$defs/PluginVerifyResult"
+    },
+    "compute": {
+      "$ref": "#/$defs/PluginVerifyResult"
+    },
+    "llm_provider": {
+      "$ref": "#/$defs/PluginVerifyResult"
+    },
+    "metadata_store": {
+      "$ref": "#/$defs/PluginVerifyResult"
+    },
+    "overall_ok": {
+      "title": "Overall Ok",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "llm_provider",
+    "metadata_store",
+    "artifact_store",
+    "compute",
+    "overall_ok"
+  ],
+  "title": "SystemVerifyResponse",
+  "type": "object"
+}

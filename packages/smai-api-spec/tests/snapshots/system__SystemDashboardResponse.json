@@ -1,0 +1,92 @@
+{
+  "$defs": {
+    "RecentActivityItem": {
+      "additionalProperties": false,
+      "description": "One row in the dashboard's recent-activity feed.\n\nThe feed is a flattened union of recent entity transitions across\nall kinds, sorted by ``ts`` descending.",
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "proposal",
+            "paper",
+            "comparison_group",
+            "entry",
+            "run"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "state": {
+          "title": "State",
+          "type": "string"
+        },
+        "ts": {
+          "format": "date-time",
+          "title": "Ts",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "state",
+        "ts"
+      ],
+      "title": "RecentActivityItem",
+      "type": "object"
+    },
+    "SummaryCounts": {
+      "additionalProperties": false,
+      "description": "In-flight entity counts (the dashboard count pills).\n\nMembership in \"in-flight\" is per the ``_*_IN_FLIGHT_STATES``\nfrozensets in :mod:`smai_cli.runtime` \u2014 proposals in\n{``proposal_submitted``, ``designing``, ``designed``}; CGs in\n{``draft``, ``implementing``, ``implemented``, ``running``,\n``evaluating``}; runs in {``pending``, ``submitted``, ``running``};\npapers in {``submitted``, ``fetching``, ``screening``, ``planning``,\n``partial``}.",
+      "properties": {
+        "cgs_in_flight": {
+          "title": "Cgs In Flight",
+          "type": "integer"
+        },
+        "papers_in_flight": {
+          "title": "Papers In Flight",
+          "type": "integer"
+        },
+        "proposals_in_flight": {
+          "title": "Proposals In Flight",
+          "type": "integer"
+        },
+        "runs_in_flight": {
+          "title": "Runs In Flight",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "proposals_in_flight",
+        "cgs_in_flight",
+        "runs_in_flight",
+        "papers_in_flight"
+      ],
+      "title": "SummaryCounts",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "``200 OK`` body for ``GET /api/v1/system/dashboard``.\n\nComposite read \u2014 the dashboard's index page renders the count pills\n+ the recent-activity feed in one round-trip.",
+  "properties": {
+    "counts": {
+      "$ref": "#/$defs/SummaryCounts"
+    },
+    "recent_activity": {
+      "items": {
+        "$ref": "#/$defs/RecentActivityItem"
+      },
+      "title": "Recent Activity",
+      "type": "array"
+    }
+  },
+  "required": [
+    "counts",
+    "recent_activity"
+  ],
+  "title": "SystemDashboardResponse",
+  "type": "object"
+}

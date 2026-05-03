@@ -1,0 +1,36 @@
+{
+  "additionalProperties": false,
+  "description": "``202 Accepted`` body for ``POST /api/v1/papers``.",
+  "properties": {
+    "arxiv_id": {
+      "title": "Arxiv Id",
+      "type": "string"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "state": {
+      "enum": [
+        "submitted",
+        "fetching",
+        "screening",
+        "planning",
+        "registered",
+        "rejected",
+        "failed",
+        "partial"
+      ],
+      "title": "State",
+      "type": "string"
+    }
+  },
+  "required": [
+    "arxiv_id",
+    "state",
+    "created_at"
+  ],
+  "title": "PaperSubmissionResponse",
+  "type": "object"
+}

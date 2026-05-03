@@ -1,0 +1,78 @@
+{
+  "additionalProperties": false,
+  "description": "Submit a novel-technique proposal or a reproduce-paper proposal.\n\nPer ``11`` \u00a75.2.1: exactly one of the three description fields must be\npopulated; the populated field must be consistent with\n``submission_kind``:\n\n* ``submission_kind=\"novel_technique\"`` \u2192 exactly one of\n  ``technique_description`` / ``technique_description_text``.\n* ``submission_kind=\"reproduce_paper\"`` \u2192 ``reproduce_paper_arxiv_id``,\n  and the referenced paper must exist + be in a terminal\n  ``registered`` state. Implementations enforce the latter at submit\n  time and respond with 409 + ``code: \"PAPER_NOT_READY\"`` if the\n  paper is missing or non-terminal (per ``11`` \u00a713 OQ11 RESOLVED\n  2026-05-03).\n\n``proposal_id`` lets callers pin their own ULID for idempotency: a\nrepeat submit with the same id returns the existing proposal record\nrather than 409. Without a pinned id every POST creates a new record.\n\n``submitted_by`` is accepted from the client and audit-logged.\nMulti-tenant implementations (Yaarp v2) overwrite this field via\nmiddleware with the auth-derived subject (per ``11`` \u00a713 OQ6\nRESOLVED 2026-05-03 \u2014 same Pydantic shape on both sides).",
+  "properties": {
+    "proposal_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Proposal Id"
+    },
+    "reproduce_paper_arxiv_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Reproduce Paper Arxiv Id"
+    },
+    "submission_kind": {
+      "default": "novel_technique",
+      "enum": [
+        "novel_technique",
+        "reproduce_paper"
+      ],
+      "title": "Submission Kind",
+      "type": "string"
+    },
+    "submitted_by": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Submitted By"
+    },
+    "technique_description": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Technique Description"
+    },
+    "technique_description_text": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Technique Description Text"
+    }
+  },
+  "title": "SubmitProposalRequest",
+  "type": "object"
+}

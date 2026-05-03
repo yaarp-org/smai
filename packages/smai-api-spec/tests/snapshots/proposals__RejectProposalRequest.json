@@ -1,0 +1,20 @@
+{
+  "additionalProperties": false,
+  "description": "Optional body for ``POST /api/v1/proposals/{id}/reject``.\n\nThe ``reason`` field is reserved for an audit trail in multi-tenant\ndeployments; SMAI's OSS implementation accepts and stores it on the\nproposal record but does not require it.",
+  "properties": {
+    "reason": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Reason"
+    }
+  },
+  "title": "RejectProposalRequest",
+  "type": "object"
+}

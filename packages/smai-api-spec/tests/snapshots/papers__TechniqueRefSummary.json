@@ -1,0 +1,39 @@
+{
+  "additionalProperties": false,
+  "description": "One paper-derived ``TechniqueRef`` exposed on the paper detail.\n\nPer DEC-032 / ``08`` \u00a75: paper ingestion produces a buffer of\n``TechniqueRef``s; the API exposes them on the paper-detail\nresponse so the SPA can render \"this paper produced N techniques;\nsubmit a reproduce-paper proposal to run them.\"\n\nThe internal record shape is wider than this projection \u2014 the\ncontract surface here exposes only what the SPA needs to render +\nreference for a follow-up proposal.",
+  "properties": {
+    "description": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Description"
+    },
+    "name": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Name"
+    },
+    "technique_id": {
+      "title": "Technique Id",
+      "type": "string"
+    }
+  },
+  "required": [
+    "technique_id"
+  ],
+  "title": "TechniqueRefSummary",
+  "type": "object"
+}

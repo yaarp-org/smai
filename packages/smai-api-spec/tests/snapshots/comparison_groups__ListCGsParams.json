@@ -1,0 +1,69 @@
+{
+  "additionalProperties": false,
+  "description": "Query-param model for ``GET /api/v1/comparison-groups``.",
+  "properties": {
+    "cursor": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Cursor"
+    },
+    "limit": {
+      "anyOf": [
+        {
+          "maximum": 500,
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Limit"
+    },
+    "proposal_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Proposal Id"
+    },
+    "state": {
+      "anyOf": [
+        {
+          "enum": [
+            "draft",
+            "implementing",
+            "implemented",
+            "running",
+            "evaluating",
+            "complete",
+            "implementation_failed",
+            "running_failed",
+            "evaluation_failed"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "State"
+    }
+  },
+  "title": "ListCGsParams",
+  "type": "object"
+}

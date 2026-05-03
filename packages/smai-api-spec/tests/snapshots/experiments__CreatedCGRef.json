@@ -1,0 +1,31 @@
+{
+  "additionalProperties": false,
+  "description": "One CG created by ``POST /api/v1/experiments``.",
+  "properties": {
+    "cg_id": {
+      "title": "Cg Id",
+      "type": "string"
+    },
+    "state": {
+      "enum": [
+        "draft",
+        "implementing",
+        "implemented",
+        "running",
+        "evaluating",
+        "complete",
+        "implementation_failed",
+        "running_failed",
+        "evaluation_failed"
+      ],
+      "title": "State",
+      "type": "string"
+    }
+  },
+  "required": [
+    "cg_id",
+    "state"
+  ],
+  "title": "CreatedCGRef",
+  "type": "object"
+}

@@ -1,0 +1,30 @@
+{
+  "additionalProperties": false,
+  "description": "One row in :class:`SystemPluginsResponse`.\n\n``selected`` is ``True`` when this plugin is the currently-active\nselection for its interface namespace; ``False`` for other\ndiscovered plugins in the same namespace.",
+  "properties": {
+    "distribution": {
+      "title": "Distribution",
+      "type": "string"
+    },
+    "name": {
+      "title": "Name",
+      "type": "string"
+    },
+    "selected": {
+      "title": "Selected",
+      "type": "boolean"
+    },
+    "version": {
+      "title": "Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "name",
+    "distribution",
+    "version",
+    "selected"
+  ],
+  "title": "PluginInfo",
+  "type": "object"
+}

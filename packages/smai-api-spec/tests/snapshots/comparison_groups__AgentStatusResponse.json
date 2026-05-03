@@ -1,0 +1,123 @@
+{
+  "$defs": {
+    "EntryAgentStatus": {
+      "additionalProperties": false,
+      "description": "Per-entry agent-status projection.\n\n``status`` is the parsed contents of\n``entries/{id}/code/status.json`` (a free-form JSON object whose\nschema is owned by ``04-agents.md``); ``None`` if the agent has not\nyet written it.",
+      "properties": {
+        "status": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Status"
+        },
+        "technique_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Technique Id"
+        }
+      },
+      "required": [
+        "technique_id",
+        "status"
+      ],
+      "title": "EntryAgentStatus",
+      "type": "object"
+    },
+    "HarnessAgentStatus": {
+      "additionalProperties": false,
+      "description": "Mirrors what the harness builder writes to ``harness/status.json``.\n\nThe full schema is owned by ``04-agents.md``; the contract surface\nhere is a narrow projection of the fields the SPA renders. Each\nfield is optional so partial / in-progress writes parse cleanly.\n\nPer ``11`` \u00a75.2.3 the joining + parsing happens server-side so the\nSPA gets one round-trip instead of fanning out to N artifact reads.",
+      "properties": {
+        "cost_usd": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cost Usd"
+        },
+        "last_message_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Last Message At"
+        },
+        "state": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "State"
+        },
+        "turn": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Turn"
+        }
+      },
+      "title": "HarnessAgentStatus",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "``200 OK`` body for ``GET /api/v1/comparison-groups/{cg_id}/agent-status``.",
+  "properties": {
+    "entries": {
+      "additionalProperties": {
+        "$ref": "#/$defs/EntryAgentStatus"
+      },
+      "title": "Entries",
+      "type": "object"
+    },
+    "harness": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/HarnessAgentStatus"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "harness",
+    "entries"
+  ],
+  "title": "AgentStatusResponse",
+  "type": "object"
+}

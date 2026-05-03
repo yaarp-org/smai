@@ -1,0 +1,15 @@
+{
+  "additionalProperties": false,
+  "description": "Pure-compile request. Methodology-only \u2014 no ``MetadataStore`` or\n``Compute`` touch.\n\n``definition_text`` is the raw YAML body (a multi-line string). The\nserver runs the methodology compiler over it and returns the four\ncontract artifacts per resulting CG.",
+  "properties": {
+    "definition_text": {
+      "title": "Definition Text",
+      "type": "string"
+    }
+  },
+  "required": [
+    "definition_text"
+  ],
+  "title": "CompileExperimentRequest",
+  "type": "object"
+}

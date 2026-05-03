@@ -1,0 +1,42 @@
+{
+  "additionalProperties": false,
+  "description": "Narrow status snapshot for ``GET /comparison-groups/{cg_id}/status``.\n\nThe dashboard uses this for the per-row state pill \u2014 cheaper than\nfetching the full detail body.",
+  "properties": {
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "is_terminal": {
+      "title": "Is Terminal",
+      "type": "boolean"
+    },
+    "state": {
+      "enum": [
+        "draft",
+        "implementing",
+        "implemented",
+        "running",
+        "evaluating",
+        "complete",
+        "implementation_failed",
+        "running_failed",
+        "evaluation_failed"
+      ],
+      "title": "State",
+      "type": "string"
+    },
+    "updated_at": {
+      "format": "date-time",
+      "title": "Updated At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "state",
+    "is_terminal",
+    "updated_at"
+  ],
+  "title": "CGStatusResponse",
+  "type": "object"
+}

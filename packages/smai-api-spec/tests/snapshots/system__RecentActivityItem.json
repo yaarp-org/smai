@@ -1,0 +1,38 @@
+{
+  "additionalProperties": false,
+  "description": "One row in the dashboard's recent-activity feed.\n\nThe feed is a flattened union of recent entity transitions across\nall kinds, sorted by ``ts`` descending.",
+  "properties": {
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "kind": {
+      "enum": [
+        "proposal",
+        "paper",
+        "comparison_group",
+        "entry",
+        "run"
+      ],
+      "title": "Kind",
+      "type": "string"
+    },
+    "state": {
+      "title": "State",
+      "type": "string"
+    },
+    "ts": {
+      "format": "date-time",
+      "title": "Ts",
+      "type": "string"
+    }
+  },
+  "required": [
+    "kind",
+    "id",
+    "state",
+    "ts"
+  ],
+  "title": "RecentActivityItem",
+  "type": "object"
+}

@@ -1,0 +1,56 @@
+{
+  "additionalProperties": false,
+  "description": "Query-param model for ``GET /api/v1/papers``.",
+  "properties": {
+    "cursor": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Cursor"
+    },
+    "limit": {
+      "anyOf": [
+        {
+          "maximum": 500,
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Limit"
+    },
+    "state": {
+      "anyOf": [
+        {
+          "enum": [
+            "submitted",
+            "fetching",
+            "screening",
+            "planning",
+            "registered",
+            "rejected",
+            "failed",
+            "partial"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "State"
+    }
+  },
+  "title": "ListPapersParams",
+  "type": "object"
+}

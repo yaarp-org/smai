@@ -1,0 +1,77 @@
+{
+  "additionalProperties": false,
+  "description": "One item in ``GET /api/v1/comparison-groups/{cg_id}/entries``.\n\nAudit fields kept for SPA rendering. ``runs`` are not embedded on the\nlist \u2014 fetch the entry detail or filter ``/runs?entry_id=`` for them.\nPer ``11`` \u00a75.1.2 the lease triple is NOT exposed;\n``implementation_job_handle`` is also withheld as an orchestrator-\ninternal opaque token.",
+  "properties": {
+    "cg_id": {
+      "title": "Cg Id",
+      "type": "string"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "implementation_attempt": {
+      "title": "Implementation Attempt",
+      "type": "integer"
+    },
+    "is_baseline": {
+      "title": "Is Baseline",
+      "type": "boolean"
+    },
+    "state": {
+      "enum": [
+        "pending",
+        "implementing",
+        "implemented",
+        "implementation_failed"
+      ],
+      "title": "State",
+      "type": "string"
+    },
+    "technique_contract_hash": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Technique Contract Hash"
+    },
+    "technique_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Technique Id"
+    },
+    "updated_at": {
+      "format": "date-time",
+      "title": "Updated At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "cg_id",
+    "technique_id",
+    "is_baseline",
+    "state",
+    "technique_contract_hash",
+    "implementation_attempt",
+    "created_at",
+    "updated_at"
+  ],
+  "title": "EntrySummary",
+  "type": "object"
+}

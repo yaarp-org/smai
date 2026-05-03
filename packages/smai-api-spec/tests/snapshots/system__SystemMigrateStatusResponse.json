@@ -1,0 +1,32 @@
+{
+  "additionalProperties": false,
+  "description": "``smai migrate --check`` equivalent.\n\n``current`` is ``None`` when the schema has never been stamped (a\nfresh database). ``head`` is the latest revision known to the\n``smai-orchestrator`` migration package shipped in the running\nprocess. ``at_head`` is ``current == head``.",
+  "properties": {
+    "at_head": {
+      "title": "At Head",
+      "type": "boolean"
+    },
+    "current": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Current"
+    },
+    "head_revision": {
+      "title": "Head Revision",
+      "type": "string"
+    }
+  },
+  "required": [
+    "at_head",
+    "head_revision",
+    "current"
+  ],
+  "title": "SystemMigrateStatusResponse",
+  "type": "object"
+}

@@ -1,0 +1,380 @@
+{
+  "$defs": {
+    "EntryWithRuns": {
+      "additionalProperties": false,
+      "description": "Per-entry projection embedded inside the CG-detail response.\n\nThe full ``GET /api/v1/comparison-groups/{cg_id}`` response embeds a\nlist of these (one per entry) with each entry's runs inlined. Per\n``11`` \u00a74.4 the embedding is always-on in v1; if real-world payloads\ngrow beyond ~50 runs an opt-in ``?include=`` flag may be added (per\nOQ1, still open).",
+      "properties": {
+        "cg_id": {
+          "title": "Cg Id",
+          "type": "string"
+        },
+        "created_at": {
+          "format": "date-time",
+          "title": "Created At",
+          "type": "string"
+        },
+        "harness_api_manifest_hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Harness Api Manifest Hash"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "implementation_attempt": {
+          "title": "Implementation Attempt",
+          "type": "integer"
+        },
+        "is_baseline": {
+          "title": "Is Baseline",
+          "type": "boolean"
+        },
+        "last_error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Last Error"
+        },
+        "runs": {
+          "items": {
+            "$ref": "#/$defs/RunSummary"
+          },
+          "title": "Runs",
+          "type": "array"
+        },
+        "state": {
+          "enum": [
+            "pending",
+            "implementing",
+            "implemented",
+            "implementation_failed"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "technique_contract_hash": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Technique Contract Hash"
+        },
+        "technique_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Technique Id"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "title": "Updated At",
+          "type": "string"
+        },
+        "version": {
+          "title": "Version",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "created_at",
+        "updated_at",
+        "version",
+        "id",
+        "cg_id",
+        "technique_id",
+        "is_baseline",
+        "state",
+        "technique_contract_hash",
+        "harness_api_manifest_hash",
+        "implementation_attempt",
+        "runs"
+      ],
+      "title": "EntryWithRuns",
+      "type": "object"
+    },
+    "RunSummary": {
+      "additionalProperties": false,
+      "description": "Per-run summary \u2014 embedded in CG-detail and entry-detail responses,\nand returned as the page-item type for ``GET /api/v1/runs``.\n\nPer ``11`` \u00a75.1.2 the lease triple is NOT exposed; ``compute_job_handle``\nis also withheld as an orchestrator-internal opaque token.",
+      "properties": {
+        "cg_id": {
+          "title": "Cg Id",
+          "type": "string"
+        },
+        "completed_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Completed At"
+        },
+        "duration_seconds": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Duration Seconds"
+        },
+        "entry_id": {
+          "title": "Entry Id",
+          "type": "string"
+        },
+        "failure_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Failure Reason"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "raw_metrics_artifact_key": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Raw Metrics Artifact Key"
+        },
+        "run_attempt": {
+          "title": "Run Attempt",
+          "type": "integer"
+        },
+        "seed": {
+          "title": "Seed",
+          "type": "integer"
+        },
+        "started_at": {
+          "anyOf": [
+            {
+              "format": "date-time",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Started At"
+        },
+        "state": {
+          "enum": [
+            "pending",
+            "submitted",
+            "running",
+            "succeeded",
+            "failed",
+            "inconclusive"
+          ],
+          "title": "State",
+          "type": "string"
+        },
+        "updated_at": {
+          "format": "date-time",
+          "title": "Updated At",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "cg_id",
+        "entry_id",
+        "seed",
+        "state",
+        "run_attempt",
+        "updated_at"
+      ],
+      "title": "RunSummary",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Full CG detail with embedded entries + runs.\n\nPer ``11`` \u00a74.4 the embedding is always-on in v1. Per ``11`` \u00a75.1.2\nthe lease triple is NOT exposed; ``harness_job_handle`` is also\nwithheld as an orchestrator-internal opaque token. Artifacts are NOT\ninlined \u2014 fetch them via the per-CG artifact endpoints.",
+  "properties": {
+    "code_review_attempt": {
+      "title": "Code Review Attempt",
+      "type": "integer"
+    },
+    "code_review_result_hash": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Code Review Result Hash"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "entries": {
+      "items": {
+        "$ref": "#/$defs/EntryWithRuns"
+      },
+      "title": "Entries",
+      "type": "array"
+    },
+    "experiment_definition_id": {
+      "title": "Experiment Definition Id",
+      "type": "string"
+    },
+    "experiment_plan_hash": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Experiment Plan Hash"
+    },
+    "factor_model_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Factor Model Id"
+    },
+    "harness_contract_hash": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Harness Contract Hash"
+    },
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "is_terminal": {
+      "title": "Is Terminal",
+      "type": "boolean"
+    },
+    "last_error": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Last Error"
+    },
+    "proposal_id": {
+      "title": "Proposal Id",
+      "type": "string"
+    },
+    "state": {
+      "enum": [
+        "draft",
+        "implementing",
+        "implemented",
+        "running",
+        "evaluating",
+        "complete",
+        "implementation_failed",
+        "running_failed",
+        "evaluation_failed"
+      ],
+      "title": "State",
+      "type": "string"
+    },
+    "updated_at": {
+      "format": "date-time",
+      "title": "Updated At",
+      "type": "string"
+    },
+    "validation_config_hash": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Validation Config Hash"
+    },
+    "version": {
+      "title": "Version",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "created_at",
+    "updated_at",
+    "version",
+    "id",
+    "proposal_id",
+    "factor_model_id",
+    "state",
+    "is_terminal",
+    "experiment_definition_id",
+    "experiment_plan_hash",
+    "harness_contract_hash",
+    "validation_config_hash",
+    "code_review_attempt",
+    "code_review_result_hash",
+    "entries"
+  ],
+  "title": "ComparisonGroupDetailResponse",
+  "type": "object"
+}

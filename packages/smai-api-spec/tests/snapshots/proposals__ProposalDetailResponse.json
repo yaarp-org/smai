@@ -1,0 +1,173 @@
+{
+  "additionalProperties": false,
+  "description": "Full proposal detail. Per ``11`` \u00a75.1.2 the lease triple is NOT\nexposed; ``planner_job_handle`` is also withheld as an\norchestrator-internal opaque token.\n\n``registered_cg_ids`` is populated once the proposal reaches\n``registered`` \u2014 per ``08`` \u00a73.3 the user-decision write + the 1+ CG\ninserts happen in one transaction.",
+  "properties": {
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "design_attempt": {
+      "title": "Design Attempt",
+      "type": "integer"
+    },
+    "design_plan_artifact_key": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Design Plan Artifact Key"
+    },
+    "error_context_artifact_key": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Error Context Artifact Key"
+    },
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "last_error": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Last Error"
+    },
+    "registered_cg_ids": {
+      "default": [],
+      "items": {
+        "type": "string"
+      },
+      "title": "Registered Cg Ids",
+      "type": "array"
+    },
+    "registration_attempt": {
+      "title": "Registration Attempt",
+      "type": "integer"
+    },
+    "reproduce_paper_arxiv_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Reproduce Paper Arxiv Id"
+    },
+    "state": {
+      "enum": [
+        "proposal_submitted",
+        "designing",
+        "designed",
+        "registered",
+        "rejected",
+        "failed"
+      ],
+      "title": "State",
+      "type": "string"
+    },
+    "submission_kind": {
+      "enum": [
+        "novel_technique",
+        "reproduce_paper"
+      ],
+      "title": "Submission Kind",
+      "type": "string"
+    },
+    "submitted_by": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Submitted By"
+    },
+    "technique_description_artifact_key": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Technique Description Artifact Key"
+    },
+    "updated_at": {
+      "format": "date-time",
+      "title": "Updated At",
+      "type": "string"
+    },
+    "user_decided_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "User Decided At"
+    },
+    "user_decision": {
+      "anyOf": [
+        {
+          "enum": [
+            "approved",
+            "rejected"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "User Decision"
+    },
+    "version": {
+      "title": "Version",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "created_at",
+    "updated_at",
+    "version",
+    "id",
+    "submitted_by",
+    "submission_kind",
+    "state",
+    "technique_description_artifact_key",
+    "reproduce_paper_arxiv_id",
+    "design_plan_artifact_key",
+    "error_context_artifact_key",
+    "design_attempt",
+    "registration_attempt",
+    "user_decision",
+    "user_decided_at"
+  ],
+  "title": "ProposalDetailResponse",
+  "type": "object"
+}

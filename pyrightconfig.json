@@ -95,6 +95,13 @@
         "plugins/smai-artifacts-localfs/src",
         "plugins/smai-compute-localgpu/src"
       ]
+    },
+    {
+      "root": "packages/smai-api-spec",
+      "reportMissingImports": "error",
+      "extraPaths": [
+        "packages/smai-api-spec/src"
+      ]
     }
   ],
   "typeCheckingMode": "standard",
@@ -103,6 +110,7 @@
     "packages/smai-orchestrator/src",
     "packages/smai-agents/src",
     "packages/smai-cli/src",
+    "packages/smai-api-spec/src",
     "plugins/smai-llm-bedrock/src",
     "plugins/smai-llm-anthropic/src",
     "plugins/smai-llm-openai/src",

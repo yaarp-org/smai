@@ -1,0 +1,16 @@
+{
+  "additionalProperties": false,
+  "description": "Read-only ``RuntimeConfig`` projection.\n\n``config`` is the resolved ``smai.yaml`` after layering with secrets\nredacted (passwords / tokens / API keys masked as ``\"***\"``). The\ninner shape is ``RuntimeConfig``-owned (``09-cli.md`` \u00a73); the API\ntreats it as opaque ``dict[str, object]`` so additive shape changes\nupstream do not require a contract bump.",
+  "properties": {
+    "config": {
+      "additionalProperties": true,
+      "title": "Config",
+      "type": "object"
+    }
+  },
+  "required": [
+    "config"
+  ],
+  "title": "SystemConfigResponse",
+  "type": "object"
+}

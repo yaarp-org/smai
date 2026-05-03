@@ -10,6 +10,7 @@ resolution-markers = [
 members = [
     "smai",
     "smai-agents",
+    "smai-api-spec",
     "smai-artifacts-localfs",
     "smai-artifacts-s3",
     "smai-cli",
@@ -2514,6 +2515,17 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [{ name = "smai-llm-bedrock", editable = "plugins/smai-llm-bedrock" }]
+
+[[package]]
+name = "smai-api-spec"
+version = "0.1.0"
+source = { editable = "packages/smai-api-spec" }
+dependencies = [
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "pydantic", specifier = ">=2.5" }]
 
 [[package]]
 name = "smai-artifacts-localfs"

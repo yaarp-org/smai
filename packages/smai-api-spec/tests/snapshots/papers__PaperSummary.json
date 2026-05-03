@@ -1,0 +1,71 @@
+{
+  "additionalProperties": false,
+  "description": "One item in the ``GET /api/v1/papers`` list response.",
+  "properties": {
+    "arxiv_id": {
+      "title": "Arxiv Id",
+      "type": "string"
+    },
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "last_error": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Last Error"
+    },
+    "state": {
+      "enum": [
+        "submitted",
+        "fetching",
+        "screening",
+        "planning",
+        "registered",
+        "rejected",
+        "failed",
+        "partial"
+      ],
+      "title": "State",
+      "type": "string"
+    },
+    "title": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Title"
+    },
+    "updated_at": {
+      "format": "date-time",
+      "title": "Updated At",
+      "type": "string"
+    },
+    "version": {
+      "title": "Version",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "created_at",
+    "updated_at",
+    "version",
+    "arxiv_id",
+    "state"
+  ],
+  "title": "PaperSummary",
+  "type": "object"
+}

@@ -1,0 +1,57 @@
+{
+  "additionalProperties": false,
+  "description": "``200 OK`` body for ``GET /api/v1/comparison-groups/{cg_id}/evaluation``.\n\nA 404 with ``code: \"ARTIFACT_NOT_FOUND\"`` is returned if\n``evaluation_result.json`` has not yet been produced \u2014 this is the\ncommon case for CGs that are still ``running`` or ``evaluating``.\n\nThe shape mirrors :class:`smai_core.entities.EvaluationResult`. The\nfull nested types (``RawMetrics``, per-entry verdict objects) are\nmethodology-owned (``06-mechanical-evaluation.md``); the API\ncontract treats the inner dicts as opaque ``dict[str, object]`` so\nadditive shape changes in ``smai-core`` do not require a contract\nbump.",
+  "properties": {
+    "artifact_key": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Artifact Key"
+    },
+    "cg_id": {
+      "title": "Cg Id",
+      "type": "string"
+    },
+    "contextual_evaluation": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Contextual Evaluation"
+    },
+    "per_entry": {
+      "additionalProperties": true,
+      "title": "Per Entry",
+      "type": "object"
+    },
+    "raw_metrics": {
+      "additionalProperties": true,
+      "title": "Raw Metrics",
+      "type": "object"
+    },
+    "verdict": {
+      "title": "Verdict",
+      "type": "string"
+    }
+  },
+  "required": [
+    "cg_id",
+    "verdict",
+    "raw_metrics",
+    "per_entry"
+  ],
+  "title": "EvaluationResultResponse",
+  "type": "object"
+}

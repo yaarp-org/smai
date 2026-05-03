@@ -1,0 +1,18 @@
+{
+  "additionalProperties": false,
+  "description": "``200 OK`` body listing artifact keys under the CG namespace.\n\nPer ``11`` \u00a75.2.4 the trailing-slash variant of the artifact URL is\nthe *list* form; the with-path variant streams or 302-redirects.\nListing is always JSON; it does not paginate in v1 (CG artifact\ncounts are bounded by the methodology \u2014 entries \u00d7 runs \u00d7 per-run\nfiles).",
+  "properties": {
+    "keys": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Keys",
+      "type": "array"
+    }
+  },
+  "required": [
+    "keys"
+  ],
+  "title": "ArtifactKeysResponse",
+  "type": "object"
+}

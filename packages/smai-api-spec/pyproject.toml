@@ -1,0 +1,15 @@
+[project]
+name = "smai-api-spec"
+version = "0.1.0"
+description = "Shared API contract for SMAI v2 (Pydantic models + URL constants + error taxonomy). Per DEC-037 — depended on by both SMAI's OSS API and Yaarp v2's hosted API."
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.11"
+dependencies = ["pydantic>=2.5"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/smai_api_spec"]

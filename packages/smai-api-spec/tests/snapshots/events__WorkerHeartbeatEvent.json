@@ -1,0 +1,26 @@
+{
+  "additionalProperties": false,
+  "description": "Fired once per worker cycle.\n\nDrives the SPA's \"last cycle at\" indicator. ``cycle_id`` is a\nmonotone per-process integer; ``cycles_processed`` is cumulative\nacross the worker's lifetime (resets to 0 on worker restart).",
+  "properties": {
+    "cycle_id": {
+      "title": "Cycle Id",
+      "type": "integer"
+    },
+    "cycles_processed": {
+      "title": "Cycles Processed",
+      "type": "integer"
+    },
+    "ts": {
+      "format": "date-time",
+      "title": "Ts",
+      "type": "string"
+    }
+  },
+  "required": [
+    "cycle_id",
+    "cycles_processed",
+    "ts"
+  ],
+  "title": "WorkerHeartbeatEvent",
+  "type": "object"
+}

@@ -1,0 +1,20 @@
+{
+  "additionalProperties": false,
+  "description": "Query-param model for ``GET /comparison-groups/{cg_id}/artifacts``.\n\nOptional ``prefix`` filter narrows the listing to keys under a\nsub-namespace (e.g. ``entries/`` to list per-entry artifacts only).",
+  "properties": {
+    "prefix": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Prefix"
+    }
+  },
+  "title": "ListArtifactsParams",
+  "type": "object"
+}

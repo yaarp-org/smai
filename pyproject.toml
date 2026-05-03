@@ -6,6 +6,7 @@ members = [
     "packages/smai-orchestrator",
     "packages/smai-cli",
     "packages/smai",
+    "packages/smai-api-spec",
     "plugins/smai-llm-bedrock",
     "plugins/smai-llm-anthropic",
     "plugins/smai-llm-openai",

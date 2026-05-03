@@ -1,0 +1,79 @@
+{
+  "additionalProperties": false,
+  "description": "``202 Accepted`` body for ``POST /api/v1/proposals``.\n\nThe proposal lands in ``proposal_submitted``; the worker drives\nfurther transitions on its own cadence. Clients poll\n``GET /proposals/{id}`` (or subscribe via SSE) for progress.",
+  "properties": {
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "reproduce_paper_arxiv_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Reproduce Paper Arxiv Id"
+    },
+    "state": {
+      "enum": [
+        "proposal_submitted",
+        "designing",
+        "designed",
+        "registered",
+        "rejected",
+        "failed"
+      ],
+      "title": "State",
+      "type": "string"
+    },
+    "submission_kind": {
+      "enum": [
+        "novel_technique",
+        "reproduce_paper"
+      ],
+      "title": "Submission Kind",
+      "type": "string"
+    },
+    "submitted_by": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Submitted By"
+    },
+    "technique_description_artifact_key": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "title": "Technique Description Artifact Key"
+    }
+  },
+  "required": [
+    "id",
+    "state",
+    "submission_kind",
+    "technique_description_artifact_key",
+    "reproduce_paper_arxiv_id",
+    "submitted_by",
+    "created_at"
+  ],
+  "title": "ProposalSubmissionResponse",
+  "type": "object"
+}

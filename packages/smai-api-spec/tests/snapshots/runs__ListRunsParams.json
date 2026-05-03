@@ -1,0 +1,78 @@
+{
+  "additionalProperties": false,
+  "description": "Query-param model for ``GET /api/v1/runs``.",
+  "properties": {
+    "cg_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Cg Id"
+    },
+    "cursor": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Cursor"
+    },
+    "entry_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Entry Id"
+    },
+    "limit": {
+      "anyOf": [
+        {
+          "maximum": 500,
+          "minimum": 1,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Limit"
+    },
+    "state": {
+      "anyOf": [
+        {
+          "enum": [
+            "pending",
+            "submitted",
+            "running",
+            "succeeded",
+            "failed",
+            "inconclusive"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "State"
+    }
+  },
+  "title": "ListRunsParams",
+  "type": "object"
+}

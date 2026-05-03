@@ -1,0 +1,34 @@
+{
+  "additionalProperties": false,
+  "description": "``200 OK`` body for ``POST /api/v1/proposals/{id}/reject``.",
+  "properties": {
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "state": {
+      "enum": [
+        "proposal_submitted",
+        "designing",
+        "designed",
+        "registered",
+        "rejected",
+        "failed"
+      ],
+      "title": "State",
+      "type": "string"
+    },
+    "user_decided_at": {
+      "format": "date-time",
+      "title": "User Decided At",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "state",
+    "user_decided_at"
+  ],
+  "title": "RejectProposalResponse",
+  "type": "object"
+}

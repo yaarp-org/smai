@@ -1,0 +1,15 @@
+{
+  "additionalProperties": false,
+  "description": "``smai run``'s HTTP analog: compile + persist + create CG records.",
+  "properties": {
+    "definition_text": {
+      "title": "Definition Text",
+      "type": "string"
+    }
+  },
+  "required": [
+    "definition_text"
+  ],
+  "title": "SubmitExperimentRequest",
+  "type": "object"
+}

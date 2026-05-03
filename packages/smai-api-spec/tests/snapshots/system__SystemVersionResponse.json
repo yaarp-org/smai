@@ -1,0 +1,33 @@
+{
+  "additionalProperties": false,
+  "description": "``smai-cli`` + ``smai-core`` versions plus the currently-loaded\nplugin packages. Mirrors the ``smai version`` CLI output.\n\n``plugins`` is a mapping from PyPI distribution name to its installed\nversion (e.g. ``{\"smai-llm-bedrock\": \"0.1.0\", ...}``).",
+  "properties": {
+    "plugins": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Plugins",
+      "type": "object"
+    },
+    "smai_api_spec": {
+      "title": "Smai Api Spec",
+      "type": "string"
+    },
+    "smai_cli": {
+      "title": "Smai Cli",
+      "type": "string"
+    },
+    "smai_core": {
+      "title": "Smai Core",
+      "type": "string"
+    }
+  },
+  "required": [
+    "smai_cli",
+    "smai_core",
+    "smai_api_spec",
+    "plugins"
+  ],
+  "title": "SystemVersionResponse",
+  "type": "object"
+}

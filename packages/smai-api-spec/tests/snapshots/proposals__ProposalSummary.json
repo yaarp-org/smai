@@ -1,0 +1,90 @@
+{
+  "additionalProperties": false,
+  "description": "One item in the ``GET /api/v1/proposals`` list response.",
+  "properties": {
+    "created_at": {
+      "format": "date-time",
+      "title": "Created At",
+      "type": "string"
+    },
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "last_error": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Last Error"
+    },
+    "reproduce_paper_arxiv_id": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Reproduce Paper Arxiv Id"
+    },
+    "state": {
+      "enum": [
+        "proposal_submitted",
+        "designing",
+        "designed",
+        "registered",
+        "rejected",
+        "failed"
+      ],
+      "title": "State",
+      "type": "string"
+    },
+    "submission_kind": {
+      "enum": [
+        "novel_technique",
+        "reproduce_paper"
+      ],
+      "title": "Submission Kind",
+      "type": "string"
+    },
+    "submitted_by": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Submitted By"
+    },
+    "updated_at": {
+      "format": "date-time",
+      "title": "Updated At",
+      "type": "string"
+    },
+    "version": {
+      "title": "Version",
+      "type": "integer"
+    }
+  },
+  "required": [
+    "created_at",
+    "updated_at",
+    "version",
+    "id",
+    "state",
+    "submission_kind"
+  ],
+  "title": "ProposalSummary",
+  "type": "object"
+}

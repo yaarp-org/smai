@@ -1,0 +1,35 @@
+{
+  "additionalProperties": false,
+  "description": "One problem inside a ``VALIDATION_ERROR`` response.\n\nMirrors :class:`pydantic.ValidationError`'s per-error shape so the\ncentral FastAPI exception handler can translate Pydantic errors with\nminimal massaging. ``loc`` is a JSON-pointer-shaped list (string\nfield names + integer list indices); ``type`` is the Pydantic\nvalidator identifier (e.g. ``\"value_error\"`` / ``\"missing\"``).",
+  "properties": {
+    "loc": {
+      "items": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "integer"
+          }
+        ]
+      },
+      "title": "Loc",
+      "type": "array"
+    },
+    "msg": {
+      "title": "Msg",
+      "type": "string"
+    },
+    "type": {
+      "title": "Type",
+      "type": "string"
+    }
+  },
+  "required": [
+    "loc",
+    "msg",
+    "type"
+  ],
+  "title": "ValidationIssue",
+  "type": "object"
+}
