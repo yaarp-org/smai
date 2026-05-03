@@ -1,0 +1,120 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+/* Design tokens per 13-frontend.md §9.1.
+   Tailwind 4 CSS-first @theme block; light defaults, dark via @media query.
+   shadcn/ui components also reference these tokens through CSS variables. */
+
+@theme {
+  --color-bg: oklch(99% 0 0);
+  --color-bg-subtle: oklch(97% 0 0);
+  --color-fg: oklch(15% 0 0);
+  --color-fg-subtle: oklch(40% 0 0);
+  --color-border: oklch(90% 0 0);
+  --color-accent: oklch(60% 0.15 230);
+  --color-success: oklch(65% 0.15 145);
+  --color-warning: oklch(70% 0.15 80);
+  --color-danger: oklch(60% 0.2 25);
+
+  --color-state-draft: var(--color-fg-subtle);
+  --color-state-implementing: var(--color-accent);
+  --color-state-implemented: var(--color-success);
+  --color-state-running: var(--color-accent);
+  --color-state-evaluating: var(--color-accent);
+  --color-state-complete: var(--color-success);
+  --color-state-failed: var(--color-danger);
+  --color-state-pending: var(--color-fg-subtle);
+
+  --font-sans: ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "JetBrains Mono", monospace;
+}
+
+/* shadcn/ui token bridge. The shadcn components reference --background,
+   --foreground, --primary, etc. We map those to the SMAI design tokens so
+   shadcn primitives pick up the SMAI palette automatically. */
+:root {
+  --radius: 0.5rem;
+  --background: var(--color-bg);
+  --foreground: var(--color-fg);
+  --card: var(--color-bg);
+  --card-foreground: var(--color-fg);
+  --popover: var(--color-bg);
+  --popover-foreground: var(--color-fg);
+  --primary: var(--color-accent);
+  --primary-foreground: oklch(99% 0 0);
+  --secondary: var(--color-bg-subtle);
+  --secondary-foreground: var(--color-fg);
+  --muted: var(--color-bg-subtle);
+  --muted-foreground: var(--color-fg-subtle);
+  --accent: var(--color-bg-subtle);
+  --accent-foreground: var(--color-fg);
+  --destructive: var(--color-danger);
+  --destructive-foreground: oklch(99% 0 0);
+  --border: var(--color-border);
+  --input: var(--color-border);
+  --ring: var(--color-accent);
+}
+
+@media (prefers-color-scheme: dark) {
+  @theme {
+    --color-bg: oklch(15% 0 0);
+    --color-bg-subtle: oklch(20% 0 0);
+    --color-fg: oklch(95% 0 0);
+    --color-fg-subtle: oklch(70% 0 0);
+    --color-border: oklch(28% 0 0);
+    --color-accent: oklch(70% 0.13 230);
+    --color-success: oklch(72% 0.14 145);
+    --color-warning: oklch(78% 0.14 80);
+    --color-danger: oklch(68% 0.2 25);
+  }
+
+  :root {
+    --primary-foreground: oklch(15% 0 0);
+    --destructive-foreground: oklch(15% 0 0);
+  }
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent-bg: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border-default: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+
+  html,
+  body {
+    background-color: var(--color-bg);
+    color: var(--color-fg);
+    font-family: var(--font-sans);
+  }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+  }
+}

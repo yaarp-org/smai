@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.turbo/
+.tanstack/
+src/routeTree.gen.ts
+*.log
+*.tsbuildinfo

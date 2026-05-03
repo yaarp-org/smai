@@ -29,3 +29,12 @@ venv/
 
 # Claude Code
 CLAUDE.md
+
+# Frontend (apps/ui)
+node_modules/
+apps/ui/dist/
+apps/ui/.turbo/
+apps/ui/.tanstack/
+apps/ui/src/routeTree.gen.ts
+apps/ui/*.tsbuildinfo
+apps/ui/**/*.tsbuildinfo
