@@ -110,6 +110,26 @@
         "packages/smai-api-conformance/src",
         "packages/smai-api-spec/src"
       ]
+    },
+    {
+      "root": "packages/smai-api",
+      "reportMissingImports": "error",
+      "extraPaths": [
+        "packages/smai-api/src",
+        "packages/smai-api-spec/src",
+        "packages/smai-api-conformance/src",
+        "packages/smai-cli/src",
+        "packages/smai-core/src",
+        "packages/smai-orchestrator/src",
+        "packages/smai-agents/src",
+        "packages/smai-runtime/src",
+        "plugins/smai-store-sqlite/src",
+        "plugins/smai-artifacts-localfs/src",
+        "plugins/smai-llm-bedrock/src",
+        "plugins/smai-llm-anthropic/src",
+        "plugins/smai-llm-openai/src",
+        "plugins/smai-compute-localgpu/src"
+      ]
     }
   ],
   "typeCheckingMode": "standard",
@@ -120,6 +140,7 @@
     "packages/smai-cli/src",
     "packages/smai-api-spec/src",
     "packages/smai-api-conformance/src",
+    "packages/smai-api/src",
     "plugins/smai-llm-bedrock/src",
     "plugins/smai-llm-anthropic/src",
     "plugins/smai-llm-openai/src",

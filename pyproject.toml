@@ -8,6 +8,7 @@ members = [
     "packages/smai",
     "packages/smai-api-spec",
     "packages/smai-api-conformance",
+    "packages/smai-api",
     "plugins/smai-llm-bedrock",
     "plugins/smai-llm-anthropic",
     "plugins/smai-llm-openai",
