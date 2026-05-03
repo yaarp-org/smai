@@ -10,6 +10,7 @@ resolution-markers = [
 members = [
     "smai",
     "smai-agents",
+    "smai-api-conformance",
     "smai-api-spec",
     "smai-artifacts-localfs",
     "smai-artifacts-s3",
@@ -2515,6 +2516,25 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [{ name = "smai-llm-bedrock", editable = "plugins/smai-llm-bedrock" }]
+
+[[package]]
+name = "smai-api-conformance"
+version = "0.1.0"
+source = { editable = "packages/smai-api-conformance" }
+dependencies = [
+    { name = "httpx" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "smai-api-spec" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "pytest", specifier = ">=8" },
+    { name = "pytest-asyncio", specifier = ">=0.23" },
+    { name = "smai-api-spec", editable = "packages/smai-api-spec" },
+]
 
 [[package]]
 name = "smai-api-spec"

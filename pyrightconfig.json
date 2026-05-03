@@ -102,6 +102,14 @@
       "extraPaths": [
         "packages/smai-api-spec/src"
       ]
+    },
+    {
+      "root": "packages/smai-api-conformance",
+      "reportMissingImports": "error",
+      "extraPaths": [
+        "packages/smai-api-conformance/src",
+        "packages/smai-api-spec/src"
+      ]
     }
   ],
   "typeCheckingMode": "standard",
@@ -111,6 +119,7 @@
     "packages/smai-agents/src",
     "packages/smai-cli/src",
     "packages/smai-api-spec/src",
+    "packages/smai-api-conformance/src",
     "plugins/smai-llm-bedrock/src",
     "plugins/smai-llm-anthropic/src",
     "plugins/smai-llm-openai/src",
