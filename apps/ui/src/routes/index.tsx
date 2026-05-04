@@ -1,9 +1,16 @@
+import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
 
 import { ErrorBanner, LoadingBlock } from "@/components/common/page-states";
 import { StateBadge } from "@/components/entity/state-badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { $api } from "@/lib/api/client";
+import {
+  SSE_STATUS_QUERY_KEY,
+  WORKER_HEARTBEAT_QUERY_KEY,
+  type SseConnectionStatus,
+  type WorkerHeartbeatEvent,
+} from "@/lib/events/sse";
 import { formatRelative } from "@/lib/format/datetime";
 import type { components } from "@/lib/api/generated/api-types";
 
@@ -139,17 +146,63 @@ function shortId(id: string): string {
   return `${id.slice(0, 8)}…${id.slice(-4)}`;
 }
 
-// 4.M5 will populate the worker_heartbeat query data via SSE; M3 reads it via
-// queryClient.getQueryData(["worker_heartbeat"]). Until then the tile shows
-// "(awaiting worker)". Wired now so M5 just needs to push values.
 function WorkerHeartbeatFooter() {
-  // Leaving as static placeholder — TanStack Query's queryClient is not exposed
-  // to this component yet (no useQueryClient() reads needed in M3), and per the
-  // brief we keep this empty until M5 wires the SSE channel.
+  // Both the heartbeat payload and the SSE connection status are pushed into
+  // the TanStack Query cache by `lib/events/sse.ts` (setQueryData). useQuery
+  // with `enabled: false` reads the cache and re-renders on every push; the
+  // queryFn is a placeholder that never runs.
+  const { data: heartbeat } = useQuery<WorkerHeartbeatEvent | undefined>({
+    queryKey: WORKER_HEARTBEAT_QUERY_KEY,
+    queryFn: () => Promise.resolve(undefined),
+    enabled: false,
+    staleTime: Infinity,
+  });
+  const { data: status } = useQuery<SseConnectionStatus | undefined>({
+    queryKey: SSE_STATUS_QUERY_KEY,
+    queryFn: () => Promise.resolve(undefined),
+    enabled: false,
+    staleTime: Infinity,
+  });
+
   return (
-    <footer className="border-t border-[var(--color-border)] pt-3 text-xs text-[var(--color-fg-subtle)]">
-      <span className="font-mono">worker:</span>{" "}
-      <span className="italic">(awaiting worker — SSE wires in 4.M5)</span>
+    <footer className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-[var(--color-border)] pt-3 text-xs text-[var(--color-fg-subtle)]">
+      <span className="inline-flex items-center gap-1.5">
+        <ConnectionDot status={status} />
+        <span className="font-mono">SSE:</span>
+        <span>{status ?? "connecting"}</span>
+      </span>
+      <span className="inline-flex items-center gap-1.5">
+        <span className="font-mono">worker:</span>
+        {heartbeat ? (
+          <span className="tabular-nums">
+            cycle {heartbeat.cycle_id} · {heartbeat.cycles_processed} processed · last beat{" "}
+            <span title={heartbeat.ts}>{formatRelative(heartbeat.ts)}</span>
+          </span>
+        ) : (
+          <span className="italic">(awaiting worker)</span>
+        )}
+      </span>
     </footer>
+  );
+}
+
+function ConnectionDot({ status }: { status: SseConnectionStatus | undefined }) {
+  // green=open, amber=connecting (the initial state and any transient
+  // reconnect), red=closed (server gave up or bearer-mode deferred). Matches
+  // the EventSource readyState mapping in `lib/events/sse.ts`.
+  const tone =
+    status === "open" ? "bg-green-500" : status === "closed" ? "bg-red-500" : "bg-amber-500";
+  const label =
+    status === "open"
+      ? "Live updates connected"
+      : status === "closed"
+        ? "Live updates disconnected"
+        : "Live updates connecting";
+  return (
+    <span
+      aria-label={label}
+      title={label}
+      className={`inline-block h-2 w-2 rounded-full ${tone}`}
+    />
   );
 }
