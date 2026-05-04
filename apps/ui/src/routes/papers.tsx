@@ -4,7 +4,7 @@ import { z } from "zod";
 import { LoadMore } from "@/components/common/load-more";
 import { EmptyState, ErrorBanner, LoadingBlock } from "@/components/common/page-states";
 import { PaperCard } from "@/components/entity/paper-card";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import {
   Select,
   SelectContent,
@@ -12,7 +12,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { $api } from "@/lib/api/client";
 
 const paperStates = [
@@ -60,14 +59,9 @@ function PapersListPage() {
             proposals.
           </p>
         </div>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span>
-              <Button disabled>Ingest by arXiv ID</Button>
-            </span>
-          </TooltipTrigger>
-          <TooltipContent>Coming in 4.M4 (mutation flows)</TooltipContent>
-        </Tooltip>
+        <Link to="/papers/new" className={buttonVariants()}>
+          Ingest by arXiv ID
+        </Link>
       </header>
 
       <div className="flex flex-wrap items-center gap-3">

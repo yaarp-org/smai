@@ -4,7 +4,7 @@ import { z } from "zod";
 import { LoadMore } from "@/components/common/load-more";
 import { EmptyState, ErrorBanner, LoadingBlock } from "@/components/common/page-states";
 import { ProposalCard } from "@/components/entity/proposal-card";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import {
   Select,
   SelectContent,
@@ -12,7 +12,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { $api } from "@/lib/api/client";
 
 // 13-frontend.md §6.2 / §8.2: typed search-params via Zod. The state values
@@ -60,16 +59,9 @@ function ProposalsListPage() {
             Primary input verb per DEC-032 — every user-driven CG creation flows through here.
           </p>
         </div>
-        {/* M4 wires "/proposals/new" — the form route plus its submit
-            mutation. M3 leaves the CTA visible-but-disabled with a tooltip. */}
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span>
-              <Button disabled>New proposal</Button>
-            </span>
-          </TooltipTrigger>
-          <TooltipContent>Coming in 4.M4 (mutation flows)</TooltipContent>
-        </Tooltip>
+        <Link to="/proposals/new" className={buttonVariants()}>
+          New proposal
+        </Link>
       </header>
 
       <div className="flex flex-wrap items-center gap-3">

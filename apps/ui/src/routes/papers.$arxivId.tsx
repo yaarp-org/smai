@@ -1,11 +1,13 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { toast } from "sonner";
 
 import { ErrorBanner, LoadingBlock } from "@/components/common/page-states";
 import { StateBadge } from "@/components/entity/state-badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { $api } from "@/lib/api/client";
+import { errorMessage, invalidateAfterPaperPromote } from "@/lib/api/mutation-helpers";
 import { formatDateTime, formatRelative } from "@/lib/format/datetime";
 import type { components } from "@/lib/api/generated/api-types";
 
@@ -150,7 +152,19 @@ function TechniqueRefRow({ ref }: { ref: TechniqueRef }) {
 }
 
 function PromotePartialPanel({ paper }: { paper: PaperDetail }) {
+  const queryClient = useQueryClient();
+  const promoteMutation = $api.useMutation("post", "/api/v1/papers/{arxiv_id}/promote-partial", {
+    onSuccess: () => {
+      invalidateAfterPaperPromote(queryClient, paper.arxiv_id);
+      toast.success("Paper promoted to submitted");
+    },
+    onError: (err) => {
+      toast.error(`Promote failed: ${errorMessage(err)}`);
+    },
+  });
+
   if (paper.state !== "partial") return null;
+
   return (
     <Card>
       <CardHeader>
@@ -161,14 +175,12 @@ function PromotePartialPanel({ paper }: { paper: PaperDetail }) {
         </CardDescription>
       </CardHeader>
       <CardContent>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <span>
-              <Button disabled>Promote partial</Button>
-            </span>
-          </TooltipTrigger>
-          <TooltipContent>Coming in 4.M4 (mutation flows)</TooltipContent>
-        </Tooltip>
+        <Button
+          disabled={promoteMutation.isPending}
+          onClick={() => promoteMutation.mutate({ params: { path: { arxiv_id: paper.arxiv_id } } })}
+        >
+          {promoteMutation.isPending ? "Promoting…" : "Promote partial"}
+        </Button>
       </CardContent>
     </Card>
   );

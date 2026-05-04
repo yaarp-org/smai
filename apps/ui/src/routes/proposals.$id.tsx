@@ -1,11 +1,17 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { toast } from "sonner";
 
 import { ErrorBanner, LoadingBlock } from "@/components/common/page-states";
 import { StateBadge } from "@/components/entity/state-badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { $api } from "@/lib/api/client";
+import {
+  errorMessage,
+  invalidateAfterProposalApprove,
+  invalidateAfterProposalReject,
+} from "@/lib/api/mutation-helpers";
 import { formatDateTime, formatRelative } from "@/lib/format/datetime";
 import type { components } from "@/lib/api/generated/api-types";
 
@@ -189,10 +195,40 @@ function DesignPlanPanel({ proposal }: { proposal: ProposalDetail }) {
 
 function HumanGatePanel({ proposal }: { proposal: ProposalDetail }) {
   // The gate becomes visible at `designed` with no decision yet recorded.
-  // M3 ships disabled placeholder buttons + a tooltip; M4 swaps in
-  // useMutation calls bound to /proposals/{id}/approve and /reject.
+  // Approving fires the synchronous designed → registered transition (1+ CG
+  // inserts in one transaction, per 08 §3.3); rejecting fires designed →
+  // rejected. Both paths invalidate the proposal detail + list; approval
+  // additionally invalidates the CGs list since CGs are created.
+  const queryClient = useQueryClient();
+
+  const approveMutation = $api.useMutation("post", "/api/v1/proposals/{proposal_id}/approve", {
+    onSuccess: (data) => {
+      invalidateAfterProposalApprove(queryClient, proposal.id);
+      const created = data.cg_ids.length;
+      toast.success(
+        `Proposal approved (${created} comparison-group${created === 1 ? "" : "s"} created)`,
+      );
+    },
+    onError: (err) => {
+      toast.error(`Approval failed: ${errorMessage(err)}`);
+    },
+  });
+
+  const rejectMutation = $api.useMutation("post", "/api/v1/proposals/{proposal_id}/reject", {
+    onSuccess: () => {
+      invalidateAfterProposalReject(queryClient, proposal.id);
+      toast.success("Proposal rejected");
+    },
+    onError: (err) => {
+      toast.error(`Reject failed: ${errorMessage(err)}`);
+    },
+  });
+
   if (proposal.state !== "designed") return null;
   if (proposal.user_decision != null) return null;
+
+  const busy = approveMutation.isPending || rejectMutation.isPending;
+
   return (
     <Card>
       <CardHeader>
@@ -204,24 +240,28 @@ function HumanGatePanel({ proposal }: { proposal: ProposalDetail }) {
       </CardHeader>
       <CardContent>
         <div className="flex gap-2">
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span>
-                <Button disabled>Approve</Button>
-              </span>
-            </TooltipTrigger>
-            <TooltipContent>Coming in 4.M4 (mutation flows)</TooltipContent>
-          </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span>
-                <Button variant="outline" disabled>
-                  Reject
-                </Button>
-              </span>
-            </TooltipTrigger>
-            <TooltipContent>Coming in 4.M4 (mutation flows)</TooltipContent>
-          </Tooltip>
+          <Button
+            disabled={busy}
+            onClick={() =>
+              approveMutation.mutate({
+                params: { path: { proposal_id: proposal.id } },
+              })
+            }
+          >
+            {approveMutation.isPending ? "Approving…" : "Approve"}
+          </Button>
+          <Button
+            variant="outline"
+            disabled={busy}
+            onClick={() =>
+              rejectMutation.mutate({
+                params: { path: { proposal_id: proposal.id } },
+                body: null,
+              })
+            }
+          >
+            {rejectMutation.isPending ? "Rejecting…" : "Reject"}
+          </Button>
         </div>
       </CardContent>
     </Card>
