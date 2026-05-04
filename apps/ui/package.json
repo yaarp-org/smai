@@ -12,7 +12,7 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "codegen": "openapi-typescript http://127.0.0.1:8000/openapi.json --output src/lib/api/generated/api-types.ts"
+    "codegen": "uv --project ../.. run python ../../tools/dump_openapi.py | openapi-typescript --output src/lib/api/generated/api-types.ts"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.7",
