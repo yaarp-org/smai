@@ -206,6 +206,7 @@ _METADATA_EXPECTED_METHODS = {
     "test_tenant_fairness_contract",
     "test_capabilities_are_capabilities_model",
     "test_supports_leasing_matches_behavior",
+    "test_supports_listen_notify_capability_bit_present",
 }
 
 

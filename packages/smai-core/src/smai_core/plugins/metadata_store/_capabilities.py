@@ -41,6 +41,25 @@ class MetadataStoreCapabilities(BaseModel):
         single-worker mode only. Defaults to ``True`` so new SQL-backed
         plugins inherit the safe value; new plugins that cannot satisfy
         the contract MUST opt out explicitly.
+
+    ``supports_listen_notify``:
+        ``True`` iff the plugin's transactional context can fan out a
+        cross-process wire signal on each successful state-machine
+        transition (Task 4.K3 / ``12-ui-process.md`` §6.3 + §6.5 +
+        §12 OQ2). The Postgres plugin reports ``True`` because asyncpg
+        + ``pg_notify('smai_events', payload)`` issued inside the same
+        transaction as the CAS ``UPDATE`` produces exactly that signal
+        on COMMIT (and is silently discarded on ROLLBACK — the wire
+        signal is therefore aligned with the persisted state change).
+        SQLite reports ``False`` because there is no equivalent native
+        primitive. The bit gates :func:`smai_api.make_api_app`'s
+        decision to spawn its dedicated asyncpg ``LISTEN`` task at
+        startup (per `12` §6.3): when the bit is ``False`` the listener
+        task is not spawned and SSE falls back to the in-process
+        broker only. Defaults to ``False`` so existing plugins (and
+        any new SQL-shaped plugin without a NOTIFY-shaped primitive)
+        inherit the safe-no value; the Postgres plugin overrides to
+        ``True``.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -48,3 +67,4 @@ class MetadataStoreCapabilities(BaseModel):
     is_tenant_aware: bool
     supports_transactions: bool = True
     supports_leasing: bool = True
+    supports_listen_notify: bool = False

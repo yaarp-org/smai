@@ -242,6 +242,19 @@ class _Transaction:
     def __init__(self, conn: AsyncConnection) -> None:
         self._conn = conn
 
+    @property
+    def connection(self) -> AsyncConnection:
+        """Underlying SQLAlchemy ``AsyncConnection`` (Task 4.K3).
+
+        Exposed so :class:`smai_store_postgres.PgNotifyEventChannel`
+        can run ``pg_notify('smai_events', ...)`` against the same
+        transaction the CAS UPDATE ran in (per ``12-ui-process.md``
+        §6.5). Generic engine code treats the value as opaque
+        (``object`` per the Protocol); only Postgres-paired channels
+        narrow the type.
+        """
+        return self._conn
+
     async def create_cg(self, cg: ComparisonGroupRecord) -> ComparisonGroupRecord:
         return await _do_create_cg(self._conn, cg)
 
@@ -820,6 +833,14 @@ class PostgresStore:
             is_tenant_aware=tenant_aware,
             supports_transactions=True,
             supports_leasing=True,
+            # Task 4.K3 / `12-ui-process.md` §6.3 + §12 OQ2: Postgres
+            # has native ``LISTEN``/``NOTIFY`` via asyncpg; the
+            # PgNotifyEventChannel paired with this plugin issues
+            # ``pg_notify('smai_events', payload)`` inside the active
+            # transaction so a ROLLBACK suppresses the wire signal.
+            # The bit gates :func:`smai_api.make_api_app`'s decision
+            # to spawn its dedicated ``LISTEN`` task at startup.
+            supports_listen_notify=True,
         )
 
     async def migrate(self) -> None:

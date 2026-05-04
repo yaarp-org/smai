@@ -74,6 +74,17 @@
       ]
     },
     {
+      "root": "plugins/smai-store-postgres",
+      "reportMissingImports": "error",
+      "extraPaths": [
+        "plugins/smai-store-postgres/src",
+        "packages/smai-core/src",
+        "packages/smai-orchestrator/src",
+        "packages/smai-events/src",
+        "packages/smai-api-spec/src"
+      ]
+    },
+    {
       "root": "plugins/smai-compute-localgpu",
       "reportMissingImports": "error",
       "extraPaths": [
@@ -159,6 +170,7 @@
     "plugins/smai-llm-anthropic/src",
     "plugins/smai-llm-openai/src",
     "plugins/smai-store-sqlite/src",
+    "plugins/smai-store-postgres/src",
     "plugins/smai-compute-localgpu/src"
   ]
 }

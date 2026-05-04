@@ -30,6 +30,16 @@ Entry point::
     postgres = "smai_store_postgres:PostgresStore"
 """
 
+from smai_store_postgres._event_channel import (
+    NOTIFY_CHANNEL,
+    PayloadTooLargeError,
+    PgNotifyEventChannel,
+)
 from smai_store_postgres._store import PostgresStore
 
-__all__ = ["PostgresStore"]
+__all__ = [
+    "NOTIFY_CHANNEL",
+    "PayloadTooLargeError",
+    "PgNotifyEventChannel",
+    "PostgresStore",
+]

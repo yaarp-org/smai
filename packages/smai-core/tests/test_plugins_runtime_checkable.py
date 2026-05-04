@@ -168,6 +168,12 @@ def test_metadata_store_non_conforming_isinstance_false() -> None:
 
 def test_transaction_conforming_isinstance_true() -> None:
     class _Tx:
+        # Task 4.K3: ``connection`` accessor must be present per the
+        # Transaction Protocol's additive K3 extension.
+        @property
+        def connection(self) -> object:
+            return object()
+
         async def create_cg(self, *a: Any, **kw: Any) -> Any: ...
         async def create_entry(self, *a: Any, **kw: Any) -> Any: ...
         async def create_run(self, *a: Any, **kw: Any) -> Any: ...

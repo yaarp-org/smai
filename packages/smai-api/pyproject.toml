@@ -14,6 +14,12 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
     "python-multipart>=0.0.9",
+    # Task 4.K3 / `12-ui-process.md` §6.3: dedicated asyncpg LISTEN
+    # connection feeds the in-process EventBroker from cross-process
+    # NOTIFY signals. We use asyncpg directly (rather than via
+    # SQLAlchemy) because LISTEN requires a connection parked on the
+    # channel — the SQLAlchemy pool can't satisfy that.
+    "asyncpg>=0.28",
 ]
 
 [dependency-groups]

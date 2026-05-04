@@ -12,6 +12,9 @@ requires-python = ">=3.11"
 dependencies = [
     "smai-core",
     "smai-orchestrator",
+    # Task 4.K3: PgNotifyEventChannel implements smai_events.EventChannel.
+    # Sibling-package dep per `12-ui-process.md` §6 OQ1 (RESOLVED 2026-05-03).
+    "smai-events",
     "sqlalchemy>=2.0",
     "asyncpg>=0.28",
     # SQLAlchemy's async layer is implemented via greenlet bridging to
@@ -23,6 +26,7 @@ dependencies = [
 [tool.uv.sources]
 smai-core = { workspace = true }
 smai-orchestrator = { workspace = true }
+smai-events = { workspace = true }
 
 [project.entry-points."smai.metadata_stores"]
 postgres = "smai_store_postgres:PostgresStore"

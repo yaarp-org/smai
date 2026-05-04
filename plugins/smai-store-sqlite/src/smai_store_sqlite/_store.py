@@ -181,6 +181,19 @@ class _Transaction:
     def __init__(self, conn: AsyncConnection) -> None:
         self._conn = conn
 
+    @property
+    def connection(self) -> AsyncConnection:
+        """Underlying SQLAlchemy ``AsyncConnection`` (Task 4.K3).
+
+        Exposed for parity with the Postgres plugin's accessor — see
+        :class:`smai_store_postgres._store._Transaction.connection` for
+        the canonical use case (``PgNotifyEventChannel`` runs
+        ``pg_notify`` here). SQLite has no analogous LISTEN/NOTIFY
+        primitive, so no shipped channel narrows this for SQLite, but
+        the property exists so the Protocol surface is uniform.
+        """
+        return self._conn
+
     async def create_cg(self, cg: ComparisonGroupRecord) -> ComparisonGroupRecord:
         return await _do_create_cg(self._conn, cg)
 

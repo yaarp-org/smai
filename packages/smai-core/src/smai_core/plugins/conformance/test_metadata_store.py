@@ -838,3 +838,21 @@ class MetadataStoreConformance:
         token = await store.acquire_lease("cg", "cg_caps_lease", 60, "worker-caps")
         assert token is not None
         await store.release_lease(token)
+
+    def test_supports_listen_notify_capability_bit_present(self, store: MetadataStore) -> None:
+        """Every plugin advertises a boolean
+        :attr:`MetadataStoreCapabilities.supports_listen_notify` bit
+        (Task 4.K3 / `07` §5.5 + `12-ui-process.md` §6.3 + §12 OQ2).
+
+        Default per the Pydantic model is ``False`` (safe-no — only
+        plugins with a native cross-process NOTIFY substrate flip it
+        true); the Postgres plugin's own credentialed test suite
+        verifies the behavior side of the bit (publisher transition →
+        ``LISTEN`` connection receives → broker publishes the
+        spec-shape payload, ROLLBACK suppresses the wire signal,
+        multi-listener fan-out). This conformance assertion just
+        pins that the bit exists and is a bool, so a plugin that
+        forgets to set it surfaces here rather than in
+        :func:`smai_api.make_api_app`'s lifespan when the listener
+        decision is made."""
+        assert isinstance(store.capabilities.supports_listen_notify, bool)

@@ -21,6 +21,19 @@ seam (``12-ui-process.md`` §6.4 RESOLVED 2026-05-03 — engine-wraps).
 :meth:`EventChannel.fire_transition` if ``from_state != target_state``
 (handle-only writes that re-target the same state are not transitions
 and produce no event).
+
+Task 4.K3 (``12-ui-process.md`` §6.5): channels that report
+:attr:`EventChannel.wants_transactional_fire = True` (e.g.,
+``PgNotifyEventChannel`` — needs ``pg_notify`` to run inside the same
+asyncpg transaction as the CAS UPDATE so a ROLLBACK suppresses the
+wire signal) take a different fire path here: the transition runs
+inside :meth:`MetadataStore.transaction` and the channel's
+:meth:`fire_transition` is invoked pre-commit with
+:attr:`Transaction.connection` threaded through. K2 channels (Null,
+InProcess; ``wants_transactional_fire = False``) keep the K2 path
+byte-identical — the row write commits, then the channel publishes
+post-commit. Pre-commit publish from the in-process channel would let
+SSE fan out events for transitions that subsequently rolled back.
 """
 
 from __future__ import annotations
@@ -107,6 +120,81 @@ async def get_entity(
             return await store.get_paper(entity_id)
 
 
+async def _bare_transition(
+    store: MetadataStore,
+    kind: EntityKind,
+    entity_id: str,
+    expected_version: int,
+    target_state: Any,  # plugin's Literal[...] is the truth; engine treats opaque
+    fields: dict[str, object],
+) -> StateDrivenRecord:
+    """Dispatch the per-kind ``store.transition_*_state`` (K2 path).
+
+    Used both for the K2 post-commit fire path and for the no-event
+    path. Pulled out so the K3 transactional path below can share the
+    per-kind dispatch shape via :class:`Transaction` instead of the
+    bare store.
+    """
+    match kind:
+        case "cg":
+            return await store.transition_cg_state(
+                entity_id, expected_version, target_state, **fields
+            )
+        case "entry":
+            return await store.transition_entry_state(
+                entity_id, expected_version, target_state, **fields
+            )
+        case "run":
+            return await store.transition_run_state(
+                entity_id, expected_version, target_state, **fields
+            )
+        case "proposal":
+            return await store.transition_proposal_state(
+                entity_id, expected_version, target_state, **fields
+            )
+        case "paper":
+            return await store.transition_paper_state(
+                entity_id, expected_version, target_state, **fields
+            )
+
+
+async def _txn_transition(
+    txn: Any,  # plugin's Transaction; same dispatch surface as MetadataStore
+    kind: EntityKind,
+    entity_id: str,
+    expected_version: int,
+    target_state: Any,
+    fields: dict[str, object],
+) -> StateDrivenRecord:
+    """Dispatch the per-kind ``txn.transition_*_state`` (K3 path).
+
+    Same dispatch surface as :func:`_bare_transition` but bound to a
+    :class:`Transaction` so the CAS UPDATE shares the connection with
+    the channel's pre-commit fire.
+    """
+    match kind:
+        case "cg":
+            return await txn.transition_cg_state(  # type: ignore[no-any-return]
+                entity_id, expected_version, target_state, **fields
+            )
+        case "entry":
+            return await txn.transition_entry_state(  # type: ignore[no-any-return]
+                entity_id, expected_version, target_state, **fields
+            )
+        case "run":
+            return await txn.transition_run_state(  # type: ignore[no-any-return]
+                entity_id, expected_version, target_state, **fields
+            )
+        case "proposal":
+            return await txn.transition_proposal_state(  # type: ignore[no-any-return]
+                entity_id, expected_version, target_state, **fields
+            )
+        case "paper":
+            return await txn.transition_paper_state(  # type: ignore[no-any-return]
+                entity_id, expected_version, target_state, **fields
+            )
+
+
 async def transition_state(  # noqa: PLR0913
     store: MetadataStore,
     kind: EntityKind,
@@ -135,27 +223,63 @@ async def transition_state(  # noqa: PLR0913
     event. Failures inside :meth:`fire_transition` are logged-and-
     swallowed so a broken event channel cannot break the engine — the
     persisted state already reflects the transition.
+
+    Per Task 4.K3 (``12-ui-process.md`` §6.5): when the channel reports
+    :attr:`EventChannel.wants_transactional_fire = True`, the fire site
+    branches into the transactional path:
+
+    1. Open :meth:`MetadataStore.transaction` (one BEGIN).
+    2. Call :meth:`Transaction.transition_*_state` (the CAS UPDATE
+       lands inside the transaction).
+    3. If the transition was a real state change, call
+       :meth:`EventChannel.fire_transition` with
+       :attr:`Transaction.connection` threaded through — the channel
+       (e.g., ``PgNotifyEventChannel``) issues its wire signal against
+       that connection so it bundles into the same COMMIT.
+    4. Exit the transaction context — COMMIT (delivers the wire
+       signal) on success; ROLLBACK (suppresses the wire signal) on
+       any exception, including one raised by ``fire_transition``.
+
+    On rollback the row write is also lost; the engine's next poll
+    cycle re-attempts the transition (the row's ``version`` is still
+    the pre-CAS value). This is the correctness floor for K3: a
+    broken cross-process channel cannot leak ghost events. K2's
+    "broken channel cannot break the engine" guarantee is preserved
+    in the sense that the engine doesn't crash — it just retries.
     """
     state = cast(Any, target_state)
-    match kind:
-        case "cg":
-            record = await store.transition_cg_state(entity_id, expected_version, state, **fields)
-        case "entry":
-            record = await store.transition_entry_state(
-                entity_id, expected_version, state, **fields
-            )
-        case "run":
-            record = await store.transition_run_state(entity_id, expected_version, state, **fields)
-        case "proposal":
-            record = await store.transition_proposal_state(
-                entity_id, expected_version, state, **fields
-            )
-        case "paper":
-            record = await store.transition_paper_state(
-                entity_id, expected_version, state, **fields
-            )
+    is_transition = from_state is not None and from_state != target_state
+    use_transactional_fire = (
+        event_channel is not None
+        and is_transition
+        and getattr(event_channel, "wants_transactional_fire", False)
+    )
 
-    if event_channel is not None and from_state is not None and from_state != target_state:
+    if use_transactional_fire:
+        assert event_channel is not None  # narrowing for type-checker
+        assert from_state is not None
+        async with await store.transaction() as txn:
+            record = await _txn_transition(txn, kind, entity_id, expected_version, state, fields)
+            await event_channel.fire_transition(
+                kind=event_kind_for(kind),
+                id=entity_id,
+                from_state=from_state,
+                to_state=target_state,
+                connection=txn.connection,
+            )
+            # Exit context manager: COMMIT on success (pg_notify
+            # payload delivered), ROLLBACK on exception (payload
+            # discarded; row write reverted; engine retries next
+            # cycle). Note we deliberately do NOT log-and-swallow
+            # the channel's exception here: that would commit the
+            # row but lose the wire signal, breaking the
+            # transactional contract `12` §6.5 set up.
+        return record
+
+    # K2 / K3-no-fire path: bare CAS, then post-commit fire if applicable.
+    record = await _bare_transition(store, kind, entity_id, expected_version, state, fields)
+    if event_channel is not None and is_transition:
+        assert from_state is not None
         try:
             await event_channel.fire_transition(
                 kind=event_kind_for(kind),

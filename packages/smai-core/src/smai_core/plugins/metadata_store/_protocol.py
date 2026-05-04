@@ -75,6 +75,24 @@ class Transaction(Protocol):
     (per §12 OQ10 — Session C).
     """
 
+    @property
+    def connection(self) -> object:
+        """Plugin-internal handle for the underlying transactional
+        connection — used by Task 4.K3's :class:`PgNotifyEventChannel`
+        so it can issue ``pg_notify('smai_events', ...)`` against the
+        same asyncpg transaction the CAS ``UPDATE`` ran in (per
+        ``12-ui-process.md`` §6.5).
+
+        Generic engine code MUST treat this attribute as opaque. Only
+        plugin-specific :class:`smai_events.EventChannel`
+        implementations that know which plugin they pair with should
+        narrow the type and access driver-specific operations on it.
+        For the Postgres plugin this is a SQLAlchemy ``AsyncConnection``;
+        for the SQLite plugin the same; for hypothetical non-SQL
+        plugins it could be anything (or ``None``).
+        """
+        ...
+
     async def create_cg(self, cg: ComparisonGroupRecord) -> ComparisonGroupRecord: ...
     async def create_entry(self, entry: EntryRecord) -> EntryRecord: ...
     async def create_run(self, run: RunRecord) -> RunRecord: ...

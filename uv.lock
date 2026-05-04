@@ -2569,6 +2569,7 @@ name = "smai-api"
 version = "0.1.0"
 source = { editable = "packages/smai-api" }
 dependencies = [
+    { name = "asyncpg" },
     { name = "fastapi" },
     { name = "python-multipart" },
     { name = "smai-api-spec" },
@@ -2591,6 +2592,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "asyncpg", specifier = ">=0.28" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "python-multipart", specifier = ">=0.0.9" },
     { name = "smai-api-spec", editable = "packages/smai-api-spec" },
@@ -2697,6 +2699,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pyyaml" },
     { name = "smai-agents" },
+    { name = "smai-api" },
     { name = "smai-artifacts-localfs" },
     { name = "smai-compute-localgpu" },
     { name = "smai-core" },
@@ -2715,6 +2718,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "smai-agents", editable = "packages/smai-agents" },
+    { name = "smai-api", editable = "packages/smai-api" },
     { name = "smai-artifacts-localfs", editable = "plugins/smai-artifacts-localfs" },
     { name = "smai-compute-localgpu", editable = "plugins/smai-compute-localgpu" },
     { name = "smai-core", editable = "packages/smai-core" },
@@ -2958,6 +2962,7 @@ dependencies = [
     { name = "asyncpg" },
     { name = "greenlet" },
     { name = "smai-core" },
+    { name = "smai-events" },
     { name = "smai-orchestrator" },
     { name = "sqlalchemy" },
 ]
@@ -2967,6 +2972,7 @@ requires-dist = [
     { name = "asyncpg", specifier = ">=0.28" },
     { name = "greenlet", specifier = ">=3.0" },
     { name = "smai-core", editable = "packages/smai-core" },
+    { name = "smai-events", editable = "packages/smai-events" },
     { name = "smai-orchestrator", editable = "packages/smai-orchestrator" },
     { name = "sqlalchemy", specifier = ">=2.0" },
 ]
