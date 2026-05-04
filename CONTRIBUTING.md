@@ -84,6 +84,28 @@ uv run ruff format .                     # auto-format
 uv run ruff check . --fix                # auto-fix safe lints
 ```
 
+### SPA + API dev workflow
+
+The canonical local-dev pattern for the API + SPA is two terminals
+(`designs/smai/12-ui-process.md` §8 / `13-frontend.md` §12.1):
+
+```bash
+# Terminal 1: API + (auto-detected) in-process worker on a sqlite/localfs config.
+uv run smai ui --reload
+
+# Terminal 2: Vite dev server with HMR; proxies /api/* to the API on :8000.
+cd apps/ui && pnpm install && pnpm dev
+```
+
+`smai ui --reload` enables uvicorn auto-reload on Python source
+changes; touching a `.tsx` updates the browser via Vite HMR
+independently. Editing `smai.yaml` requires restarting `smai ui` (no
+hot-reload; per `09-cli.md` §3).
+
+For a UI against a remote backend (Postgres + S3), pass
+`--no-worker` — workers run separately as `smai start` against the
+shared backend per `12-ui-process.md` §10.3.
+
 ---
 
 ## Project conventions

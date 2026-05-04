@@ -545,13 +545,14 @@ factor types are `additive` and `substitutive`.
 
 ## CLI verb summary
 
-15 verbs, grouped by what they do:
+16 verbs, grouped by what they do:
 
 | Verb | Purpose |
 |---|---|
 | `smai dev` | Boot the laptop deployment (SQLite + LocalFs + LocalGpu + Bedrock; in-band worker; tighter poll for interactive feel). |
 | `smai start` | Boot the production deployment (out-of-band worker; explicit plugin selections required; refuses to boot on incomplete config or stale schema). |
-| `smai serve` | Run the read-only HTTP dashboard against the configured plugins (no worker). |
+| `smai ui` | Boot the API + SPA process. Auto-detects `--with-worker` from plugin shape (sqlite + localfs → on; anything else → off); strict pre-flights when the worker is on, soft otherwise. See `designs/smai/12-ui-process.md`. |
+| `smai serve` | **Deprecated in v2 — use `smai ui` instead** (`12-ui-process.md` §7.2). Read-only Jinja dashboard; behavior preserved for one release; source-tree removal in v2.1. |
 | `smai run <experiment.yaml>` | Compile + register a CG; optional `--watch` polls until terminal. |
 | `smai submit-proposal <description>` | Primary input verb. Submit a novel-technique description; the planner drafts the `ExperimentDefinition`. |
 | `smai approve-proposal <id>` / `smai reject-proposal <id>` | Human gate at `designed`; approval atomically registers 1–N CGs. |
@@ -610,11 +611,31 @@ plugins:
   compute_config:
     workdir: ./.smai/compute       # localgpu
     # gpu_type: T4                 # modal / runpod
+
+# `smai ui` settings (per `designs/smai/12-ui-process.md` §9.1).
+# All fields are optional; the entire `api:` block can be omitted.
+api:
+  host: 127.0.0.1                  # loopback by default per `11` §7
+  port: 8000
+  with_worker: auto                # auto | true | false
+  reload: false                    # dev-only: uvicorn auto-reload
+  auth:
+    enabled: false                 # opt-in bearer-token mode (`11` §7.3)
+    token_path: ~/.smai/api-token  # auto-generated 0o600 on first launch
+  sse:
+    heartbeat_seconds: 15
+    ring_buffer_size: 100
+    refetch_all_on_overflow: true
 ```
 
 The same `smai.yaml` works for `smai dev` and `smai start`; the
 difference is which fields are defaulted vs required. `smai start`
 refuses to boot if any plugin selection is missing.
+
+`smai ui` reads the `api:` block; `smai dev` and `smai start` ignore
+it. The `--with-worker` flag overrides `api.with_worker`; the
+auto-detect rule (sqlite + localfs → on; anything else → off) fires
+when neither the flag nor the layered field forces a boolean.
 
 The local↔production swap is a config change, not a code change: swap
 `sqlite` → `postgres`, `localfs` → `s3`, `localgpu` → `modal` /

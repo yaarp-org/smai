@@ -8,6 +8,7 @@ dependencies = [
     "smai-orchestrator",
     "smai-agents",
     "smai-runtime",
+    "smai-api",
     "smai-llm-bedrock",
     "smai-store-sqlite",
     "smai-artifacts-localfs",
@@ -28,6 +29,7 @@ smai-core = { workspace = true }
 smai-orchestrator = { workspace = true }
 smai-agents = { workspace = true }
 smai-runtime = { workspace = true }
+smai-api = { workspace = true }
 smai-llm-bedrock = { workspace = true }
 smai-store-sqlite = { workspace = true }
 smai-artifacts-localfs = { workspace = true }

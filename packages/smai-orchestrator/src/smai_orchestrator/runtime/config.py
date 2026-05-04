@@ -20,11 +20,19 @@ inconsistency between `05` §6 (``pipeline: str``) and `09` §3
 pipeline-specs concurrently — single-spec deployments pass a
 one-element list. Surfaced as a one-line spec reconciliation in the
 status note.
+
+Per Task 4.L1 / ``12-ui-process.md`` §9.1: the :attr:`api` block holds
+the ``smai ui`` verb's settings (host / port / auto-detect knob, bearer
+auth, SSE keepalive). It is a third orthogonal axis — independent of
+:attr:`engine` and :attr:`plugins` — and ships a sensible default so
+``smai dev`` / ``smai start`` callers (which never read ``api``) are
+unaffected.
 """
 
 from __future__ import annotations
 
-from typing import Any
+from pathlib import Path
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -78,6 +86,67 @@ class PluginSelection(BaseModel):
     ``runtime_image``, ``workspace``, ``skip_preflight``."""
 
 
+class ApiAuthConfig(BaseModel):
+    """Bearer-token auth posture for ``smai ui`` (per ``11`` §7.3 / `12`
+    §9.1).
+
+    ``enabled=False`` is the default — Host-header validation alone is
+    the canonical local posture. Flipping ``enabled=True`` opts in to
+    the belt-and-suspenders bearer-token mode; the token file at
+    ``token_path`` is auto-generated on first launch (``0o600``,
+    :func:`secrets.token_urlsafe(32)`) and preserved across restarts so
+    browser tabs keep working.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    token_path: Path = Field(
+        default_factory=lambda: Path("~/.smai/api-token").expanduser(),
+    )
+
+
+class ApiSseConfig(BaseModel):
+    """SSE channel knobs the API surfaces (per ``11`` §8 / `12` §9.1).
+
+    The verb itself does not consume these (``smai_api.make_api_app``
+    reads them via the runtime / event broker plumbing); they live here
+    so :func:`smai_cli.config.load_runtime_config` can expose the same
+    layered ``smai.yaml`` → env → flags pipeline for them.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    heartbeat_seconds: int = 15
+    ring_buffer_size: int = 100
+    refetch_all_on_overflow: bool = True
+
+
+class ApiConfig(BaseModel):
+    """``smai ui`` verb settings per ``12-ui-process.md`` §9.1.
+
+    Independent of :attr:`RuntimeConfig.engine` and
+    :attr:`RuntimeConfig.plugins`. Default values are tuned for the
+    laptop case (Case A in `12` §5.1): loopback bind, no auth, in-
+    process worker auto-enabled by the auto-detect rule (`12` §4.3).
+
+    The ``with_worker`` field accepts ``"auto"`` (the default — defer
+    to the resolution rule in `12` §4.3 / §9.3), ``True`` (force
+    in-process worker), or ``False`` (force no in-process worker). The
+    CLI flag (``--with-worker`` / ``--no-worker``) overrides this per
+    the standard config-layering precedence chain.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    host: str = "127.0.0.1"
+    port: int = Field(default=8000, ge=1, le=65535)
+    with_worker: Literal["auto", True, False] = "auto"
+    reload: bool = False
+    auth: ApiAuthConfig = Field(default_factory=ApiAuthConfig)
+    sse: ApiSseConfig = Field(default_factory=ApiSseConfig)
+
+
 class RuntimeConfig(BaseModel):
     """Top-level config umbrella co-loaded by the CLI (`09` §3).
 
@@ -104,6 +173,12 @@ class RuntimeConfig(BaseModel):
     one-element list. Names are looked up against
     :mod:`smai_orchestrator.runtime.registry`."""
 
+    api: ApiConfig = Field(default_factory=ApiConfig)
+    """``smai ui`` verb settings (per Task 4.L1 / `12-ui-process.md`
+    §9.1). Optional — every field defaults; ``smai dev`` / ``smai
+    start`` ignore the block entirely. Layered identically to the
+    other axes through :func:`smai_cli.config.load_runtime_config`."""
+
     def with_overrides(self, **overrides: Any) -> RuntimeConfig:
         """Return a new :class:`RuntimeConfig` with the given top-level
         fields replaced.
@@ -116,4 +191,10 @@ class RuntimeConfig(BaseModel):
         return self.model_copy(update=overrides)
 
 
-__all__ = ["PluginSelection", "RuntimeConfig"]
+__all__ = [
+    "ApiAuthConfig",
+    "ApiConfig",
+    "ApiSseConfig",
+    "PluginSelection",
+    "RuntimeConfig",
+]

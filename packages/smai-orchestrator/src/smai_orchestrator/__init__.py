@@ -27,6 +27,9 @@ from smai_orchestrator.entities import (
 )
 from smai_orchestrator.runtime import (
     DEFAULT_TASK_ROLES,
+    ApiAuthConfig,
+    ApiConfig,
+    ApiSseConfig,
     DuplicateSpecError,
     InstantiatedPlugins,
     PipelineSpec,
@@ -66,6 +69,9 @@ from smai_orchestrator.specs import (
 )
 
 __all__ = [
+    "ApiAuthConfig",
+    "ApiConfig",
+    "ApiSseConfig",
     "CGState",
     "CG_ENTRIES_SPEC_NAME",
     "CG_EXECUTION_SPEC_NAME",

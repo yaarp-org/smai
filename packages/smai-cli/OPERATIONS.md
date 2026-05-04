@@ -216,10 +216,71 @@ secret-masking convention. A future hardening would scrub
 plugins are responsible for not constructing log messages containing
 their own secrets.
 
-## 6. Cross-references
+## 6. `smai ui --no-worker` companion deployment
+
+Per `designs/smai/12-ui-process.md` §10.3, the recommended self-hosted
+production shape (DEC-027) is:
+
+- N `smai start` worker processes against shared Postgres + S3 (this
+  file's §1–§3 cover the unit shapes; multi-worker by spawning N
+  `smai start` services with distinct `--worker-id` values).
+- One or more `smai ui --no-worker` processes for the API + SPA host,
+  behind a TLS-terminating reverse proxy (nginx / caddy).
+
+Notes specific to the API+SPA process:
+
+- `smai ui --no-worker` runs soft pre-flights — it logs warnings on
+  missing plugin slots but boots anyway, so existing data stays
+  readable through the API even if a slot is misconfigured. Workers
+  run their strict pre-flights independently.
+- Each `smai ui` process holds its own asyncpg `LISTEN` connection
+  separate from the SQLAlchemy pool — budget +1 connection per
+  process when sizing `pool_size` per §4.
+- `api.host` defaults to loopback (`127.0.0.1`); production deployments
+  put a reverse proxy on the public interface and let the API stay
+  bound to loopback or the proxy's internal network.
+- Bearer auth (`api.auth.enabled: true` in `smai.yaml`) writes a
+  `0o600` token file at `api.auth.token_path` on first launch. Each
+  `smai ui` process generates its own token; if you run multiple, give
+  each one a distinct `token_path` and share the relevant one with
+  the operator.
+
+A minimal systemd unit for the API process:
+
+```ini
+[Unit]
+Description=SMAI v2 UI host (API + SPA)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=smai
+Group=smai
+Environment=SMAI_CONFIG=/etc/smai/smai.yaml
+Environment=SMAI_LOG_LEVEL=INFO
+ExecStart=/usr/local/bin/smai ui --no-worker
+Restart=on-failure
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Same restart / log-handling guidance as `smai start` applies. SSE
+clients reconnect automatically on restart per `11-api.md` §8.3.
+
+---
+
+## 7. Cross-references
 
 - `designs/smai/09-cli.md` §6 — `smai start` verb shape + required
   config + failure modes.
+- `designs/smai/12-ui-process.md` §10.3 — `smai ui --no-worker`
+  deployment recipe; capacity-planning notes for SSE keepalive +
+  LISTEN connections.
 - `designs/smai/05-orchestrator.md` §7.2 — self-hosted production
   deployment shape (Postgres / S3 / Modal canonical).
 - `designs/smai/05-orchestrator.md` §3.5 — multi-worker leasing

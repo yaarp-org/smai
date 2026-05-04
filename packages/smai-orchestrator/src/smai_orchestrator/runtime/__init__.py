@@ -26,7 +26,13 @@ Out of scope, deferred:
 * CLI config layering (env → file → flags) — Task 2.D2.
 """
 
-from smai_orchestrator.runtime.config import PluginSelection, RuntimeConfig
+from smai_orchestrator.runtime.config import (
+    ApiAuthConfig,
+    ApiConfig,
+    ApiSseConfig,
+    PluginSelection,
+    RuntimeConfig,
+)
 from smai_orchestrator.runtime.instantiate import (
     DEFAULT_TASK_ROLES,
     ENTRY_POINT_GROUPS,
@@ -50,6 +56,9 @@ from smai_orchestrator.runtime.registry import (
 from smai_orchestrator.runtime.spec import PipelineSpec
 
 __all__ = [
+    "ApiAuthConfig",
+    "ApiConfig",
+    "ApiSseConfig",
     "DEFAULT_TASK_ROLES",
     "ENTRY_POINT_GROUPS",
     "DuplicateSpecError",

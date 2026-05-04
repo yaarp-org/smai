@@ -913,7 +913,22 @@ def smai_serve(
 
     No authentication. The default ``--host=127.0.0.1`` keeps the
     surface loopback-only; broaden the bind explicitly if you mean to.
+
+    **Deprecated in v2 per `12-ui-process.md` §7.2** — use
+    ``smai ui`` (with ``--no-worker`` for the read-only-against-remote
+    case) instead. ``smai serve`` ships a one-line deprecation warning
+    on every invocation; behavior is otherwise unchanged. Source-tree
+    removal lands in v2.1 per the ``implementation_plan.md`` §8 backlog
+    item.
     """
+    typer.echo(
+        "smai serve: deprecated in v2; use `smai ui` instead "
+        "(see designs/smai/12-ui-process.md §7.2). Source-tree removal "
+        "in v2.1 — migrate to `smai ui --no-worker` for the read-only "
+        "case.",
+        err=True,
+    )
+
     import uvicorn  # noqa: PLC0415 — lazy-import to keep `--help` fast
 
     from smai_cli.dashboard import build_app  # noqa: PLC0415
@@ -955,6 +970,286 @@ def smai_serve(
                 "(read-only, no authentication). Press Ctrl+C to stop."
             )
             await server.serve()
+
+    asyncio.run(_run())
+
+
+# === Verb 12b: ui (API + SPA host) ===========================================
+#
+# Per Task 4.L1 / `12-ui-process.md`: the API + SPA process. Auto-detects
+# `--with-worker` from the resolved plugin shape (`12` §4.3 / §9.3),
+# runs strict pre-flights when the worker is on (mirrors `smai start`),
+# soft pre-flights otherwise. Bearer-token auto-generation is delegated
+# to :func:`smai_api.auth._read_or_create_token_file` (the verb only
+# logs the path — never the token).
+
+
+def _infer_with_worker(runtime_config: Any) -> bool:
+    """Apply the ``--with-worker=auto`` rule per `12` §4.3 / §9.3.
+
+    Returns ``True`` only for the canonical Case-A laptop shape (sqlite
+    metadata store + localfs artifact store). Any drift toward
+    production plugins (postgres, s3, modal, runpod) flips to
+    ``False``; mixed configs are conservative-no-worker per the spec
+    table. The user opts back in explicitly with ``--with-worker``.
+    """
+    selection = runtime_config.plugins
+    return selection.metadata_store == "sqlite" and selection.artifact_store == "localfs"
+
+
+def _soft_validate_plugin_completeness(runtime_config: Any) -> None:
+    """`--no-worker` mode: warn about missing plugin slots, don't refuse.
+
+    Per `12` §4.4: a misconfigured remote backend is still useful
+    enough that refusing-to-boot is more hostile than per-endpoint 503
+    on plugin failure. We emit a single stderr warning per missing
+    slot and proceed.
+    """
+    selection = runtime_config.plugins
+    missing: list[str] = []
+    for field_name in ("llm_provider", "metadata_store", "artifact_store", "compute"):
+        if not getattr(selection, field_name, None):
+            missing.append(f"plugins.{field_name}")
+    if missing:
+        typer.echo(
+            "smai ui: warning — incomplete plugin selection in --no-worker "
+            f"mode (missing: {', '.join(missing)}). Endpoints reading these "
+            "slots will return 503; the API still boots so existing data is "
+            "readable. Set the slots in your smai.yaml or via SMAI_* env "
+            "vars to enable full-write workflows.",
+            err=True,
+        )
+
+
+@app.command("ui")
+def smai_ui(  # noqa: PLR0913
+    config: Annotated[
+        Path | None,
+        typer.Option("--config", "-c", help="Path to a smai.yaml; overrides search order."),
+    ] = None,
+    host: Annotated[
+        str | None,
+        typer.Option(
+            "--host",
+            help=(
+                "Bind address. Defaults to api.host (or 127.0.0.1 if unset) "
+                "per the loopback-by-default contract in `12` §4.2 / `11` §7. "
+                "Broaden explicitly only if the deployment intends remote "
+                "access."
+            ),
+        ),
+    ] = None,
+    port: Annotated[
+        int | None,
+        typer.Option(
+            "--port",
+            help="TCP port to listen on. Defaults to api.port (8000).",
+            min=1,
+            max=65535,
+        ),
+    ] = None,
+    with_worker: Annotated[
+        bool | None,
+        typer.Option(
+            "--with-worker/--no-worker",
+            help=(
+                "Whether to start an in-process worker `asyncio.Task` "
+                "alongside the API. Default: auto-detect from plugin "
+                "shape per `12` §4.3 — sqlite+localfs → on; anything "
+                "else → off. The inferred decision is logged loudly on "
+                "startup so the user can override on the next launch."
+            ),
+        ),
+    ] = None,
+    worker_id: Annotated[
+        str | None,
+        typer.Option(
+            "--worker-id",
+            help=(
+                "When --with-worker, pins the worker's lease identity "
+                "(same resolution as `smai start --worker-id`)."
+            ),
+        ),
+    ] = None,
+    reload: Annotated[
+        bool,
+        typer.Option(
+            "--reload",
+            help=(
+                "Dev-only: enable uvicorn auto-reload on Python source "
+                "changes. Does NOT hot-reload smai.yaml (per `09` §3 — "
+                "config changes need a restart). Use only with a "
+                "dev-shaped config."
+            ),
+        ),
+    ] = False,
+) -> None:
+    """Boot the API + SPA process (`12-ui-process.md`).
+
+    Composes the existing primitives — :meth:`Runtime.start_in_band` +
+    :func:`smai_api.make_api_app` + uvicorn — into a single verb. The
+    resolved ``--with-worker`` decision is logged loudly on startup so
+    the auto-detect rule (`12` §4.3) is never hidden.
+
+    Pre-flight regime per `12` §4.4:
+
+    * ``--with-worker`` mode → strict (mirrors ``smai start``):
+      :func:`_validate_plugin_completeness` + :func:`_check_schema_at_head`,
+      plus :func:`_enforce_lease_capability` only when ``worker_count > 1``.
+    * ``--no-worker`` mode → soft: warn on missing plugin slots; skip
+      the schema-at-head check (remote workers should have migrated);
+      skip lease-capability (no leasing in this process).
+
+    Bearer auth is opt-in per ``api.auth.enabled``; the token file at
+    ``api.auth.token_path`` is auto-generated on first launch (mode
+    ``0o600``, :func:`secrets.token_urlsafe(32)`) and preserved across
+    restarts (per `11` §7.3).
+
+    The verb stays scoped to uvicorn — Vite for SPA dev runs in a
+    separate terminal per `12` §8 / `13` §12.1 (the canonical two-
+    terminal dev workflow). ``--reload`` toggles uvicorn auto-reload
+    on Python sources only.
+    """
+    # Layered config: dev defaults so an empty config still boots
+    # usefully on a laptop (per `12` §4.2). Apply dev filesystem paths
+    # before layering so the SQLite URI / artifact root resolve
+    # consistently with `smai dev`.
+    overrides: dict[str, Any] = _apply_dev_filesystem_defaults({})
+    # Thread the per-flag overrides through the same layering pipeline so
+    # CLI flags win over file/env per the standard precedence (`09` §2).
+    api_flag_overrides: dict[str, Any] = {}
+    if host is not None:
+        api_flag_overrides["host"] = host
+    if port is not None:
+        api_flag_overrides["port"] = port
+    if reload:
+        api_flag_overrides["reload"] = True
+    if with_worker is not None:
+        api_flag_overrides["with_worker"] = bool(with_worker)
+    if api_flag_overrides:
+        overrides["api"] = api_flag_overrides
+    try:
+        runtime_config = load_runtime_config(
+            config_path=config,
+            defaults=dev_defaults(),
+            flag_overrides=overrides,
+        )
+    except (ConfigFileError, ConfigValidationError) as exc:
+        _err(str(exc))
+
+    api_cfg = runtime_config.api
+    # Resolve `with_worker` per `12` §4.3 / §9.3. Auto-detect runs only
+    # when neither the flag nor the layered ``api.with_worker`` field
+    # set an explicit boolean.
+    explicit_request: bool | None = None
+    if with_worker is not None:
+        explicit_request = bool(with_worker)
+    elif isinstance(api_cfg.with_worker, bool):
+        explicit_request = api_cfg.with_worker
+    if explicit_request is None:
+        resolved_with_worker = _infer_with_worker(runtime_config)
+        worker_decision_source = "auto-detect"
+    else:
+        resolved_with_worker = explicit_request
+        worker_decision_source = "explicit"
+
+    # Pre-flights per `12` §4.4. Strict in --with-worker; soft otherwise.
+    if resolved_with_worker:
+        _validate_plugin_completeness(runtime_config)
+        asyncio.run(_check_schema_at_head(runtime_config))
+    else:
+        _soft_validate_plugin_completeness(runtime_config)
+
+    resolved_worker_id = _resolve_worker_id(override=worker_id) if resolved_with_worker else None
+    workspace_root, _artifacts, _sqlite = _dev_artifact_paths()
+
+    # Loud startup-log line per `12` §4.3 — the inferred decision must
+    # never be hidden.
+    auto_explanation = ""
+    if worker_decision_source == "auto-detect":
+        plugin_shape = (
+            f"{runtime_config.plugins.metadata_store} + {runtime_config.plugins.artifact_store}"
+        )
+        auto_explanation = f" (auto-detected from plugin shape: {plugin_shape})"
+    if resolved_with_worker:
+        typer.echo(
+            f"smai ui: starting in-process worker{auto_explanation}. Pass --no-worker to disable.",
+            err=True,
+        )
+    else:
+        typer.echo(
+            f"smai ui: NOT starting in-process worker{auto_explanation}. "
+            "Pass --with-worker to enable. Worker(s) should run "
+            "separately as `smai start` against the same backend.",
+            err=True,
+        )
+
+    if api_cfg.auth.enabled:
+        typer.echo(
+            f"smai ui: bearer auth enabled; token file at {api_cfg.auth.token_path} "
+            "(auto-generated on first launch, mode 0o600, preserved across "
+            "restarts).",
+            err=True,
+        )
+
+    import uvicorn  # noqa: PLC0415 — lazy-import to keep `--help` fast
+    from smai_api import AuthConfig, make_api_app  # noqa: PLC0415
+
+    auth_config: AuthConfig | None = None
+    if api_cfg.auth.enabled:
+        auth_config = AuthConfig(
+            enabled=True,
+            token_path=api_cfg.auth.token_path,
+        )
+
+    async def _run() -> None:
+        async with Runtime.start_in_band(
+            runtime_config,
+            workspace_root=workspace_root,
+            run_worker=resolved_with_worker,
+            worker_id=resolved_worker_id,
+        ) as runtime:
+            # Multi-worker `--with-worker` against postgres is the §12 OQ7
+            # warn-don't-block case: Postgres is lease-capable so the
+            # check passes, but co-locating an API server with a worker
+            # couples their failure modes. The strict
+            # _enforce_lease_capability call below covers the worker_count > 1
+            # branch; the warn-don't-block guidance is documented in the
+            # verb's docstring + OPERATIONS.md.
+            if resolved_with_worker:
+                _enforce_lease_capability(runtime)
+            fastapi_app = make_api_app(runtime, auth_config=auth_config)
+            uvicorn_config = uvicorn.Config(
+                fastapi_app,
+                host=api_cfg.host,
+                port=api_cfg.port,
+                log_level="info",
+                access_log=True,
+                reload=api_cfg.reload,
+            )
+            server = uvicorn.Server(uvicorn_config)
+
+            stop_event = asyncio.Event()
+
+            def _signal_handler(*_: Any) -> None:
+                # Trip uvicorn's own shutdown switch first so its
+                # `serve()` loop returns cleanly; then unblock the
+                # outer wait. Mirrors `smai dev`'s drain pattern.
+                server.should_exit = True
+                stop_event.set()
+
+            loop = asyncio.get_running_loop()
+            for sig in (signal.SIGINT, signal.SIGTERM):
+                loop.add_signal_handler(sig, _signal_handler)
+
+            typer.echo(
+                f"smai ui: listening on http://{api_cfg.host}:{api_cfg.port}/. "
+                "Press Ctrl+C to stop."
+            )
+            await server.serve()
+            # Once uvicorn returns the worker drain happens automatically
+            # via the ``async with Runtime.start_in_band`` exit.
+            stop_event.set()
 
     asyncio.run(_run())
 

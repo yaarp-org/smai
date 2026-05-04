@@ -102,6 +102,7 @@
         "packages/smai-agents/src",
         "packages/smai-runtime/src",
         "packages/smai-events/src",
+        "packages/smai-api/src",
         "packages/smai-api-spec/src",
         "plugins/smai-llm-bedrock/src",
         "plugins/smai-llm-anthropic/src",

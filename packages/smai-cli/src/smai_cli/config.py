@@ -359,6 +359,10 @@ def load_runtime_config(
     engine_block: dict[str, Any] = layered.get("engine") or {}
     plugins_block: dict[str, Any] = layered.get("plugins") or {}
     pipelines_block: list[Any] = layered.get("pipelines") or []
+    # The ``api`` block is optional (Task 4.L1 / `12-ui-process.md` §9.1).
+    # ``smai dev`` / ``smai start`` ignore it; ``smai ui`` reads it.
+    # Empty dict here lets :class:`ApiConfig`'s field defaults take over.
+    api_block: dict[str, Any] = layered.get("api") or {}
 
     try:
         return RuntimeConfig.model_validate(
@@ -366,6 +370,7 @@ def load_runtime_config(
                 "engine": engine_block,
                 "plugins": plugins_block,
                 "pipelines": pipelines_block,
+                "api": api_block,
             }
         )
     except ValidationError as exc:

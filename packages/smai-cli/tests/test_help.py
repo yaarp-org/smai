@@ -10,7 +10,10 @@ per DEC-032 OQ1's "explicit `smai ingest` only" rule. Task 3.H1
 landed the read-only dashboard verb ``serve`` (`09` §5.4); Task
 3.H2 landed ``migrate`` (`09` §1) for production-deployment
 schema management. Task 3.G3 lands ``start`` (`09` §6 — production
-worker process) and ``verify`` (sibling pre-flight verb).
+worker process) and ``verify`` (sibling pre-flight verb). Task
+4.L1 lands ``ui`` (`12-ui-process.md` — the API + SPA host that
+supersedes ``serve``; ``serve`` remains as a deprecated alias for
+v2 with source-tree removal scheduled for v2.1).
 """
 
 from __future__ import annotations
@@ -42,6 +45,8 @@ EXPECTED_VERBS: frozenset[str] = frozenset(
         # + plugin-ping pre-flight)
         "start",
         "verify",
+        # Phase-4 W3 / Task 4.L1 (`12-ui-process.md` — API + SPA host)
+        "ui",
     }
 )
 
