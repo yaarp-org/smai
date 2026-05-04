@@ -178,9 +178,11 @@ async def phase1_step(  # noqa: PLR0913
         rolled = await reset_orphan(
             spec=spec,
             metadata_store=metadata_store,
+            config=config,
             edge_from_state=prior_state,
             entity_id=entity_id,
             current_version=entity_version,
+            in_progress_state=entity_state,
         )
         return Phase1Outcome(
             status="orphan_reset" if rolled is not None else "conflict",
@@ -230,6 +232,8 @@ async def phase1_step(  # noqa: PLR0913
             entity_version,
             fired.target_state,
             fields={action.handle_field: None},
+            event_channel=config.event_channel,
+            from_state=entity_state,
         )
     except ConflictError:
         return Phase1Outcome(status="conflict", fired_edge=fired, job_status=job_status)

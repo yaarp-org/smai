@@ -24,6 +24,7 @@ from __future__ import annotations
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+from smai_events import EventChannel, NullEventChannel
 
 from smai_orchestrator.engine.clock import (
     TimeProvider,
@@ -172,6 +173,33 @@ class EngineConfig(BaseModel):
     ``False``."""
 
     # ---- Retention sweep (Task 3.H2 / DEC-033 #1, #2) ---------------------
+
+    # ---- Live updates (Task 4.K2 / `12-ui-process.md` §6.4) ---------------
+
+    event_channel: EventChannel = Field(default_factory=NullEventChannel, exclude=True)
+    """Where the engine fires state-machine transitions + worker
+    heartbeats (`12-ui-process.md` §6.4 RESOLVED 2026-05-03 —
+    engine-wraps; ``smai-events`` sibling package OQ1 RESOLVED).
+
+    ``exclude=True``: this is a runtime-injected callable, not config
+    data — it must not appear in ``model_dump`` output (the API's
+    ``GET /system/config`` route serializes ``RuntimeConfig`` and would
+    otherwise raise on the un-serializable ``EventChannel`` type).
+
+    Default :class:`NullEventChannel` (no-op) keeps existing engine
+    tests + headless deployments behavior-clean. The in-band Runtime
+    (``smai dev`` / ``smai ui --with-worker``) sets this to an
+    :class:`InProcessEventChannel` over a process-local
+    :class:`EventBroker` so the same-process API can subscribe;
+    Task 4.K3 ships ``PgNotifyEventChannel`` against the same Protocol
+    for the cross-process case.
+
+    Carry-forward to Task 4.K3: the Postgres variant must run
+    ``pg_notify`` inside the active asyncpg transaction (per `12` §6.5)
+    so a ROLLBACK suppresses the wire signal. The in-process channel
+    here has no such coupling — by the time
+    ``transition_state`` returns, the row has already committed.
+    """
 
     retention_policies: dict[str, int] = Field(default_factory=dict)
     """Per-table retention windows in days for ``smai migrate --prune``

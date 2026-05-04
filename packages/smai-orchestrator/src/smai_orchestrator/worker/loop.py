@@ -7,6 +7,15 @@ pipeline-spec lifecycle. Per `05` §3.5 / §6, C2 ships single-worker
 default (``EngineConfig.worker_count=1``); multi-worker leasing is
 Task 3.G1.
 
+Per Task 4.K2 (`12-ui-process.md` §6.4): each loop also fires
+:meth:`EventChannel.fire_heartbeat` on
+:attr:`EngineConfig.event_channel` after every cycle — feeding the SSE
+``worker_heartbeat`` event the SPA uses for its "last cycle at"
+indicator. The heartbeat fires AFTER any ``on_cycle_complete``
+callback so callers that want to observe stats before the wire signal
+goes out can do so. Failures inside ``fire_heartbeat`` are logged-and-
+swallowed so a broken event channel cannot kill the loop.
+
 The poll cycle has the v1 three-phase shape:
 
 * **Phase 1 — complete.** For every entity in an in-progress state with
@@ -454,6 +463,8 @@ async def run_worker_loop(  # noqa: PLR0913
     cycle generate a stable per-process id.
     """
     resolved_worker_id = worker_id if worker_id is not None else f"worker-{uuid4().hex[:8]}"
+    cycle_id = 0
+    cycles_processed = 0
     while not shutdown_event.is_set():
         cycle_start = config.time_provider()
         stats = await run_worker_cycle(
@@ -466,8 +477,21 @@ async def run_worker_loop(  # noqa: PLR0913
             cost_handler=cost_handler,
             worker_id=resolved_worker_id,
         )
+        cycle_id += 1
+        cycles_processed += 1
         if on_cycle_complete is not None:
             await on_cycle_complete(stats)
+        # Per Task 4.K2 (`12` §6.4): fire the worker_heartbeat SSE
+        # event after each cycle so the SPA's "last cycle at" indicator
+        # advances. Default :class:`NullEventChannel` makes this a no-op
+        # for deployments without a paired API consumer.
+        try:
+            await config.event_channel.fire_heartbeat(
+                cycle_id=cycle_id,
+                cycles_processed=cycles_processed,
+            )
+        except Exception:  # noqa: BLE001 — event channel must not break the loop
+            _log.exception("event_channel.fire_heartbeat raised on cycle %d; ignoring", cycle_id)
 
         elapsed = config.time_provider() - cycle_start
         sleep_for = max(0.0, config.poll_interval_seconds - elapsed)

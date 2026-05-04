@@ -53,6 +53,7 @@ from smai_core import (
     load_default_registries,
 )
 from smai_core.plugins import ArtifactStore, CursorPage, MetadataStore
+from smai_events import EventBroker, InProcessEventChannel
 from smai_orchestrator import (
     CG_EXECUTION_SPEC_NAME,
     DEFAULT_TASK_ROLES,
@@ -1018,6 +1019,13 @@ class _RuntimeState:
     config: RuntimeConfig
     workspace_root: Path
     worker_id: str
+    event_broker: EventBroker = field(default_factory=EventBroker)
+    """Process-local pub/sub for the live-updates channel (Task 4.K2 /
+    `12-ui-process.md` §6.2). Always constructed; the in-band Runtime
+    threads an :class:`InProcessEventChannel` over it into
+    :attr:`EngineConfig.event_channel` so engine fires reach this
+    broker, and exposes the broker via :attr:`Runtime.event_broker` so
+    the in-process API (``smai_api.make_api_app``) can subscribe."""
     shutdown_event: asyncio.Event = field(default_factory=asyncio.Event)
     worker_task: asyncio.Task[None] | None = None
     cycle_stats: list[WorkerCycleStats] = field(default_factory=list[WorkerCycleStats])
@@ -1253,12 +1261,25 @@ class Runtime:
             # Paper ingestion is independent of the CG-spec lifecycle —
             # it produces ``TechniqueRef``s consumed by future proposal-
             # pipeline planner sessions, not CGs.
+            # Per Task 4.K2 (`12` §6.4): wire the in-process event
+            # channel into the engine config so every transition / cycle
+            # reaches the broker. We always construct + thread the
+            # channel — the API subscribes via :attr:`Runtime.event_broker`
+            # when an SSE consumer is attached; otherwise events
+            # publish into a buffer no one reads (cheap, bounded by
+            # the ring-buffer size).
+            event_broker = EventBroker()
+            engine_config_with_channel = config.engine.model_copy(
+                update={"event_channel": InProcessEventChannel(event_broker)}
+            )
+            config_with_channel = config.model_copy(update={"engine": engine_config_with_channel})
             state = _RuntimeState(
                 plugins=plugins,
                 specs=[proposal_spec, paper_spec, entry_spec, cg_spec, run_spec],
-                config=config,
+                config=config_with_channel,
                 workspace_root=workspace_root,
                 worker_id=resolved_worker_id,
+                event_broker=event_broker,
             )
             runtime = cls(state)
 
@@ -1316,6 +1337,17 @@ class Runtime:
     @property
     def plugins(self) -> InstantiatedPlugins:
         return self._state.plugins
+
+    @property
+    def event_broker(self) -> EventBroker:
+        """The in-process :class:`EventBroker` for live updates (Task 4.K2).
+
+        :func:`smai_api.make_api_app` consumes this to register the SSE
+        ``/api/v1/events`` route. The broker is always constructed by
+        :meth:`start_in_band`; if no API consumer is attached, fires
+        publish into a bounded ring buffer no one reads (cheap).
+        """
+        return self._state.event_broker
 
     @property
     def worker_id(self) -> str:

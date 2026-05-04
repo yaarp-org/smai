@@ -23,6 +23,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from smai_cli.runtime import Runtime
+from smai_events import EventBroker
 
 from smai_api.auth import (
     BearerTokenMiddleware,
@@ -32,6 +33,7 @@ from smai_api.auth import (
 from smai_api.errors import register_exception_handlers
 from smai_api.routers import (
     comparison_groups,
+    events,
     experiments,
     papers,
     proposals,
@@ -62,6 +64,7 @@ def make_api_app(
     runtime: Runtime,
     *,
     auth_config: AuthConfig | None = None,
+    event_broker: EventBroker | None = None,
 ) -> FastAPI:
     """Construct a configured :class:`FastAPI` app bound to ``runtime``.
 
@@ -81,6 +84,15 @@ def make_api_app(
     Auto-generated OpenAPI docs (``/docs``, ``/redoc``, ``/openapi.json``)
     are disabled per ``11`` §13 OQ10's lean-toward-disable guidance —
     the contract is the spec package + the design doc, not Swagger UI.
+
+    ``event_broker`` (Task 4.K2 — `12-ui-process.md` §6.2): the
+    in-process :class:`EventBroker` backing the SSE
+    ``GET /api/v1/events`` route. When ``None``, falls back to
+    ``runtime.event_broker`` (the in-band Runtime always constructs
+    one). When neither is available, the events route still mounts but
+    returns 503 + ``code: "EVENTS_DISABLED"`` per the route's contract
+    — useful for hypothetical Runtime variants that don't carry a
+    broker.
     """
     config = auth_config or AuthConfig()
 
@@ -96,6 +108,12 @@ def make_api_app(
         openapi_url=None,
     )
     app.state.runtime = runtime
+    # Resolve the event broker per docstring: explicit override → the
+    # runtime's broker → None (events route returns 503).
+    resolved_broker: EventBroker | None = event_broker
+    if resolved_broker is None:
+        resolved_broker = getattr(runtime, "event_broker", None)
+    app.state.event_broker = resolved_broker
 
     # Middleware ordering: Starlette mounts middleware in *reverse*
     # registration order (the last `add_middleware` call wraps the
@@ -120,6 +138,7 @@ def make_api_app(
     app.include_router(comparison_groups.router)
     app.include_router(runs.router)
     app.include_router(system.router)
+    app.include_router(events.router)
 
     return app
 

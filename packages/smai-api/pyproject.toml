@@ -9,6 +9,7 @@ dependencies = [
     "smai-api-spec",
     "smai-cli",
     "smai-core",
+    "smai-events",
     "smai-orchestrator",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
@@ -37,6 +38,7 @@ smai-api-spec = { workspace = true }
 smai-api-conformance = { workspace = true }
 smai-cli = { workspace = true }
 smai-core = { workspace = true }
+smai-events = { workspace = true }
 smai-orchestrator = { workspace = true }
 smai-store-sqlite = { workspace = true }
 smai-artifacts-localfs = { workspace = true }

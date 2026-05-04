@@ -20,6 +20,7 @@ members = [
     "smai-compute-modal",
     "smai-compute-runpod",
     "smai-core",
+    "smai-events",
     "smai-llm-anthropic",
     "smai-llm-bedrock",
     "smai-llm-openai",
@@ -2573,6 +2574,7 @@ dependencies = [
     { name = "smai-api-spec" },
     { name = "smai-cli" },
     { name = "smai-core" },
+    { name = "smai-events" },
     { name = "smai-orchestrator" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -2594,6 +2596,7 @@ requires-dist = [
     { name = "smai-api-spec", editable = "packages/smai-api-spec" },
     { name = "smai-cli", editable = "packages/smai-cli" },
     { name = "smai-core", editable = "packages/smai-core" },
+    { name = "smai-events", editable = "packages/smai-events" },
     { name = "smai-orchestrator", editable = "packages/smai-orchestrator" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },
 ]
@@ -2826,6 +2829,33 @@ requires-dist = [
 provides-extras = ["conformance"]
 
 [[package]]
+name = "smai-events"
+version = "0.1.0"
+source = { editable = "packages/smai-events" }
+dependencies = [
+    { name = "anyio" },
+    { name = "smai-api-spec" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "anyio", specifier = ">=4" },
+    { name = "smai-api-spec", editable = "packages/smai-api-spec" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=8" },
+    { name = "pytest-asyncio", specifier = ">=0.23" },
+]
+
+[[package]]
 name = "smai-llm-anthropic"
 version = "0.1.0"
 source = { editable = "plugins/smai-llm-anthropic" }
@@ -2891,6 +2921,7 @@ dependencies = [
     { name = "arxiv" },
     { name = "pydantic" },
     { name = "smai-core" },
+    { name = "smai-events" },
     { name = "sqlalchemy" },
 ]
 
@@ -2900,6 +2931,7 @@ requires-dist = [
     { name = "arxiv", specifier = ">=2.1" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "smai-core", editable = "packages/smai-core" },
+    { name = "smai-events", editable = "packages/smai-events" },
     { name = "sqlalchemy", specifier = ">=2.0" },
 ]
 

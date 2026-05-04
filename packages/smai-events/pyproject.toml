@@ -1,0 +1,27 @@
+[project]
+name = "smai-events"
+version = "0.1.0"
+description = "EventChannel Protocol + EventBroker for SMAI v2 API live updates. Per 12-ui-process.md §6 + DEC-037."
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.11"
+dependencies = [
+    "smai-api-spec",
+    "anyio>=4",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/smai_events"]
+
+[tool.uv.sources]
+smai-api-spec = { workspace = true }

@@ -5,6 +5,13 @@ description = "Engine, pipeline-spec format, worker loop, checkpointer; SMAI Pip
 requires-python = ">=3.11"
 dependencies = [
     "smai-core",
+    # Per Task 4.K2: the engine wraps every successful state-machine
+    # transition with a fire-on-transition hook against the
+    # ``EventChannel`` Protocol from ``smai-events``. Default is the
+    # no-op ``NullEventChannel`` so deployments without a paired API
+    # consumer (``smai start`` standalone, headless ``smai dev``) see
+    # zero behavior change.
+    "smai-events",
     "pydantic>=2.0",
     # Per Task 3.E2 — the paper-ingestion pipeline-spec's ``fetching``
     # state's on-entry handler uses the ``arxiv`` PyPI package to pull
@@ -25,6 +32,7 @@ dependencies = [
 
 [tool.uv.sources]
 smai-core = { workspace = true }
+smai-events = { workspace = true }
 
 [build-system]
 requires = ["hatchling"]

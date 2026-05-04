@@ -122,6 +122,8 @@ async def run_dispatch(  # noqa: PLR0913
             expected_version,
             target_state.name,
             fields={},
+            event_channel=config.event_channel,
+            from_state=edge.from_state,
         )
     except ConflictError:
         return DriveOutcome(status="conflict", fired_edge=edge)
@@ -169,6 +171,7 @@ async def run_dispatch(  # noqa: PLR0913
         rollback_status = await _forward_rollback(
             spec=spec,
             metadata_store=metadata_store,
+            config=config,
             edge=edge,
             entity_id=entity_id,
             current_version=post_transition_record.version,
@@ -199,6 +202,7 @@ async def run_dispatch(  # noqa: PLR0913
         rollback_status = await _forward_rollback(
             spec=spec,
             metadata_store=metadata_store,
+            config=config,
             edge=edge,
             entity_id=entity_id,
             current_version=post_transition_record.version,
@@ -252,6 +256,7 @@ async def _forward_rollback(
     *,
     spec: EngineSpec,
     metadata_store: MetadataStore,
+    config: EngineConfig,
     edge: EdgeDef,
     entity_id: str,
     current_version: int,
@@ -275,19 +280,23 @@ async def _forward_rollback(
             current_version,
             edge.from_state,
             fields={},
+            event_channel=config.event_channel,
+            from_state=edge.target_state,
         )
     except ConflictError:
         return "conflict"
     return "dispatch_failed_rolled_back"
 
 
-async def reset_orphan(
+async def reset_orphan(  # noqa: PLR0913
     *,
     spec: EngineSpec,
     metadata_store: MetadataStore,
+    config: EngineConfig,
     edge_from_state: str,
     entity_id: str,
     current_version: int,
+    in_progress_state: str,
 ) -> StateDrivenRecord | None:
     """Reset an orphaned in-progress entity to ``edge_from_state``.
 
@@ -297,6 +306,10 @@ async def reset_orphan(
     write-first ordering). Returns the post-rollback record on success
     or ``None`` on CAS conflict (another worker already reset it; this
     worker proceeds).
+
+    ``in_progress_state`` is the state the orphan currently sits in;
+    threaded through so the fire-on-transition hook (per Task 4.K2 /
+    `12` §6.4) emits ``state_change`` with the correct ``from``.
     """
     try:
         return await transition_state(
@@ -306,6 +319,8 @@ async def reset_orphan(
             current_version,
             edge_from_state,
             fields={},
+            event_channel=config.event_channel,
+            from_state=in_progress_state,
         )
     except ConflictError:
         return None
