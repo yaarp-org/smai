@@ -38,3 +38,8 @@ apps/ui/.tanstack/
 apps/ui/src/routeTree.gen.ts
 apps/ui/*.tsbuildinfo
 apps/ui/**/*.tsbuildinfo
+
+# smai-ui staged SPA bundle (build artifact — populated by
+# packages/smai-ui/build_hook.py at install time per Task 4.N1).
+packages/smai-ui/src/smai_ui/static_spa/**
+!packages/smai-ui/src/smai_ui/static_spa/.gitkeep

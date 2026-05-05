@@ -22,11 +22,25 @@ dependencies = [
     "asyncpg>=0.28",
 ]
 
+[project.optional-dependencies]
+# `smai-api[ui]` adds the SPA bundle wrapper so `make_api_app(...)`
+# mounts the React SPA at `/`. Headless API-only deployments install
+# `smai-api` without the extra; `_maybe_mount_spa` detects the missing
+# package and degrades gracefully. Per Task 4.N1 + `12-ui-process.md`
+# §8.2 / `13-frontend.md` §12.3.
+ui = [
+    "smai-ui",
+]
+
 [dependency-groups]
 dev = [
     "smai-api-conformance",
     "smai-store-sqlite",
     "smai-artifacts-localfs",
+    # smai-ui in dev so the in-tree SPA-mount tests
+    # (test_4_n1_spa_mount.py) can exercise the module-guard branch
+    # without a separate install step.
+    "smai-ui",
     "httpx>=0.27",
     "pytest>=8",
     "pytest-asyncio>=0.23",
@@ -48,3 +62,4 @@ smai-events = { workspace = true }
 smai-orchestrator = { workspace = true }
 smai-store-sqlite = { workspace = true }
 smai-artifacts-localfs = { workspace = true }
+smai-ui = { workspace = true }

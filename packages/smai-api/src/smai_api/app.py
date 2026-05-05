@@ -37,6 +37,7 @@ from smai_cli.runtime import Runtime
 from smai_events import EventBroker
 
 from smai_api._pg_listener import pg_listener_task, sqlalchemy_url_to_asyncpg_dsn
+from smai_api._spa_mount import maybe_mount_spa
 from smai_api.auth import (
     BearerTokenMiddleware,
     HostValidationMiddleware,
@@ -190,6 +191,18 @@ def make_api_app(
     app.include_router(runs.router)
     app.include_router(system.router)
     app.include_router(events.router)
+
+    # Task 4.N1: mount the SPA bundle from `smai-ui` at `/` when the
+    # package is installed and its bundle is staged. The mount adds a
+    # GET / handler (with optional bearer-token bootstrap injection per
+    # `13-frontend.md` §12.4), a `/_spa_static` static-files mount for
+    # bundle assets, and a 404 fallback that re-serves index.html for
+    # SPA deep links while leaving `/api/*` 404 wire format unchanged.
+    # When `smai-ui` is not installed (the API-only deployment shape),
+    # the mount is skipped silently and the JSON API still serves on
+    # its own. Routes register AFTER the API routers so the catch-all
+    # SPA handler does not shadow `/api/*`.
+    maybe_mount_spa(app, auth_config=config)
 
     return app
 

@@ -10,6 +10,7 @@ members = [
     "packages/smai-api-conformance",
     "packages/smai-events",
     "packages/smai-api",
+    "packages/smai-ui",
     "plugins/smai-llm-bedrock",
     "plugins/smai-llm-anthropic",
     "plugins/smai-llm-openai",

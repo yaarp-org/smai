@@ -148,12 +148,20 @@
         "packages/smai-orchestrator/src",
         "packages/smai-agents/src",
         "packages/smai-runtime/src",
+        "packages/smai-ui/src",
         "plugins/smai-store-sqlite/src",
         "plugins/smai-artifacts-localfs/src",
         "plugins/smai-llm-bedrock/src",
         "plugins/smai-llm-anthropic/src",
         "plugins/smai-llm-openai/src",
         "plugins/smai-compute-localgpu/src"
+      ]
+    },
+    {
+      "root": "packages/smai-ui",
+      "reportMissingImports": "error",
+      "extraPaths": [
+        "packages/smai-ui/src"
       ]
     }
   ],
@@ -167,6 +175,7 @@
     "packages/smai-api-conformance/src",
     "packages/smai-events/src",
     "packages/smai-api/src",
+    "packages/smai-ui/src",
     "plugins/smai-llm-bedrock/src",
     "plugins/smai-llm-anthropic/src",
     "plugins/smai-llm-openai/src",
