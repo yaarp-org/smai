@@ -170,6 +170,28 @@ plugin-internal (per `07-plugin-interfaces.md` §5.7 — hand-rolled-vs-
 SQLAlchemy resolution). To override, fork the plugin or open a PR
 adding a config field.
 
+### 4.1 LISTEN connection budget for `smai ui --no-worker`
+
+Each `smai ui --no-worker` process that targets a Postgres
+`MetadataStore` holds **one dedicated asyncpg connection** for the
+`LISTEN smai_events` task (per Task 4.K3 / `12-ui-process.md` §6.3).
+This connection sits outside the SQLAlchemy pool because `LISTEN`
+requires a connection to be parked on the channel, which the pool
+cannot satisfy.
+
+When sizing Postgres `max_connections`, budget:
+
+- `worker_count` connections for each `smai start` worker's
+  SQLAlchemy pool (per §4 above), plus headroom.
+- `+1` connection per `smai ui --no-worker` process for its dedicated
+  `LISTEN` connection, plus that process's own SQLAlchemy pool for
+  serving `/api/v1/...` reads.
+
+Multiple `smai ui` processes can run against the same Postgres; each
+holds its own `LISTEN` connection and Postgres fans out the `NOTIFY`
+payload to all of them, so the budget scales linearly with the number
+of API processes.
+
 ## 5. Log handling
 
 `smai start` uses Python's standard `logging` module — no structured
@@ -229,21 +251,25 @@ production shape (DEC-027) is:
 
 Notes specific to the API+SPA process:
 
-- `smai ui --no-worker` runs soft pre-flights — it logs warnings on
-  missing plugin slots but boots anyway, so existing data stays
-  readable through the API even if a slot is misconfigured. Workers
-  run their strict pre-flights independently.
-- Each `smai ui` process holds its own asyncpg `LISTEN` connection
-  separate from the SQLAlchemy pool — budget +1 connection per
-  process when sizing `pool_size` per §4.
-- `api.host` defaults to loopback (`127.0.0.1`); production deployments
-  put a reverse proxy on the public interface and let the API stay
-  bound to loopback or the proxy's internal network.
-- Bearer auth (`api.auth.enabled: true` in `smai.yaml`) writes a
-  `0o600` token file at `api.auth.token_path` on first launch. Each
-  `smai ui` process generates its own token; if you run multiple, give
-  each one a distinct `token_path` and share the relevant one with
-  the operator.
+- **Install extra.** Production hosts that serve the SPA install
+  `pip install smai-api[ui]`; the `[ui]` extra pulls in `smai-ui`,
+  whose wheel ships the built React bundle as package data. Headless
+  deployments (API only, no SPA at `/`) install bare `smai-api` and
+  the SPA mount degrades cleanly. Per Task 4.N1 +
+  `12-ui-process.md` §8.2.
+- **Pre-flights.** `smai ui --no-worker` runs soft pre-flights:
+  it logs warnings on missing plugin slots but boots anyway, so
+  existing data stays readable through the API even if a slot is
+  misconfigured. Workers run their strict pre-flights independently.
+- **`LISTEN` connection.** Each `smai ui` process holds its own
+  asyncpg `LISTEN` connection separate from the SQLAlchemy pool. See
+  §4.1 above for the connection-budget calculus.
+- **Bind address.** `api.host` defaults to loopback (`127.0.0.1`).
+  Production deployments put a reverse proxy on the public interface
+  and let the API stay bound to loopback or the proxy's internal
+  network. The `Host:` header allowlist (`11-api.md` §7.1) is enforced
+  unconditionally; broaden the allowlist when the proxy fronts the
+  API on a public hostname.
 
 A minimal systemd unit for the API process:
 
@@ -271,6 +297,71 @@ WantedBy=multi-user.target
 
 Same restart / log-handling guidance as `smai start` applies. SSE
 clients reconnect automatically on restart per `11-api.md` §8.3.
+
+### 6.1 Optional bearer-token auth
+
+The default API posture is no token: loopback bind plus `Host:` header
+allowlist (`11-api.md` §7.1). For deployments that want layered auth
+(particularly Case B remote-data, where the local API process holds
+credentials for remote backends), bearer mode is opt-in via
+`smai.yaml`:
+
+```yaml
+api:
+  auth:
+    enabled: true                              # default false
+    token_path: ~/.smai/api-token              # 0600, auto-generated
+```
+
+Mechanics:
+
+- **Token file.** On first `smai ui` launch with `auth.enabled: true`,
+  the process generates a fresh token via `secrets.token_urlsafe(32)`
+  and writes it to `token_path` mode `0o600`. Existing tokens are
+  preserved across restarts so browser tabs keep working.
+- **Multiple processes.** Each `smai ui` process generates its own
+  token. If you run more than one, give each a distinct `token_path`
+  and surface the right one to each operator group.
+- **Programmatic clients.** CI scripts and `curl` invocations read the
+  token file directly and set `Authorization: Bearer <token>`,
+  symmetrical to how `gh` reads `~/.config/gh/hosts.yml`.
+- **SPA bootstrap.** The SPA's `index.html` is served with the token
+  interpolated as `<script>window.__SMAI_TOKEN__ = "...";</script>`;
+  the SPA client reads the variable once at boot and includes it on
+  every request. Per `13-frontend.md` §12.4, the token never lives in
+  `localStorage` or in URLs.
+- **Rotation.** A `smai auth rotate` verb is a post-M5 backlog item.
+  Until it lands, rotation is a manual `rm` on the token file plus
+  `smai ui` restart; browser tabs need a refresh after rotation.
+- **SSE caveat.** SSE in bearer mode currently uses the native
+  `EventSource`, which cannot set custom headers. The header-aware
+  polyfill (`fetchEventSource`) is a post-M5 backlog item per
+  `13-frontend.md` §7.3; until that lands, live-update events do not
+  fire when bearer mode is enabled. REST reads + mutations work
+  normally; the SPA falls back to TanStack Query's default refetch
+  cadence.
+
+### 6.2 Verifying a fresh deployment
+
+The canonical end-to-end smoke is `tests/integration/test_smai_ui_e2e.py`
+(per Task 4.N3): submit a proposal via `POST /api/v1/proposals`, drive
+through the planner + approval + CG-execution states via SSE, and
+fetch the resulting `evaluation_result.json` artifact via
+`GET /api/v1/comparison-groups/{id}/artifacts/...`. The journey
+completes in ~12s wall-clock on a stub-LLM + stub-Compute config.
+
+To run against a deployment's actual config:
+
+```bash
+SMAI_CONFIG=/etc/smai/smai.yaml uv run pytest \
+    tests/integration/test_smai_ui_e2e.py -v
+```
+
+The Case-A path (in-process worker, sqlite + localfs) is the canonical
+exercise; the Case-B credentialed variant
+(`test_full_user_journey_remote_data`) is currently a structural
+placeholder per Task 4.N3's status note (body `pytest.skip`s pending
+Postgres + S3 wiring; tracked in §8 backlog).
 
 ---
 

@@ -93,6 +93,12 @@ The canonical local-dev pattern for the API + SPA is two terminals
 # Terminal 1: API + (auto-detected) in-process worker on a sqlite/localfs config.
 uv run smai ui --reload
 
+# Alternative for SPA-only iteration (no worker): run uvicorn directly
+# against `make_api_app(runtime)`. Useful if the worker is running
+# elsewhere and you only want to touch route handlers.
+#   cd packages/smai-api && uv run uvicorn smai_api.app:make_api_app \
+#       --factory --reload --port 8000
+
 # Terminal 2: Vite dev server with HMR; proxies /api/* to the API on :8000.
 cd apps/ui && pnpm install && pnpm dev
 ```
@@ -102,9 +108,38 @@ changes; touching a `.tsx` updates the browser via Vite HMR
 independently. Editing `smai.yaml` requires restarting `smai ui` (no
 hot-reload; per `09-cli.md` §3).
 
-For a UI against a remote backend (Postgres + S3), pass
-`--no-worker` — workers run separately as `smai start` against the
-shared backend per `12-ui-process.md` §10.3.
+For a UI against a remote backend (Postgres + S3), pass `--no-worker`.
+Workers run separately as `smai start` against the shared backend per
+`12-ui-process.md` §10.3.
+
+Production deployments install `pip install smai-api[ui]` to ship the
+SPA bundle; headless deployments install bare `smai-api` and skip the
+SPA mount. The `[ui]` extra pulls in `smai-ui`, whose Hatch build hook
+runs `pnpm build` and stages `apps/ui/dist/` into the wheel as package
+data; `make_api_app(...)` mounts the bundle when `smai_ui` is
+importable and degrades to API-only otherwise.
+
+### OpenAPI codegen discipline
+
+The SPA's typed API client (`apps/ui/src/lib/api/generated/api-types.ts`)
+is generated from `smai-api`'s OpenAPI spec via `openapi-typescript`.
+The codegen step is **manual, not automatic** (`13-frontend.md` §5.2);
+running it on every save would couple HMR to the API process being up,
+and running it on git-pre-commit would silently regenerate during
+checkout.
+
+Run `pnpm codegen` whenever you:
+
+- Edit any route handler under `packages/smai-api/src/smai_api/routers/`.
+- Add or change a Pydantic model in `packages/smai-api-spec/`.
+- Touch the error taxonomy (`smai_api_spec.errors.ErrorCode`).
+
+Mechanics: `pnpm codegen` runs
+`tools/dump_openapi.py | openapi-typescript --output src/lib/api/generated/api-types.ts`
+(the `dump_openapi.py` script imports `make_api_app` and writes the
+spec to stdout; no live API process required). Commit the regenerated
+`api-types.ts` alongside the API change in the same PR; CI runs the
+same regeneration and fails on diff per `13-frontend.md` §5.4.
 
 ---
 
@@ -223,6 +258,17 @@ SMAI's four pluggable boundaries are `LlmProvider`, `MetadataStore`,
 [`typing.Protocol`](https://docs.python.org/3/library/typing.html#typing.Protocol)
 defined in `smai_core.plugins`; each ships a parameterizable
 conformance test base class under `smai_core.plugins.conformance`.
+
+A fifth conformance suite, `smai-api-conformance`, ships alongside
+the four-plugin set. It enforces parity between SMAI's `smai-api`
+implementation and any sibling implementation of the shared HTTP
+contract per DEC-037 (`11-api.md` §10). New API implementations
+subclass `APIConformanceBase`, override the `client` fixture to return
+an `httpx.AsyncClient` against the implementation's app, and inherit
+the contract suite (status codes, payload shapes, idempotency,
+pagination round-trip, error envelope shape, live-update timing,
+auth posture). This sits orthogonal to the plugin Protocols; it is
+not part of the plugin-author workflow below.
 
 The plugin-author workflow is identical across all four interfaces:
 

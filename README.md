@@ -60,8 +60,25 @@ The unit of value is a small set of guarantees, not a feature list:
   mid-flight. The audit trail is reproducible by construction.
 
 This repo is the **OSS surface**: methodology layer, agent loops,
-orchestrator, runtime, CLI, and the four reference plugin interfaces
-with local + production implementations.
+orchestrator, runtime, CLI, the four reference plugin interfaces with
+local + production implementations, plus a JSON HTTP API and a React
+SPA that consume the same in-process `Runtime`.
+
+What v2 OSS ships:
+
+- **Methodology + pipeline.** `smai-core` (compile + evaluate),
+  `smai-runtime`, `smai-agents`, `smai-orchestrator`, and a
+  3 LLM × 2 metadata-store × 2 artifact-store × 3 compute plugin matrix.
+- **`smai ui` verb.** One process, one URL: FastAPI JSON API at
+  `/api/v1/...` plus the built React SPA at `/`. Auto-detects whether
+  to run an in-process worker from the configured plugin shape.
+- **Shared HTTP contract.** Pydantic models, URL constants, and an
+  error taxonomy in `smai-api-spec`; a parameterizable pytest suite in
+  `smai-api-conformance` so any second implementation stays parity-checked.
+- **Real-time updates.** `GET /api/v1/events` Server-Sent Events,
+  fed in-process for sqlite deployments and via Postgres `LISTEN/NOTIFY`
+  for production. The SPA treats events as TanStack Query cache
+  invalidations.
 
 > **Status: private pre-release.** APIs may break without notice. PyPI
 > distribution and a public docs site are gated on an explicit user
@@ -393,24 +410,46 @@ Requires [`uv`](https://docs.astral.sh/uv/) and Python 3.11+.
 git clone <repo-url> smai
 cd smai
 uv sync                         # install workspace + dev deps
-uv run pytest                   # run the test suite (~1700 tests)
+uv run pytest                   # run the test suite (~2100 tests)
 ```
 
-Boot the laptop demo:
+Boot the laptop deployment with the SPA:
 
 ```bash
-# Configure AWS credentials in the default chain — the dev defaults use
-# the smai-llm-bedrock plugin (claude-opus-4-7 in us-east-1). To use
+# Configure AWS credentials in the default chain. The dev defaults use
+# the smai-llm-bedrock plugin (claude-opus-4-7 in us-east-1); to use
 # Anthropic or OpenAI directly, see "Configuration" below.
-$ uv run smai dev
-smai dev: worker running. workspace_root=/home/you/.smai/workspace
-poll_interval=10s. Press Ctrl+C to stop.
+$ uv run smai ui
+smai ui: starting in-process worker (sqlite metadata store detected).
+         Pass --no-worker to disable.
+         Listening on http://127.0.0.1:8000/
 ```
 
-`smai dev` boots the in-band degenerate-production deployment:
-SQLite (`~/.smai/state.db`) + LocalFs (`~/.smai/artifacts`) + LocalGpu
-(Docker) + Bedrock, single in-process worker, `poll_interval=10s` for
-interactive feel. Ctrl+C drains gracefully.
+Open `http://127.0.0.1:8000/` in a browser. The dashboard shows live
+state badges and a recent activity feed:
+
+```
++------------------------------------------------------------+
+|  SMAI                                       [v 0.1.0]      |
++------------------------------------------------------------+
+|  Comparison groups        Proposals        Papers          |
+|  ------------------       ----------       --------        |
+|  cg_01J7PA8K... [running]    prop_xyz      arxiv:2103.x    |
+|  cg_01J7PA8L... [complete]   [designed]    [registered]    |
+|                                                            |
+|  Recent activity (live via SSE)                            |
+|   17:23:11  cg_01J7PA8K... implementing -> implemented     |
+|   17:23:14  prop_xyz       designing    -> designed        |
++------------------------------------------------------------+
+```
+
+`smai ui` boots one process: SQLite (`~/.smai/state.db`) + LocalFs
+(`~/.smai/artifacts`) + LocalGpu (Docker) + Bedrock, single in-process
+worker, `poll_interval=10s`, plus FastAPI + the SPA bundle on
+`127.0.0.1:8000`. The `--with-worker` default flips off when any
+production-shape plugin (postgres, s3, modal, runpod) is configured;
+see `12-ui-process.md` §4.3. Ctrl+C drains the worker first, then the
+server.
 
 In a second terminal, submit an experiment:
 
@@ -420,7 +459,14 @@ cg_01J7PA8K2X9F4ZB6QH4N0P1234
 cg_01J7PA8K2X9F4ZB6QH4N0P1234: complete
 ```
 
-`smai status <cg-id> --watch` does the same polling without re-submitting.
+The CG appears in the SPA the instant the API write commits; live
+updates land via SSE without polling. `smai status <cg-id> --watch`
+does the same polling against the CLI without re-submitting.
+
+`smai dev` is the headless alternative for users who prefer a
+browser-less workflow; it boots the same plugin set without the API or
+the SPA. The two verbs have distinct identities (per
+`12-ui-process.md` §7.1); pick whichever fits the session.
 
 ---
 
@@ -481,6 +527,13 @@ For production deployment (out-of-band worker, Postgres + S3 + remote
 compute), use `Runtime.start_worker(...)`. See
 `packages/smai-cli/OPERATIONS.md` for systemd / supervisord / launchd
 recipes plus connection-pool sizing and structured-logging patterns.
+
+The HTTP API + SPA process (`smai ui`) reads the **same** `Runtime`
+the programmatic Tier-A flow uses; `make_api_app(runtime)` wraps it in
+FastAPI routes plus SSE plus an optional SPA mount. See
+`designs/smai/12-ui-process.md` for the verb's full deployment shape
+(Case A in-process worker, Case B remote-data UI-only) and
+`designs/smai/13-frontend.md` for the SPA architecture.
 
 ---
 
