@@ -378,6 +378,10 @@ def _build_harness_contract(
         required_metrics=required_metrics,
         optional_telemetry=optional_telemetry,
         no_go_zones=no_go_zones,
+        # Lift the experiment's compute hints onto the contract so the
+        # run-dispatcher reads from the locked artifact, not from the
+        # mutable RunRecord row (round-3 friction (C)).
+        compute=experiment.controlled_conditions.compute.model_copy(),
     )
     contract = HarnessContract(
         envelope=_envelope(

@@ -5,6 +5,7 @@ Consumers should import from ``smai_core`` (or this subpackage) rather than
 from individual modules — the module split is an implementation detail.
 """
 
+from smai_core.entities.compute_requirements import ComputeRequirements
 from smai_core.entities.conditions import ControlledConditions
 from smai_core.entities.experiment import (
     ExperimentDefinition,
@@ -53,6 +54,7 @@ __all__ = [
     "AtomicMetricEntry",
     "AtomicMetricRef",
     "ComparisonRule",
+    "ComputeRequirements",
     "ControlledConditions",
     "Entry",
     "ExperimentDefinition",

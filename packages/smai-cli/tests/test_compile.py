@@ -74,6 +74,73 @@ def test_compile_unregistered_technique_surfaces_error(tmp_path: Path) -> None:
     assert "technique" in combined.lower() or "verification" in combined.lower()
 
 
+def _cutout_technique_ref_dict() -> dict[str, Any]:
+    """A valid ``TechniqueRef`` payload for ``tech_cutout`` (matches the
+    shape ``_cli_fakes.make_registries_with_technique`` builds)."""
+    from smai_core import TechniqueRef  # noqa: PLC0415
+
+    ref = TechniqueRef(
+        id="tech_cutout",
+        name="Cutout",
+        description="Cutout regularization technique.",
+        category="augmentation",
+        compatible_factor_types=["additive"],
+        standard=True,
+        affects_extension_points=["train_transforms"],
+        parameter_schema={
+            "type": "object",
+            "properties": {"patch_size": {"type": "integer"}},
+            "additionalProperties": False,
+        },
+    )
+    return json.loads(ref.model_dump_json())
+
+
+def test_compile_with_techniques_file_list_form(tmp_path: Path) -> None:
+    """``smai compile --techniques FILE`` (a JSON list) registers the
+    referenced technique so the experiment compiles cleanly."""
+    yaml_path = tmp_path / "experiment.yaml"
+    yaml_path.write_text(_EXPERIMENT_YAML, encoding="utf-8")
+    tech_path = tmp_path / "techniques.json"
+    tech_path.write_text(json.dumps([_cutout_technique_ref_dict()]), encoding="utf-8")
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["compile", str(yaml_path), "--techniques", str(tech_path)])
+    assert result.exit_code == 0, (result.output, result.exception)
+    bundle = json.loads(result.output)
+    assert "cg_compile_test" in bundle
+    assert "harness_contract" in bundle["cg_compile_test"]
+
+
+def test_compile_with_techniques_file_object_form(tmp_path: Path) -> None:
+    """The JSON object form (``{id: TechniqueRef}``) is also accepted."""
+    yaml_path = tmp_path / "experiment.yaml"
+    yaml_path.write_text(_EXPERIMENT_YAML, encoding="utf-8")
+    tech_path = tmp_path / "techniques.json"
+    tech_path.write_text(
+        json.dumps({"tech_cutout": _cutout_technique_ref_dict()}), encoding="utf-8"
+    )
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["compile", str(yaml_path), "--techniques", str(tech_path)])
+    assert result.exit_code == 0, (result.output, result.exception)
+    assert "cg_compile_test" in json.loads(result.output)
+
+
+def test_compile_with_techniques_object_key_mismatch_errors(tmp_path: Path) -> None:
+    """An object-keyed sidecar whose key disagrees with the ref's id is rejected."""
+    yaml_path = tmp_path / "experiment.yaml"
+    yaml_path.write_text(_EXPERIMENT_YAML, encoding="utf-8")
+    tech_path = tmp_path / "techniques.json"
+    tech_path.write_text(json.dumps({"wrong_key": _cutout_technique_ref_dict()}), encoding="utf-8")
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["compile", str(yaml_path), "--techniques", str(tech_path)])
+    assert result.exit_code != 0
+    combined = (result.output or "") + (str(result.exception) if result.exception else "")
+    assert "does not match" in combined
+
+
 def test_compile_text_via_service_with_registries(tmp_path: Path) -> None:
     """The :meth:`ExperimentsService.compile_text` surface compiles
     cleanly when the registry has the referenced technique.

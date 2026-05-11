@@ -394,6 +394,51 @@ def _emit_status(snap: Any, output_format: str) -> None:
 # === Verb 4: compile =========================================================
 
 
+def _load_technique_refs_from_files(paths: list[Path]) -> dict[str, Any]:
+    """Parse ``--techniques`` JSON sidecars into a ``{id: TechniqueRef}`` map.
+
+    Each file is JSON shaped as either a ``list[TechniqueRef]`` or a
+    ``dict[id, TechniqueRef]`` (the latter's keys must agree with each
+    ref's ``id``). Multiple ``--techniques`` files merge; a later file
+    overriding an earlier file's id is an error (silently shadowing a
+    technique definition is the kind of thing that produces confusing
+    verdicts later). Returns the dict :func:`load_default_registries`
+    accepts for its ``technique_registry`` argument.
+    """
+    import json as _json  # noqa: PLC0415
+    from typing import cast  # noqa: PLC0415
+
+    from smai_core import TechniqueRef  # noqa: PLC0415
+
+    merged: dict[str, Any] = {}
+    for path in paths:
+        try:
+            raw: Any = _json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, _json.JSONDecodeError) as exc:
+            _err(f"--techniques {path}: could not read JSON ({exc})")
+        entries: list[tuple[str | None, Any]]
+        if isinstance(raw, dict):
+            entries = [(str(k), v) for k, v in cast("dict[str, Any]", raw).items()]
+        elif isinstance(raw, list):
+            entries = [(None, item) for item in cast("list[Any]", raw)]
+        else:
+            _err(f"--techniques {path}: expected a JSON list or object, got {type(raw).__name__}")
+        for key, item in entries:
+            try:
+                ref = TechniqueRef.model_validate(item)
+            except Exception as exc:  # noqa: BLE001 — surface a friendly message
+                _err(f"--techniques {path}: invalid TechniqueRef ({type(exc).__name__}: {exc})")
+            if key is not None and key != ref.id:
+                _err(
+                    f"--techniques {path}: object key {key!r} does not match the "
+                    f"ref's id {ref.id!r}"
+                )
+            if ref.id in merged:
+                _err(f"--techniques: technique id {ref.id!r} defined more than once")
+            merged[ref.id] = ref
+    return merged
+
+
 @app.command("compile")
 def smai_compile(
     experiment_yaml: Annotated[
@@ -410,12 +455,26 @@ def smai_compile(
             file_okay=False,
         ),
     ] = None,
+    techniques: Annotated[
+        list[Path] | None,
+        typer.Option(
+            "--techniques",
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            help="JSON file of TechniqueRef definitions (a list, or an object keyed by id) "
+            "to register before compiling. Repeatable. `smai compile` is pure-methodology "
+            "and does not touch the MetadataStore, so techniques referenced by the "
+            "experiment must be supplied here; `smai run` reads them from the store instead.",
+        ),
+    ] = None,
 ) -> None:
     """Compile a YAML to the four contract artifacts (`09` §1 / `02` §8).
 
     Pure methodology call — does not touch MetadataStore / Compute. No
     plugin instantiation. Useful for offline validation before
-    submission.
+    submission. Supply ``--techniques FILE`` for any technique the
+    experiment references (the registry is otherwise empty here).
     """
     yaml_text = experiment_yaml.read_text(encoding="utf-8")
     # Compile in-process; no plugins needed.
@@ -431,7 +490,8 @@ def smai_compile(
     if not isinstance(payload, dict):
         _err("experiment YAML must be a mapping at the top level.")
     document = DslDocumentAdapter.validate_python(payload, context={"smai_mode": "dsl"})
-    registries = load_default_registries()
+    technique_registry = _load_technique_refs_from_files(techniques) if techniques else None
+    registries = load_default_registries(technique_registry=technique_registry)
 
     if isinstance(document, FactorModelDocument):
         artifact_sets = compile_experiment(document, registries)

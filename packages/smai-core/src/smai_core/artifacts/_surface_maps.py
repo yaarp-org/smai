@@ -45,6 +45,7 @@ HARNESS_CONTRACT_SURFACE_MAP: dict[str, SurfaceKind] = {
     "body.required_metrics[*]": "locked",
     "body.optional_telemetry": "locked",
     "body.no_go_zones[*]": "locked",
+    "body.compute.gpu": "locked",
 }
 """Per ``02-dsl-and-contracts.md`` §7.4.1.
 

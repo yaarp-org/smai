@@ -210,9 +210,17 @@ metadata store or compute.
 
 ### Before you run
 
-`smai compile` needs nothing. Everything else dispatches real agent
-calls and (eventually) real compute, so it needs whatever the selected
-plugins need. The dev defaults (`smai dev` / `smai ui`) need:
+`smai compile` needs no plugins or credentials, but it is pure
+methodology and does not read the metadata store, so any technique your
+experiment references must be supplied inline: `smai compile
+experiment.yaml --techniques techniques.json` (a JSON list of
+`TechniqueRef` objects, or an object keyed by id; repeatable).
+`smai run` reads registered techniques from the store, so it needs no
+such flag once a proposal or paper-ingestion run has populated them.
+
+Everything else dispatches real agent calls and (eventually) real
+compute, so it needs whatever the selected plugins need. The dev
+defaults (`smai dev` / `smai ui`) need:
 
 - **AWS credentials** in the default chain (`~/.aws/...`, env vars, or
   an instance role), **and Bedrock model access granted** in the AWS
@@ -221,7 +229,13 @@ plugins need. The dev defaults (`smai dev` / `smai ui`) need:
   `AccessDeniedException: ... is not available for this account`.
 - **Docker running locally**, with the `smai-runtime:dev` and
   `smai-agent:dev` images built. SMAI does not publish these; build
-  them yourself (see `CONTRIBUTING.md`).
+  them yourself (see `CONTRIBUTING.md`). On macOS / Apple Silicon,
+  Docker Desktop has no GPU passthrough, so the dev-default LocalGpu
+  Compute refuses GPU jobs; add `controlled_conditions: { compute: {
+  gpu: false } }` to an experiment YAML for CPU-only runs (methodology
+  smoke runs, kNN comparisons, small models). It also flows into the
+  `HarnessContract`, so a Modal / RunPod deployment honors the same
+  setting.
 
 Pointing at a different plugin set changes the requirements: Anthropic
 needs `ANTHROPIC_API_KEY`; OpenAI needs `OPENAI_API_KEY` (and the SDK

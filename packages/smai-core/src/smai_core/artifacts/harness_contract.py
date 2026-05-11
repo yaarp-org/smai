@@ -11,9 +11,10 @@ from __future__ import annotations
 
 from typing import Any, TypeAlias
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from smai_core.artifacts._envelope import ArtifactEnvelope
+from smai_core.entities.compute_requirements import ComputeRequirements
 from smai_core.entities.factor import Factor
 from smai_core.entities.metric import MetricRef
 
@@ -38,7 +39,15 @@ class FixedVariable(BaseModel):
 
 
 class HarnessContractBody(BaseModel):
-    """Body fields of :class:`HarnessContract` (§7.4)."""
+    """Body fields of :class:`HarnessContract` (§7.4).
+
+    ``compute`` mirrors :attr:`ControlledConditions.compute` from the
+    source experiment — held constant across entries within the CG and
+    so a natural fit for the ceteris-paribus surface (`02` §7.4 / round-3
+    friction (C)). Default-factoried so pre-Phase-1 contracts (without
+    this field in their JSON body) still deserialize and dispatchers
+    see the historical ``gpu=True`` shape.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -49,6 +58,7 @@ class HarnessContractBody(BaseModel):
     required_metrics: list[MetricRef]
     optional_telemetry: list[MetricRef]
     no_go_zones: list[str]
+    compute: ComputeRequirements = Field(default_factory=ComputeRequirements)
 
 
 class HarnessContract(BaseModel):

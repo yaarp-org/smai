@@ -10,19 +10,27 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
+
+from smai_core.entities.compute_requirements import ComputeRequirements
 
 
 class ControlledConditions(BaseModel):
     """Everything held constant across entries within a CG.
 
     The schema declares the typed core (``dataset``, ``optimization``,
-    ``seeds``) plus an explicit ``additional_fixed`` bucket; ``extra="allow"``
-    admits arbitrary additional top-level fields (``architecture``,
-    ``pruning_method``, ``activation_function``, etc.) without forcing every
-    domain-specific value under ``additional_fixed``. ``has_field`` /
-    ``get_field`` provide a single source of truth across declared fields,
-    extras, and ``additional_fixed``.
+    ``seeds``, ``compute``) plus an explicit ``additional_fixed`` bucket;
+    ``extra="allow"`` admits arbitrary additional top-level fields
+    (``architecture``, ``pruning_method``, ``activation_function``, etc.)
+    without forcing every domain-specific value under
+    ``additional_fixed``. ``has_field`` / ``get_field`` provide a single
+    source of truth across declared fields, extras, and
+    ``additional_fixed``.
+
+    ``compute`` is the per-experiment :class:`ComputeRequirements`
+    block (`02-dsl-and-contracts.md` §7.4 / round-3 friction (C)).
+    Defaults preserve pre-Phase-1 behavior (``gpu=True``) so existing
+    YAMLs round-trip unchanged.
     """
 
     model_config = ConfigDict(extra="allow")
@@ -30,6 +38,7 @@ class ControlledConditions(BaseModel):
     dataset: dict[str, str]
     optimization: dict[str, str | int | float]
     seeds: list[int]
+    compute: ComputeRequirements = Field(default_factory=ComputeRequirements)
     additional_fixed: dict[str, str | int | float | bool] | None = None
 
     def has_field(self, name: str) -> bool:

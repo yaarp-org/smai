@@ -156,6 +156,41 @@ def test_harness_contract_factor_carried_through() -> None:
     assert factor.type == "substitutive"
 
 
+def test_harness_contract_compute_defaults_to_gpu_true() -> None:
+    """Fixtures without a ``compute`` block compile to ``gpu=True`` (the
+    pre-Phase-1 hardcoded dispatch behavior)."""
+    art_set, _ = compile_experiment_fixture("resnet50_vs_vgg16_cifar10")
+    assert art_set.harness_contract.body.compute.gpu is True
+    assert art_set.harness_contract.envelope.surface_map["body.compute.gpu"] == "locked"
+
+
+def test_harness_contract_compute_propagates_from_controlled_conditions() -> None:
+    """A ``controlled_conditions.compute.gpu: false`` declaration threads
+    through the ExperimentPlan into the HarnessContract body (round-3
+    friction (C) — CPU-only / macOS-LocalGpu experiments)."""
+    from _emit_helpers import (  # type: ignore[import-not-found]
+        load_fixture_payload,
+    )
+    from _verification_helpers import fixture_registries  # type: ignore[import-not-found]
+    from smai_core import (
+        DslDocumentAdapter,
+        ExperimentDocument,
+        VerifiedExperimentDefinition,
+        emit_artifacts,
+        verify,
+    )
+
+    payload = load_fixture_payload("cutout_on_cifar10")
+    payload["experiment"]["controlled_conditions"]["compute"] = {"gpu": False}
+    doc = DslDocumentAdapter.validate_python(payload, context={"smai_mode": "dsl"})
+    assert isinstance(doc, ExperimentDocument)
+    verified = verify(doc, fixture_registries())
+    assert isinstance(verified, VerifiedExperimentDefinition)
+    art_set, _report = emit_artifacts(verified, fixture_registries())
+    assert art_set.experiment_plan.body.controlled_conditions.compute.gpu is False
+    assert art_set.harness_contract.body.compute.gpu is False
+
+
 def test_harness_contract_no_go_zones_have_v1_defaults() -> None:
     art_set, _ = compile_experiment_fixture("resnet50_vs_vgg16_cifar10")
     assert "experiment.py" in art_set.harness_contract.body.no_go_zones

@@ -278,12 +278,12 @@ def test_evaluator_is_deterministic_within_run() -> None:
 # verdict-path output changed and should be reviewed before updating these.
 GOLDEN_RESULT_HASHES: dict[str, str] = {
     "resnet50_vs_vgg16_cifar10": (
-        "4ac3c3043fecd7d3db28cf18e718da9f244e120192dc5204d7dbdba3da065647"
+        "7d96f0ea25e3cb47f3ac48509b842eeb8ae056d68df879ea9953fdc229936c97"
     ),
-    "cutout_on_cifar10": ("ce7a170c0364d34ea465c0acb15c50b51f7eee397697f28c39d685ccb2a5b8f4"),
-    "pruning_sparsity_sweep": ("7ad3f7fb2385cdfc97389b7352b0d7f5c687ce4bd7c3088a47e06d3fa1262ab1"),
+    "cutout_on_cifar10": ("8c7a88b44ffcf42ca7248af80e5407c8162a68c0ddba80eba75216f0c5a67585"),
+    "pruning_sparsity_sweep": ("425b8663cab9ff0369dad18da292280b485c6e36b8316ebc2ae2c8aa92819ad1"),
     "position_embeddings_wikitext103": (
-        "248b4c5a80707466a5488472ee932d415f9f674881ed7944d878db2255173230"
+        "dc35674168003120ce96e740688d9d43ce00f25f749513cf6547fc075ec7985d"
     ),
 }
 

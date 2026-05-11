@@ -34,6 +34,7 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 
 from smai_core import (
+    ComputeRequirements,
     Factor,
     HarnessContract,
     HarnessContractBody,
@@ -185,8 +186,13 @@ def make_harness_contract(
     factor_name: str = "augmentation",
     parent_experiment_id: str = "exp-1",
     parent_experiment_hash: str = "exp-hash",
+    gpu: bool = True,
 ) -> HarnessContract:
-    """Build a frozen :class:`HarnessContract` with populated ``content_hash``."""
+    """Build a frozen :class:`HarnessContract` with populated ``content_hash``.
+
+    ``gpu`` sets ``body.compute.gpu`` (defaults to the pre-Phase-1
+    ``True`` shape); pass ``False`` to exercise CPU-only dispatch.
+    """
     envelope = ArtifactEnvelope(
         artifact_kind="harness_contract",
         artifact_id="hc-1",
@@ -210,6 +216,7 @@ def make_harness_contract(
         ],
         optional_telemetry=[],
         no_go_zones=["experiment.py", "techniques/__init__.py"],
+        compute=ComputeRequirements(gpu=gpu),
     )
     contract = HarnessContract(envelope=envelope, body=body)
     return freeze_with_hash(contract)

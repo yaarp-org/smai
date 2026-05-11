@@ -349,12 +349,49 @@ def _experiment_definitions(document: Any) -> list[ExperimentDefinition]:
     return [document.experiment]
 
 
+_TECHNIQUE_PAGE_SIZE = 200
+
+
+async def _load_all_techniques(store: MetadataStore) -> dict[str, TechniqueRef]:
+    """Walk the store's technique mirror via cursor pagination (`07` §5.3).
+
+    Returns ``{technique_id: TechniqueRef}`` — the dict shape
+    :func:`smai_core.load_default_registries` expects for its
+    ``technique_registry`` argument. An empty store yields ``{}`` (the
+    historical behavior), so deployments that haven't registered any
+    techniques are unaffected.
+    """
+    out: dict[str, TechniqueRef] = {}
+    cursor: str | None = None
+    while True:
+        page: CursorPage[TechniqueRef] = await store.list_techniques(
+            limit=_TECHNIQUE_PAGE_SIZE, cursor=cursor
+        )
+        for ref in page.items:
+            out[ref.id] = ref
+        if page.next_cursor is None:
+            return out
+        cursor = page.next_cursor
+
+
 # === Sub-services ============================================================
 
 
 class ExperimentsService:
     """Verb-to-service surface for ``smai run`` / ``smai compile`` (`09`
-    §1.2 verb-to-service mapping)."""
+    §1.2 verb-to-service mapping).
+
+    The technique registry passed to the compiler is loaded fresh from
+    the configured :class:`MetadataStore`'s technique mirror on every
+    call (``get_technique`` / ``list_techniques`` / ``upsert_technique``
+    per `07` §5.3), unioned over the closed v1 defaults. Without this an
+    experiment YAML that references a registered technique (ingested
+    from a paper, drafted by a proposal) failed the
+    ``technique.id_registered`` verification rule at ``smai run`` time
+    even though the technique was sitting in the store. ``registries_factory``
+    remains a test-injection seam — when supplied it's authoritative and
+    the store is not consulted.
+    """
 
     def __init__(
         self,
@@ -363,9 +400,19 @@ class ExperimentsService:
         registries_factory: Callable[[], Registries] | None = None,
     ) -> None:
         self._plugins = plugins
-        self._registries_factory: Callable[[], Registries] = (
-            registries_factory if registries_factory is not None else load_default_registries
-        )
+        self._registries_factory: Callable[[], Registries] | None = registries_factory
+
+    async def _resolve_registries(self) -> Registries:
+        """Build the :class:`Registries` for a compile call.
+
+        Test-injected factory (``registries_factory``) wins outright.
+        Otherwise: closed v1 default registries + every
+        :class:`TechniqueRef` currently in the store's technique mirror.
+        """
+        if self._registries_factory is not None:
+            return self._registries_factory()
+        techniques = await _load_all_techniques(self._plugins.metadata_store)
+        return load_default_registries(technique_registry=techniques)
 
     async def compile_text(self, yaml_text: str) -> dict[str, ContractArtifactSet]:
         """Compile-without-submit (the ``smai compile`` adapter).
@@ -379,7 +426,7 @@ class ExperimentsService:
         malformed or fails Pass-2 verification.
         """
         document = _resolve_document(yaml_text)
-        registries: Registries = self._registries_factory()
+        registries: Registries = await self._resolve_registries()
         if isinstance(document, FactorModelDocument):
             return compile_experiment(document, registries)
         assert isinstance(document, ExperimentDocument)
@@ -394,7 +441,7 @@ class ExperimentsService:
         :class:`ExperimentDocument`; N for a :class:`FactorModelDocument`).
         """
         document = _resolve_document(yaml_text)
-        registries: Registries = self._registries_factory()
+        registries: Registries = await self._resolve_registries()
         if isinstance(document, FactorModelDocument):
             artifact_sets: dict[str, ContractArtifactSet] = compile_experiment(document, registries)
         else:

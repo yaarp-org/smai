@@ -83,6 +83,7 @@ import json
 from collections.abc import Awaitable, Callable
 from typing import Any, cast
 
+from smai_core.artifacts import HarnessContract
 from smai_core.plugins import (
     ArtifactNotFound,
     ArtifactStore,
@@ -104,6 +105,7 @@ from smai_orchestrator.entities.tracking import RunRecord
 from smai_orchestrator.runtime.registry import register_pipeline_spec
 from smai_orchestrator.runtime.spec import PipelineSpec
 from smai_orchestrator.specs.cg_execution import (
+    HARNESS_CONTRACT_KEY_TEMPLATE,
     POOL_RUNS,
     RUN_METRICS_KEY_TEMPLATE,
     drain_to_list,
@@ -275,6 +277,31 @@ def _make_gate_run_failed_terminal() -> Callable[[GateContext], Awaitable[GateOu
 # === Dispatch-handler factory ===============================================
 
 
+async def _load_compute_requirements_gpu(artifact_store: ArtifactStore, cg_id: str) -> bool:
+    """Read ``body.compute.gpu`` off the CG's persisted :class:`HarnessContract`.
+
+    The contract artifact at
+    ``comparison-groups/{cg_id}/harness/contract.json`` is the locked
+    source of truth for the CG's compute requirements (`02` §7.4 / round-3
+    friction (C)). Pre-Phase-1 contracts (no ``compute`` block in their
+    JSON body) deserialize with :class:`ComputeRequirements` defaults
+    (``gpu=True``), preserving historic dispatch behavior.
+
+    If the artifact is missing — which would be a contract-flow bug, since
+    the dispatcher only runs after the CG transitioned past ``draft`` —
+    we return ``True`` rather than crash the dispatcher, so a stray run
+    job still submits with the historical default while the bug is
+    diagnosed.
+    """
+    key = HARNESS_CONTRACT_KEY_TEMPLATE.format(cg_id=cg_id)
+    try:
+        contract_bytes = await artifact_store.get(key)
+    except ArtifactNotFound:
+        return True
+    contract = HarnessContract.model_validate_json(contract_bytes)
+    return contract.body.compute.gpu
+
+
 def _make_dispatch_run_compute_submit(
     *,
     image: str,
@@ -299,6 +326,14 @@ def _make_dispatch_run_compute_submit(
     phase-2 discovery picks it up again. v1 has no run-level retry
     budget (`03` §3.9 open item) — re-discovery is unconditional;
     operators with budget concerns can add a deployment-specific gate.
+
+    The ``gpu`` argument to :meth:`Compute.submit` is read from the
+    CG's :class:`HarnessContract` artifact (see
+    :func:`_load_compute_requirements_gpu`) so CPU-only experiments
+    (e.g. methodology smoke runs, kNN comparisons, anything not GPU-
+    bound, and the macOS-LocalGpu path which refuses ``gpu=True``)
+    dispatch correctly. The contract is the locked source of truth;
+    one artifact-store read per submit.
     """
 
     async def _dispatch(ctx: DispatchContext) -> DispatchOutcome:
@@ -306,6 +341,7 @@ def _make_dispatch_run_compute_submit(
         if run is None:
             return DispatchOutcome(error=f"RunRecord {ctx.entity_id!r} not found")
 
+        gpu = await _load_compute_requirements_gpu(ctx.artifact_store, run.cg_id)
         metrics_key = _metrics_key_for_run(run)
         command = [
             "python",
@@ -330,7 +366,7 @@ def _make_dispatch_run_compute_submit(
             image=image,
             command=command,
             env=env,
-            gpu=True,
+            gpu=gpu,
         )
         return DispatchOutcome(submitted_handles=[handle])
 

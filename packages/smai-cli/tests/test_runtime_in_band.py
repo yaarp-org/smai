@@ -117,6 +117,76 @@ async def test_submit_text_creates_cg_and_persists_artifacts(
 
 
 @pytest.mark.asyncio
+async def test_submit_text_resolves_techniques_from_metadata_store(
+    tmp_path: Path,
+) -> None:
+    """With no injected ``registries_factory``, ``submit_text`` builds
+    the compiler's technique registry from the store's technique mirror.
+    A ``tech_cutout`` row upserted into the store makes the
+    ``tech_cutout``-referencing experiment compile cleanly (round-3
+    friction (A) — previously this failed ``technique.id_registered``).
+    """
+    from smai_core import TechniqueRef
+    from smai_store_sqlite import SqliteStore
+
+    store = SqliteStore(uri="sqlite+aiosqlite:///:memory:")
+    await store.migrate()
+    await store.upsert_technique(
+        TechniqueRef(
+            id="tech_cutout",
+            name="Cutout",
+            description="Cutout regularization technique.",
+            category="augmentation",
+            compatible_factor_types=["additive"],
+            standard=True,
+            affects_extension_points=["train_transforms"],
+        )
+    )
+    artifact_store = LocalFsStore(tmp_path / "artifacts")
+    overrides = PluginOverrides(
+        llm_providers={role: StubLlmProvider() for role in DEFAULT_TASK_ROLES},
+        metadata_store=store,
+        artifact_store=artifact_store,
+        compute=FakeCompute(),
+    )
+    config = _make_runtime_config()
+    async with Runtime.start_in_band(
+        config,
+        workspace_root=tmp_path / "workspaces",
+        plugin_overrides=overrides,
+        run_worker=False,
+    ) as runtime:
+        # No registries-factory override — the store-backed path is exercised.
+        cg_ids = await runtime.experiments.submit_text(EXPERIMENT_YAML)
+        assert cg_ids == ["cg_example"]
+        snap = await runtime.status.get("cg_example")
+        assert snap.state == "draft"
+
+
+@pytest.mark.asyncio
+async def test_submit_text_unregistered_technique_still_fails(tmp_path: Path) -> None:
+    """Sanity: the store-backed registry doesn't paper over a genuinely
+    missing technique — an empty store still fails verification."""
+    from smai_core.verification import VerificationError
+
+    artifact_store = LocalFsStore(tmp_path / "artifacts")
+    overrides = PluginOverrides(
+        llm_providers={role: StubLlmProvider() for role in DEFAULT_TASK_ROLES},
+        artifact_store=artifact_store,
+        compute=FakeCompute(),
+    )
+    config = _make_runtime_config()
+    async with Runtime.start_in_band(
+        config,
+        workspace_root=tmp_path / "workspaces",
+        plugin_overrides=overrides,
+        run_worker=False,
+    ) as runtime:
+        with pytest.raises(VerificationError):
+            await runtime.experiments.submit_text(EXPERIMENT_YAML)
+
+
+@pytest.mark.asyncio
 async def test_status_get_raises_for_unknown_cg(tmp_path: Path) -> None:
     overrides = PluginOverrides(
         llm_providers={role: StubLlmProvider() for role in DEFAULT_TASK_ROLES},

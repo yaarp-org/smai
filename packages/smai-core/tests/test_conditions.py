@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from smai_core import ControlledConditions
+import pytest
+from pydantic import ValidationError
+from smai_core import ComputeRequirements, ControlledConditions
 
 
 def _basic() -> ControlledConditions:
@@ -16,6 +18,39 @@ def _basic() -> ControlledConditions:
 def test_basic_validates() -> None:
     cc = _basic()
     assert cc.seeds == [1, 2, 3]
+
+
+def test_compute_defaults_to_gpu_true() -> None:
+    """A YAML without a ``compute`` block keeps the pre-Phase-1 behavior."""
+    cc = _basic()
+    assert cc.compute == ComputeRequirements()
+    assert cc.compute.gpu is True
+
+
+def test_compute_gpu_false_round_trips() -> None:
+    cc = ControlledConditions.model_validate(
+        {
+            "dataset": {"name": "mnist", "split": "train", "version": "v1"},
+            "optimization": {"optimizer": "adam"},
+            "seeds": [1],
+            "compute": {"gpu": False},
+        }
+    )
+    assert cc.compute.gpu is False
+    parsed = ControlledConditions.model_validate(cc.model_dump(mode="json"))
+    assert parsed.compute.gpu is False
+
+
+def test_compute_rejects_unknown_keys() -> None:
+    with pytest.raises(ValidationError):
+        ControlledConditions.model_validate(
+            {
+                "dataset": {"name": "x", "split": "y", "version": "z"},
+                "optimization": {"optimizer": "sgd"},
+                "seeds": [1],
+                "compute": {"gpu": True, "gpu_type": "A100"},  # gpu_type is Phase 2
+            }
+        )
 
 
 def test_with_extras_validates() -> None:
