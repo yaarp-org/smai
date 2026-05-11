@@ -74,7 +74,7 @@ class BedrockProvider:
 
     Constructor::
 
-        BedrockProvider(region="us-east-1", model_id="us.anthropic.claude-opus-4-7-v1")
+        BedrockProvider(region="us-east-1", model_id="us.anthropic.claude-opus-4-6-v1")
         BedrockProvider(
             region="us-east-1",
             model_id="...",

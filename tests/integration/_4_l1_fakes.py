@@ -234,7 +234,7 @@ plugins:
   compute: localgpu
   llm_provider_config:
     region: us-east-1
-    model_id: us.anthropic.claude-opus-4-7-v1
+    model_id: us.anthropic.claude-opus-4-6-v1
   metadata_store_config: {{ uri: "sqlite+aiosqlite:///:memory:" }}
   artifact_store_config: {{}}
   compute_config: {{}}
@@ -256,7 +256,7 @@ plugins:
   compute: localgpu
   llm_provider_config:
     region: us-east-1
-    model_id: us.anthropic.claude-opus-4-7-v1
+    model_id: us.anthropic.claude-opus-4-6-v1
   metadata_store_config: {{ uri: "postgresql+asyncpg://smai:smai@localhost/test" }}
   artifact_store_config: {{ bucket: "test-bucket" }}
   compute_config: {{}}

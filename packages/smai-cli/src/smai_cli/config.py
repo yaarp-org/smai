@@ -176,7 +176,7 @@ def dev_defaults() -> dict[str, Any]:
             "compute": "localgpu",
             "llm_provider_config": {
                 "region": "us-east-1",
-                "model_id": "us.anthropic.claude-opus-4-7-v1",
+                "model_id": "us.anthropic.claude-opus-4-6-v1",
             },
             "metadata_store_config": {
                 # Default in-memory; CLI's `smai dev` overrides with a

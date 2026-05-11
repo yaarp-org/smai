@@ -127,7 +127,7 @@ def test_llm_capabilities_round_trip() -> None:
         supports_caching=True,
         context_window=200_000,
         max_output_tokens=4096,
-        model_id="us.anthropic.claude-opus-4-7-v1",
+        model_id="us.anthropic.claude-opus-4-6-v1",
     )
     assert caps.supports_tool_use is True  # default
     raw = caps.model_dump_json()

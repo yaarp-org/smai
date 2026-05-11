@@ -215,7 +215,7 @@ def test_end_to_end_request_shape_carries_cache_points_and_inference_config() ->
     fake = FakeBedrockClient()
     provider = BedrockProvider(
         region="us-east-1",
-        model_id="us.anthropic.claude-opus-4-7-v1",
+        model_id="us.anthropic.claude-opus-4-6-v1",
         bedrock_client=fake,
         transient_backoff_seconds=0.0,
     )
@@ -244,14 +244,14 @@ def test_end_to_end_request_shape_carries_cache_points_and_inference_config() ->
     # Initial user message has cachePoint appended.
     assert sent["messages"][0]["content"][-1] == {"cachePoint": {"type": "default"}}
     # Model id is what we constructed with.
-    assert sent["modelId"] == "us.anthropic.claude-opus-4-7-v1"
+    assert sent["modelId"] == "us.anthropic.claude-opus-4-6-v1"
 
 
 def test_call_does_not_mutate_input_messages() -> None:
     fake = FakeBedrockClient()
     provider = BedrockProvider(
         region="us-east-1",
-        model_id="us.anthropic.claude-opus-4-7-v1",
+        model_id="us.anthropic.claude-opus-4-6-v1",
         bedrock_client=fake,
         transient_backoff_seconds=0.0,
     )

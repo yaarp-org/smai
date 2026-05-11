@@ -240,6 +240,13 @@ class _SandboxFactory:
         return sandbox
 
     def from_id(self, sandbox_id: str, client: Any = None) -> FakeSandbox:
+        # Modal's real ``Sandbox.from_id`` validates the id shape
+        # client-side and raises ``InvalidError`` for anything that
+        # isn't a ``sb-...`` id — well before any round-trip. Mirror
+        # that so the plugin's malformed-handle → ``JobNotFound``
+        # translation is exercised by tests.
+        if not sandbox_id.startswith("sb-"):
+            raise FakeInvalidError(f"{sandbox_id!r} is not a valid Sandbox ID.")
         try:
             return self._fake._sandboxes[sandbox_id]  # noqa: SLF001
         except KeyError as exc:

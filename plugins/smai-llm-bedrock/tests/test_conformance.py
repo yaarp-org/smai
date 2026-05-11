@@ -31,7 +31,7 @@ class TestBedrockConformance(LlmProviderConformance):
     def make_provider(self) -> BedrockProvider:
         return BedrockProvider(
             region="us-east-1",
-            model_id="us.anthropic.claude-opus-4-7-v1",
+            model_id="us.anthropic.claude-opus-4-6-v1",
             bedrock_client=FakeBedrockClient(),
             # Fast-forward the §4.5 retry-once 30s backoff so the
             # ``test_transient_retry_once`` contract runs under a

@@ -121,7 +121,7 @@ async def test_multi_turn_loop_terminates_via_finish(tmp_path: Path) -> None:
     )
     provider = BedrockProvider(
         region="us-east-1",
-        model_id="us.anthropic.claude-opus-4-7-v1",
+        model_id="us.anthropic.claude-opus-4-6-v1",
         bedrock_client=fake,
         transient_backoff_seconds=0.0,
     )
@@ -170,11 +170,11 @@ async def test_truncation_fires_before_provider_call(tmp_path: Path) -> None:
         context_window=4_000,
         max_output_tokens=1_024,
         supports_tool_use=True,
-        model_id="us.anthropic.claude-opus-4-7-v1",
+        model_id="us.anthropic.claude-opus-4-6-v1",
     )
     provider = BedrockProvider(
         region="us-east-1",
-        model_id="us.anthropic.claude-opus-4-7-v1",
+        model_id="us.anthropic.claude-opus-4-6-v1",
         bedrock_client=fake,
         capabilities=capabilities,
         transient_backoff_seconds=0.0,
@@ -281,7 +281,7 @@ async def test_retry_context_writes_workspace_file(tmp_path: Path) -> None:
 
     provider = BedrockProvider(
         region="us-east-1",
-        model_id="us.anthropic.claude-opus-4-7-v1",
+        model_id="us.anthropic.claude-opus-4-6-v1",
         bedrock_client=fake,
         transient_backoff_seconds=0.0,
     )

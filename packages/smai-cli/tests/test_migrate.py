@@ -50,7 +50,7 @@ def _write_smai_yaml(
             "compute": "localgpu",
             "llm_provider_config": {
                 "region": "us-east-1",
-                "model_id": "us.anthropic.claude-opus-4-7-v1",
+                "model_id": "us.anthropic.claude-opus-4-6-v1",
             },
             "metadata_store_config": {
                 "uri": f"sqlite+aiosqlite:///{sqlite_path}",
@@ -107,6 +107,37 @@ def test_migrate_is_idempotent(smai_home: Path) -> None:
     second = runner.invoke(app, ["migrate", "-c", str(smai_yaml)])
     assert second.exit_code == 0
     assert "schema upgraded to head" in second.output
+
+
+def test_migrate_warns_when_resolved_store_is_in_memory(smai_home: Path) -> None:
+    """A smai.yaml with an empty ``metadata_store_config`` resolves to an
+    in-memory SQLite database (the `smai init` shape). `smai migrate`
+    still succeeds but warns loudly that the effect is transient."""
+    cfg = {
+        "engine": {"poll_interval_seconds": 10, "worker_count": 1, "fair_scheduling": "off"},
+        "plugins": {
+            "llm_provider": "bedrock",
+            "metadata_store": "sqlite",
+            "artifact_store": "localfs",
+            "compute": "localgpu",
+            "llm_provider_config": {
+                "region": "us-east-1",
+                "model_id": "us.anthropic.claude-opus-4-6-v1",
+            },
+            "metadata_store_config": {},
+            "artifact_store_config": {},
+            "compute_config": {},
+        },
+        "pipelines": ["smai_cg_execution", "smai_cg_entries"],
+    }
+    smai_yaml = smai_home / "smai.yaml"
+    smai_yaml.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+    runner = CliRunner()
+    result = runner.invoke(app, ["migrate", "-c", str(smai_yaml)])
+    assert result.exit_code == 0, result.output
+    combined = (result.output or "") + (result.stderr or "")
+    assert "in-memory" in combined
+    assert "no lasting effect" in combined
 
 
 def test_migrate_check_exits_one_on_empty_db(smai_home: Path) -> None:

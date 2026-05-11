@@ -7,7 +7,7 @@ stay inside plugin code, never leak to agent code) and DEC-020.
 Bedrock Converse request shape (subset relevant here)::
 
     {
-      "modelId": "us.anthropic.claude-opus-4-7-v1",
+      "modelId": "us.anthropic.claude-opus-4-6-v1",
       "system": [{"text": "..."}, {"cachePoint": {"type": "default"}}?],
       "messages": [
         {"role": "user", "content": [

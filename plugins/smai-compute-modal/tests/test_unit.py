@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import pytest
 from _modal_fakes import (  # type: ignore[import-not-found]
+    FakeInvalidError,
     FakeModal,
     FakeNotFoundError,
     make_fake_with_bad_image,
@@ -411,7 +412,28 @@ def test_not_found_error_detection_recognizes_modal_shapes() -> None:
     assert _is_not_found_error(FakeNotFoundError("sandbox not found"))
     # String-fallback for non-typed runtimes
     assert _is_not_found_error(RuntimeError("no such sandbox: sb-foo"))
+    # A malformed sandbox id rejected client-side (`InvalidError`) counts
+    # as "no such sandbox" — the substrate has no record of a
+    # syntactically invalid handle (this is the `smai verify` probe path).
+    assert _is_not_found_error(
+        FakeInvalidError("'smai-verify-probe-handle' is not a valid Sandbox ID.")
+    )
+    # ...but other InvalidError messages must NOT be swallowed as not-found.
+    assert not _is_not_found_error(FakeInvalidError("'A100x' is not a valid GPU type."))
     assert not _is_not_found_error(ValueError("totally unrelated"))
+
+
+async def test_status_with_malformed_handle_raises_job_not_found() -> None:
+    """A handle whose id isn't a ``sb-...`` Sandbox ID (e.g. the one
+    ``smai verify`` probes with) surfaces as :class:`JobNotFound`, not
+    :class:`ComputeUnavailable` — Modal's ``Sandbox.from_id`` rejects it
+    client-side with ``InvalidError`` and the plugin translates that to
+    the §7.2 not-found shape so the verify probe passes on valid creds.
+    """
+    compute = _new_compute()
+    handle = JobHandle(plugin="modal", handle="smai-verify-probe-handle-that-does-not-exist")
+    with pytest.raises(JobNotFound):
+        await compute.status(handle)
 
 
 async def test_submit_with_cpu_and_memory_passes_through() -> None:

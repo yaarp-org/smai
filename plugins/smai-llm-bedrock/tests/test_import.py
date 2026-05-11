@@ -24,7 +24,7 @@ def test_bedrock_provider_runtime_checkable_against_protocol() -> None:
 
     instance = BedrockProvider(
         region="us-east-1",
-        model_id="us.anthropic.claude-opus-4-7-v1",
+        model_id="us.anthropic.claude-opus-4-6-v1",
         bedrock_client=FakeBedrockClient(),
     )
     assert isinstance(instance, LlmProvider)

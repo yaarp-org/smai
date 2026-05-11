@@ -365,7 +365,29 @@ Postgres + S3 wiring; tracked in §8 backlog).
 
 ---
 
-## 7. Cross-references
+## 7. Plugin substrate notes
+
+Per-plugin credential and environment requirements are tabulated in
+`README.md` "Configuration" (the per-plugin `*_config` key table). Two
+that bite in practice:
+
+- **Modal compute needs `python` (not just `python3`) on `PATH`.** The
+  Modal SDK shells out to a bare `python` for some operations.
+  `uv run smai start ...` puts one there, and so does a virtualenv with
+  the usual `python` symlink, but a system that only has `python3` will
+  fail with `python: command not found` from inside the SDK. If your
+  service unit runs `smai` from a bare interpreter, either invoke it via
+  `uv run` / an activated venv, or symlink `python` -> `python3` on the
+  service account's `PATH`.
+- **Bedrock needs model access granted, not just AWS credentials.** A
+  working credential chain still gets `AccessDeniedException: <model> is
+  not available for this account` until the model is enabled in the
+  Bedrock console for that region. `smai verify` surfaces this with a
+  hint pointing at `aws bedrock list-inference-profiles --region <r>`.
+
+---
+
+## 8. Cross-references
 
 - `designs/smai/09-cli.md` §6 — `smai start` verb shape + required
   config + failure modes.

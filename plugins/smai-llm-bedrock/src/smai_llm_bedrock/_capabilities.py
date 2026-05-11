@@ -24,13 +24,17 @@ from smai_core.plugins import LlmCapabilities
 # Diverges from v1's ``MODEL_REGISTRY`` (which only enabled caching for
 # Claude / Nova) — task spec is authoritative.
 _BEDROCK_CAPABILITIES: dict[str, LlmCapabilities] = {
-    # Claude — full Bedrock Converse + cachePoint support
-    "us.anthropic.claude-opus-4-7-v1": LlmCapabilities(
+    # Claude — full Bedrock Converse + cachePoint support. The catalog
+    # inference-profile ID for Opus 4.7 is ``us.anthropic.claude-opus-4-7``
+    # (no ``-v1`` suffix); ``supports_caching=True`` is assumed by parity
+    # with Opus 4.6 (which caches via ``cachePoint``) — re-verify once the
+    # profile is granted in the target account.
+    "us.anthropic.claude-opus-4-7": LlmCapabilities(
         supports_caching=True,
         context_window=200_000,
         max_output_tokens=16_384,
         supports_tool_use=True,
-        model_id="us.anthropic.claude-opus-4-7-v1",
+        model_id="us.anthropic.claude-opus-4-7",
     ),
     "us.anthropic.claude-opus-4-6-v1": LlmCapabilities(
         supports_caching=True,

@@ -178,6 +178,34 @@ async def test_verify_llm_provider_fails_on_raise() -> None:
     assert result.ok is False
     assert "RuntimeError" in result.reason
     assert "bedrock 403" in result.reason
+    # Generic errors get no extra hint appended.
+    assert "hint:" not in result.reason
+
+
+@pytest.mark.asyncio
+async def test_verify_llm_provider_hint_on_invalid_model_id() -> None:
+    """A Bedrock ``ValidationException: The provided model identifier is
+    invalid`` failure gets an actionable hint about inference-profile IDs."""
+    provider = _RaisingLlmProvider(
+        RuntimeError("ValidationException: The provided model identifier is invalid.")
+    )
+    result = await verify_llm_provider(provider)
+    assert result.ok is False
+    assert "list-inference-profiles" in result.reason
+
+
+@pytest.mark.asyncio
+async def test_verify_llm_provider_hint_on_model_not_granted() -> None:
+    """A Bedrock ``AccessDeniedException: <model> is not available for this
+    account`` failure gets a hint about granting model access in the console."""
+    provider = _RaisingLlmProvider(
+        RuntimeError(
+            "AccessDeniedException: anthropic.claude-opus-4-7 is not available for this account."
+        )
+    )
+    result = await verify_llm_provider(provider)
+    assert result.ok is False
+    assert "Model access" in result.reason
 
 
 # === verify_metadata_store ===================================================

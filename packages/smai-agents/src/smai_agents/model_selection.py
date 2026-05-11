@@ -49,14 +49,14 @@ TaskRole = Literal[
 # single-call roles) per DEC-005's Bedrock-first stance and §4's
 # "preserve v1's 'Opus for everything that matters' pattern" comment.
 TASK_DEFAULTS: dict[TaskRole, tuple[str, str]] = {
-    "planner": ("bedrock", "us.anthropic.claude-opus-4-7-v1"),
-    "harness_builder": ("bedrock", "us.anthropic.claude-opus-4-7-v1"),
-    "technique_implementer": ("bedrock", "us.anthropic.claude-opus-4-7-v1"),
-    "code_reviewer": ("bedrock", "us.anthropic.claude-opus-4-7-v1"),
-    "contextual_evaluator": ("bedrock", "us.anthropic.claude-sonnet-4-7-v1"),
-    "supervisor": ("bedrock", "us.anthropic.claude-sonnet-4-7-v1"),
-    "screener": ("bedrock", "us.anthropic.claude-sonnet-4-7-v1"),
-    "enricher": ("bedrock", "us.anthropic.claude-sonnet-4-7-v1"),
+    "planner": ("bedrock", "us.anthropic.claude-opus-4-6-v1"),
+    "harness_builder": ("bedrock", "us.anthropic.claude-opus-4-6-v1"),
+    "technique_implementer": ("bedrock", "us.anthropic.claude-opus-4-6-v1"),
+    "code_reviewer": ("bedrock", "us.anthropic.claude-opus-4-6-v1"),
+    "contextual_evaluator": ("bedrock", "us.anthropic.claude-sonnet-4-6"),
+    "supervisor": ("bedrock", "us.anthropic.claude-sonnet-4-6"),
+    "screener": ("bedrock", "us.anthropic.claude-sonnet-4-6"),
+    "enricher": ("bedrock", "us.anthropic.claude-sonnet-4-6"),
 }
 
 

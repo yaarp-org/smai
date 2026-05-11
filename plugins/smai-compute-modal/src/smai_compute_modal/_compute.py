@@ -579,18 +579,36 @@ def _is_image_pull_error(exc: BaseException) -> bool:
 
 
 def _is_not_found_error(exc: BaseException) -> bool:
-    """True iff an exception from a Sandbox lookup is "no such sandbox".
+    """True iff an exception from a Sandbox lookup means "no such sandbox".
 
-    Modal raises :class:`modal.exception.NotFoundError` when
-    ``Sandbox.from_id`` is given an unknown id. We also accept any
-    exception whose stringified form contains "not found" as a
-    permissive fallback — the SDK's typed exception hierarchy is
-    version-sensitive and string-matching is the safest belt.
+    Two shapes are covered:
+
+    * :class:`modal.exception.NotFoundError` — Modal raises this when
+      ``Sandbox.from_id`` is given a well-formed id the substrate has
+      no record of.
+    * :class:`modal.exception.InvalidError` whose message says the id
+      isn't a valid Sandbox ID — ``Sandbox.from_id`` rejects malformed
+      ids (anything not shaped like ``sb-...``) client-side, before any
+      round-trip. The substrate has, by definition, no record of a
+      syntactically invalid handle, so this satisfies the `07` §7.2
+      ``JobNotFound`` contract — and it lets ``smai verify``'s
+      read-only ``status`` probe (which uses a deliberately-bogus
+      handle) pass against valid Modal credentials instead of failing
+      with a wrapped :class:`ComputeUnavailable`.
+
+    A trailing ``"not found"`` substring match stays as a permissive
+    belt — the SDK's typed exception hierarchy is version-sensitive and
+    string-matching is the safest fallback. Class-name checks use a
+    suffix match (same approach as :func:`_is_image_pull_error`) so
+    test fakes (``FakeNotFoundError`` / ``FakeInvalidError``) and any
+    wrapped subclass are recognized too.
     """
     cls_name = type(exc).__name__
-    if cls_name == "NotFoundError":
+    if cls_name.endswith("NotFoundError"):
         return True
     msg = str(exc).lower()
+    if cls_name.endswith("InvalidError") and "not a valid" in msg and "sandbox" in msg:
+        return True
     return "not found" in msg or "no such sandbox" in msg
 
 

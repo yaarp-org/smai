@@ -35,6 +35,7 @@ import base64
 import json
 from contextlib import AbstractAsyncContextManager
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import uuid4
 
@@ -70,6 +71,7 @@ from sqlalchemy import (
     exists,
     func,
     insert,
+    make_url,
     not_,
     or_,
     select,
@@ -678,7 +680,20 @@ class SqliteStore:
     def __init__(self, uri: str = DEFAULT_URI) -> None:
         # ``future=True`` is the SQLAlchemy 2.0 default; the explicit
         # ``echo=False`` keeps SQL out of pytest captures.
-        self._engine: AsyncEngine = create_async_engine(uri, echo=False, future=True)
+        url = make_url(uri)
+        db = url.database
+        if db and db != ":memory:":
+            # File-backed URI: expand ``~`` and ensure the parent
+            # directory exists. ``smai dev`` / ``smai ui`` already pass an
+            # absolute path under ``~/.smai`` (and create the dir), but
+            # ``smai migrate`` / ``smai start`` / ``smai verify`` use the
+            # ``smai.yaml`` value verbatim — so a hand-written
+            # ``metadata_store_config: {uri: sqlite+aiosqlite:///~/db}``
+            # would otherwise fail with "unable to open database file".
+            resolved = Path(db).expanduser()
+            resolved.parent.mkdir(parents=True, exist_ok=True)
+            url = url.set(database=str(resolved))
+        self._engine: AsyncEngine = create_async_engine(url, echo=False, future=True)
 
     async def migrate(self) -> None:
         """Apply boot-time DDL via Alembic upgrade-to-head.

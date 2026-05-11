@@ -79,6 +79,34 @@ def _format_exception(exc: BaseException) -> str:
     return f"{type(exc).__name__}: {exc}"
 
 
+def _llm_failure_hint(exc: BaseException) -> str:
+    """Actionable hint appended to an LLM-probe failure reason.
+
+    Bedrock's two most common ``smai verify`` failures are an invalid
+    inference-profile ID (``ValidationException: The provided model
+    identifier is invalid``) and an ungranted model
+    (``AccessDeniedException: <model> is not available for this
+    account``). Both look the same from a config-typo standpoint — the
+    region is fine, the creds are fine, the ``model_id`` is wrong or not
+    enabled — so a one-line pointer shortens the debug loop. Returns
+    ``""`` when the error doesn't match (so non-Bedrock providers and
+    real network/auth failures are unaffected).
+    """
+    msg = str(exc).lower()
+    if "model identifier is invalid" in msg or "provided model identifier" in msg:
+        return (
+            " (hint: that doesn't look like a valid model ID for this provider/region; "
+            "for Bedrock, model_id must be an inference-profile ID, listed by "
+            "`aws bedrock list-inference-profiles --region <region>`)"
+        )
+    if "not available for this account" in msg or ("accessdenied" in msg and "model" in msg):
+        return (
+            " (hint: the model ID is recognized but not enabled for this account/region; "
+            "grant model access in the Bedrock console under 'Model access', then retry)"
+        )
+    return ""
+
+
 async def verify_llm_provider(provider: LlmProvider) -> VerifyResult:
     """Issue a single 1-token completion to surface auth + network.
 
@@ -86,7 +114,9 @@ async def verify_llm_provider(provider: LlmProvider) -> VerifyResult:
     ``smai verify`` verb's ``--help`` documents this. A fail here
     surfaces :class:`LlmProviderAuthError`, network errors, or a
     region/model-id mismatch — every failure mode that would otherwise
-    only manifest mid-dispatch when an agent loop fired.
+    only manifest mid-dispatch when an agent loop fired. A model-id /
+    model-access failure additionally gets an :func:`_llm_failure_hint`
+    pointer appended.
     """
     started = time.monotonic()
     try:
@@ -100,7 +130,7 @@ async def verify_llm_provider(provider: LlmProvider) -> VerifyResult:
     except Exception as exc:  # noqa: BLE001 — every plugin error type funnels here
         return VerifyResult(
             ok=False,
-            reason=_format_exception(exc),
+            reason=_format_exception(exc) + _llm_failure_hint(exc),
             latency_ms=(time.monotonic() - started) * 1000,
         )
     return VerifyResult(
@@ -177,7 +207,11 @@ async def verify_compute(compute: Compute) -> VerifyResult:
     in particular treats a missing PID as a no-op success per the
     Protocol's "must not block waiting for state changes" wording. We
     accept both as success: the probe established that the substrate
-    accepted the call without raising an unexpected error.
+    accepted the call without raising an unexpected error. Plugins that
+    validate the handle id client-side (e.g. ``ModalCompute``, whose
+    ``Sandbox.from_id`` rejects the bogus probe handle before any
+    round-trip) translate that to :class:`JobNotFound` per `07` §7.2,
+    so the probe still establishes "creds + substrate reachable".
     """
     started = time.monotonic()
     handle = JobHandle(plugin=compute.name, handle=_VERIFY_PROBE_HANDLE)

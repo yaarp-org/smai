@@ -160,7 +160,7 @@ def _write_smai_yaml_for_start(
             "compute": "localgpu",
             "llm_provider_config": {
                 "region": "us-east-1",
-                "model_id": "us.anthropic.claude-opus-4-7-v1",
+                "model_id": "us.anthropic.claude-opus-4-6-v1",
             },
             "metadata_store_config": {
                 "uri": f"sqlite+aiosqlite:///{sqlite_path}",

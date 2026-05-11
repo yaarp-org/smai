@@ -76,7 +76,7 @@ def _bedrock_safe_config() -> dict[str, Any]:
     """
     return {
         "region": "us-east-1",
-        "model_id": "us.anthropic.claude-opus-4-7-v1",
+        "model_id": "us.anthropic.claude-opus-4-6-v1",
         "bedrock_client": _FakeBedrockClient(),
         "sleep": _no_sleep,
     }

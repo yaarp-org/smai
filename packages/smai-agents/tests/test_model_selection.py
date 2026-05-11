@@ -29,8 +29,8 @@ def test_task_defaults_covers_all_eight_roles() -> None:
 
 
 def test_task_defaults_heavy_roles_use_opus() -> None:
-    """§4 verbatim: planner / harness_builder / technique_implementer /
-    code_reviewer all default to claude-opus-4-7-v1."""
+    """§4: planner / harness_builder / technique_implementer /
+    code_reviewer all default to the Opus tier (claude-opus-4-6-v1)."""
     for role in (
         "planner",
         "harness_builder",
@@ -39,12 +39,12 @@ def test_task_defaults_heavy_roles_use_opus() -> None:
     ):
         provider, model_id = TASK_DEFAULTS[role]
         assert provider == "bedrock"
-        assert model_id == "us.anthropic.claude-opus-4-7-v1"
+        assert model_id == "us.anthropic.claude-opus-4-6-v1"
 
 
 def test_task_defaults_bounded_roles_use_sonnet() -> None:
-    """§4 verbatim: contextual_evaluator / supervisor / screener / enricher
-    use claude-sonnet-4-7-v1 (bounded single-call roles)."""
+    """§4: contextual_evaluator / supervisor / screener / enricher use
+    the Sonnet tier (claude-sonnet-4-6) — bounded single-call roles."""
     for role in (
         "contextual_evaluator",
         "supervisor",
@@ -53,7 +53,7 @@ def test_task_defaults_bounded_roles_use_sonnet() -> None:
     ):
         provider, model_id = TASK_DEFAULTS[role]
         assert provider == "bedrock"
-        assert model_id == "us.anthropic.claude-sonnet-4-7-v1"
+        assert model_id == "us.anthropic.claude-sonnet-4-6"
 
 
 # --- Resolution order ---------------------------------------------------------
@@ -103,8 +103,8 @@ def test_falls_through_to_task_defaults() -> None:
 def test_env_var_strips_whitespace() -> None:
     """``"  bedrock  :  modelid  "`` is a real value users set; whitespace
     around the separator should not break the parser."""
-    env = {"SMAI_MODEL_PLANNER": " bedrock : us.anthropic.claude-opus-4-7-v1 "}
+    env = {"SMAI_MODEL_PLANNER": " bedrock : us.anthropic.claude-opus-4-6-v1 "}
     assert get_model_for_task("planner", env=env) == (
         "bedrock",
-        "us.anthropic.claude-opus-4-7-v1",
+        "us.anthropic.claude-opus-4-6-v1",
     )

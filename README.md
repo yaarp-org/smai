@@ -1,105 +1,412 @@
 # SMAI
 
-> Methodology-as-infrastructure for **comparative-claim ML research**.
-> Definition in, verdict out — with the metric, the factor structure, and
-> the verdict path locked at compile time.
+> Methodology-as-infrastructure for comparative-claim ML research.
+> **Definition in, verdict out** — with the metric, the factor structure,
+> and the verdict path locked at compile time.
 
 SMAI is the experiment-execution stage that an outer auto-research
-pipeline — an "AI scientist" loop — plugs into when the question is
-**comparative** ("does technique X beat technique Y under matched
-conditions?"). It is *not* an idea generator, not a writeup tool, and
-not a hill-climbing optimizer — peer territory to those, with a
-different shape.
+pipeline — an "AI scientist" loop — hands off to when its question turns
+**comparative**: *does technique X beat technique Y under matched
+conditions?* It is not an idea generator, not a writeup tool, and not a
+hill-climbing optimizer; those belong to the outer loop. SMAI's job is
+narrower and, by construction, harder to fool: take a comparative claim,
+verify it's even answerable, run the experiment, and return a verdict
+the agent that did the work could not have nudged.
 
-### Why an AI scientist needs this
+> _**Diagram — where SMAI fits.** The outer AI scientist loop (proposes
+> ideas → decides what to test → writes things up) with SMAI slotted in
+> as the "execute this comparative experiment" stage: a definition flows
+> in, a boolean verdict plus a content-hashed artifact set flow out._
 
-A long-horizon novel-research agent is a stack of LLM turns, each one
-cheap to nudge in a direction that makes the result look better.
-Without external structure, a few characteristic failure modes show up
-reliably:
-
-- **Metric drift** — the agent reframes what it's measuring mid-run
-  when early results disappoint, so "we passed" ends up true under a
-  metric the agent didn't set out to test.
-- **Confounding** — two things change between baseline and treatment,
-  and the agent attributes the delta to its preferred change.
-- **Hill-climbing dressed up as comparison** — hyperparameters get
-  ratcheted until a threshold clears, rather than to test the
-  hypothesis. The implementer is its own judge.
-- **Pipeline-encoding masquerading as comparison** — "we ran X then Y
-  then Z" gets reported as if it were a controlled comparative
-  experiment, even though no comparison ever happened.
-- **Loss of provenance** — at hour six of an agent loop, the
-  experiment being executed is no longer the one defined at hour one;
-  intermediate turns silently rewrote it, and there's no immutable
-  trail.
-
-SMAI is the structural infrastructure that closes those off. The outer
-AI scientist still does the open-ended work — proposing ideas,
-deciding what to test next, writing things up. SMAI takes over the
-moment the question becomes "did this beat that under matched
-conditions?" and returns a verdict the AI scientist could not have
-nudged.
-
-The unit of value is a small set of guarantees, not a feature list:
-
-- **Compile-time verification** — confounded experiments fail to
-  compile. Factor exclusivity, control completeness, metric
-  well-formedness, comparability of entries, and "this looks like a
-  sequential pipeline pretending to be a comparison" are all
-  mechanically checked before any code runs.
-- **Runtime determinism** — the path from raw multi-seed metrics to a
-  boolean verdict has no LLM in it. The metric is fixed at compile
-  time; the aggregation rule is fixed; the agent that wrote the
-  implementation never sees the verdict criterion. Self-grading is
-  structurally impossible.
-- **Contracts as the locked surface** — the DSL compiler emits four
-  immutable JSON artifacts (`ExperimentPlan`, `HarnessContract`,
-  `TechniqueContract[]`, `ValidationConfig`), each content-hashed and
-  parented to its predecessor. Agents read them; nothing rewrites them
-  mid-flight. The audit trail is reproducible by construction.
-
-This repo is the **OSS surface**: methodology layer, agent loops,
-orchestrator, runtime, CLI, the four reference plugin interfaces with
-local + production implementations, plus a JSON HTTP API and a React
-SPA that consume the same in-process `Runtime`.
-
-What v2 OSS ships:
-
-- **Methodology + pipeline.** `smai-core` (compile + evaluate),
-  `smai-runtime`, `smai-agents`, `smai-orchestrator`, and a
-  3 LLM × 2 metadata-store × 2 artifact-store × 3 compute plugin matrix.
-- **`smai ui` verb.** One process, one URL: FastAPI JSON API at
-  `/api/v1/...` plus the built React SPA at `/`. Auto-detects whether
-  to run an in-process worker from the configured plugin shape.
-- **Shared HTTP contract.** Pydantic models, URL constants, and an
-  error taxonomy in `smai-api-spec`; a parameterizable pytest suite in
-  `smai-api-conformance` so any second implementation stays parity-checked.
-- **Real-time updates.** `GET /api/v1/events` Server-Sent Events,
-  fed in-process for sqlite deployments and via Postgres `LISTEN/NOTIFY`
-  for production. The SPA treats events as TanStack Query cache
-  invalidations.
-
-> **Status: private pre-release.** APIs may break without notice. PyPI
-> distribution and a public docs site are gated on an explicit user
-> decision; until that gate is flipped, install from the local workspace
-> via `uv sync`. Apache 2.0 licensed.
+> **Status — private pre-release.** APIs may break without notice. PyPI
+> distribution and a public docs site are gated on an explicit decision;
+> until that gate is flipped, install from the local workspace with
+> `uv sync`. Apache 2.0 licensed.
 
 ---
 
-## How `smai-core` works
+## Why an AI scientist needs this
 
-The methodology layer is one library: `smai-core`. It has no agents in
-it, no network calls, and no orchestrator. It does four things, in
-order: take a definition, verify it's answerable, emit immutable
-contracts, and — once raw metrics exist — produce a verdict.
+A long-horizon research agent is a stack of LLM turns, and every turn is
+cheap to nudge toward a result that looks better than it is. Left
+unstructured, a handful of failure modes show up reliably:
 
-### 1. The research agent writes an experiment definition
+- the agent quietly reframes what it's measuring once early numbers
+  disappoint, so "we passed" ends up true under a metric nobody set out
+  to test;
+- two things change between baseline and treatment, and the delta gets
+  pinned on whichever change the agent was rooting for;
+- hyperparameters get ratcheted until a threshold clears — hill-climbing
+  in the costume of a controlled comparison, with the implementer as its
+  own judge;
+- "we ran X, then Y, then Z" gets written up as if a comparison had
+  happened, when no comparison ever did;
+- six hours into the loop, the experiment actually running is no longer
+  the one defined at hour one — intermediate turns rewrote it, and
+  nothing kept the receipts.
 
-The definition pins the comparative claim down to a verifiable shape:
-*one factor* that varies across entries, *all the other variables*
-held fixed, *the metric* that decides it, and *which entry is the
-baseline*. The shape in YAML is roughly:
+These are exactly the failures that pre-defined RL-style environments
+guarded against, and exactly the ones that purely agent-driven research
+systems have been documented giving back up. SMAI is the structure that
+closes them off *without* surrendering the open-endedness: the outer
+agent keeps doing all the creative work; SMAI owns only the stretch
+where a claim becomes a verdict.
+
+What that buys you is a short list of guarantees, not a feature list:
+
+**Confounded experiments fail to compile.** Factor exclusivity, control
+completeness, metric well-formedness, comparability of the entries being
+compared, and "this looks suspiciously like a sequential pipeline
+pretending to be an experiment" are all mechanically checked before any
+code runs.
+
+**The verdict path has no LLM in it.** The metric is fixed at compile
+time; the aggregation rule is fixed; the agent that wrote the
+implementation never sees the verdict criterion. Self-grading isn't
+discouraged — it's structurally impossible.
+
+**The contracts are the locked surface.** Compiling a definition emits
+four immutable JSON artifacts, each content-hashed and parented to its
+predecessor. Agents read them; nothing rewrites them mid-flight. The
+audit trail is reproducible by construction.
+
+---
+
+## How it works
+
+SMAI is two layers, and the seam between them is deliberate.
+
+**The methodology layer is one library: `smai-core`.** No agents, no
+network, no orchestrator — `pydantic` + `jsonschema` + stdlib is the
+entire dependency list. It does four things, in order: take an
+experiment definition, verify the claim is answerable, emit the
+immutable contracts, and — once raw multi-seed metrics exist, from
+wherever — produce the verdict. That's the whole API surface:
+`compile_experiment(...)`, then `evaluate(...)`.
+
+**The pipeline layer is everything that produces those raw metrics for
+you.** Agents draft the definition, write the harness, fill in each
+technique implementation, and review the diffs; an orchestrator drives
+the state machines and the worker loop; four plugin interfaces wire it
+to an LLM, a metadata store, an artifact store, and compute. None of
+this is load-bearing for the *guarantees* — those live in `smai-core`,
+enforced at the package boundary — which is precisely why you can drop
+the pipeline and run `smai-core` against your own infrastructure.
+
+The two split this way because they have opposite shapes. `smai-core` is
+*atomic*: pull out a piece and the others' guarantees break, so it ships
+as a single tightly-scoped package. The pipeline is *composable*: every
+piece is independently useful, and the two canonical integration
+patterns — "deep delegation" and "library only" — fall straight out of
+that asymmetry.
+
+> _**Diagram — the two layers + the contract chain.** `smai-core` as a
+> small sealed box (`compile` → 4 contracts; `evaluate` → verdict), with
+> the pipeline layer (planner / harness builder / technique implementer /
+> code reviewer, orchestrator, the 4 plugins) wrapped around it. Arrows
+> show which agent reads which contract — and, crucially, that no arrow
+> runs from `ValidationConfig` to the technique implementer._
+
+### The contract chain
+
+A definition pins a comparative claim down to a verifiable shape: *one
+factor* that varies across entries, *every other variable* held fixed,
+*the metric* that decides it, and *which entry is the baseline*.
+`compile_experiment` checks that shape against several dozen mechanical
+rules and, if it holds, emits four contracts:
+
+- **`ExperimentPlan`** — the input definition, made canonical, plus an
+  envelope. The faithful design-time record.
+- **`HarnessContract`** — what the harness substrate must expose: the
+  factor is the one variable it *doesn't* fix; everything else from
+  `controlled_conditions` is flattened into `fixed_variables`, with the
+  required metrics and the no-go zones spelled out.
+- **`TechniqueContract[]`** — one per entry, each parented to the
+  harness it must conform to, carrying only that entry's technique id
+  and params.
+- **`ValidationConfig`** — the metric, direction, aggregation rule, and
+  comparison rule + threshold. The single thing `evaluate` consumes
+  besides the raw metrics — and the one contract the implementer never
+  sees.
+
+Every artifact's envelope carries its own content hash and its parent's,
+so any downstream consumer — the code-reviewer agent included — can
+prove what it's reading against. "What is this experiment really
+comparing, and how will it be judged?" is answered by these artifacts,
+never by re-reading the YAML.
+
+Once technique implementations pass code review, the rest is mechanical:
+the orchestrator runs the seeds, collects the raw metrics, and calls
+`evaluate(validation_config, raw_metrics)` — a pure function, no LLM, no
+agent, byte-equal-deterministic across runs — which returns `pass`,
+`fail`, or `inconclusive` with the intermediates attached. That boolean
+is the output of the whole thing: did the experiment validate the
+hypothesis?
+
+### What ships in this repo
+
+The OSS surface, Apache 2.0: the `smai-core` methodology layer, the
+agent loops, the orchestrator engine, the runtime, the `smai` CLI, four
+reference plugin interfaces with both a local and a production
+implementation behind each, and — new in v2 — a JSON HTTP API plus a
+React SPA that both consume the same in-process `Runtime`. The
+local↔production swap (SQLite→Postgres, local filesystem→S3, local
+GPU→Modal/RunPod) is a config change, not a code change.
+
+---
+
+## Quick start
+
+Requires [`uv`](https://docs.astral.sh/uv/) and Python 3.11+.
+
+```bash
+git clone <repo-url> smai && cd smai
+uv sync                 # install the workspace (editable) + dev deps
+uv run pytest           # ~2100 tests, ~100s warm
+```
+
+Boot the laptop deployment with the web UI:
+
+```bash
+# Dev defaults: SQLite + local filesystem + local-GPU Docker + Bedrock
+# (us.anthropic.claude-opus-4-6-v1 in us-east-1). Have AWS creds in the
+# default chain and model access granted in the Bedrock console for that
+# model/region, or point at Anthropic / OpenAI instead (see Configuration).
+$ uv run smai ui
+smai ui: starting in-process worker (sqlite metadata store detected).
+         Listening on http://127.0.0.1:8000/
+```
+
+Open `http://127.0.0.1:8000/`. The dashboard shows live state and a
+recent-activity feed; updates arrive over SSE, no polling:
+
+```
++------------------------------------------------------------+
+|  SMAI                                       [v 0.1.0]      |
++------------------------------------------------------------+
+|  Comparison groups        Proposals        Papers          |
+|  cg_01J7PA8K... [running]    prop_xyz       arxiv:2103.x   |
+|  cg_01J7PA8L... [complete]   [designed]     [registered]   |
+|                                                            |
+|  Recent activity (live)                                    |
+|   17:23:11  cg_01J7PA8K... implementing -> implemented     |
+|   17:23:14  prop_xyz       designing    -> designed        |
++------------------------------------------------------------+
+```
+
+In another terminal, submit an experiment and watch it run:
+
+```bash
+$ uv run smai run tests/fixtures/experiments/cutout_on_cifar10.yaml --watch
+cg_01J7PA8K2X9F4ZB6QH4N0P1234: complete
+```
+
+It shows up in the UI the instant the write commits. Two adjacent verbs
+are worth knowing now: `smai dev` is the headless equivalent of
+`smai ui` — same plugin set, no API, no SPA — for a browser-less
+session; and `smai compile experiment.yaml` runs *only* the methodology
+layer, emitting the four contracts to stdout without touching the
+metadata store or compute.
+
+### Before you run
+
+`smai compile` needs nothing. Everything else dispatches real agent
+calls and (eventually) real compute, so it needs whatever the selected
+plugins need. The dev defaults (`smai dev` / `smai ui`) need:
+
+- **AWS credentials** in the default chain (`~/.aws/...`, env vars, or
+  an instance role), **and Bedrock model access granted** in the AWS
+  console for the configured model + region. A bare credential chain
+  is not enough; an ungranted model fails with
+  `AccessDeniedException: ... is not available for this account`.
+- **Docker running locally**, with the `smai-runtime:dev` and
+  `smai-agent:dev` images built. SMAI does not publish these; build
+  them yourself (see `CONTRIBUTING.md`).
+
+Pointing at a different plugin set changes the requirements: Anthropic
+needs `ANTHROPIC_API_KEY`; OpenAI needs `OPENAI_API_KEY` (and the SDK
+requires it *at construction*, so even `smai verify` fails without it);
+Modal needs `~/.modal.toml` or `MODAL_TOKEN_ID` + `MODAL_TOKEN_SECRET`;
+RunPod needs `RUNPOD_API_KEY`; S3 needs the AWS chain plus a
+pre-existing bucket. The per-plugin "credentials" column under
+[Configuration](#configuration) is the full table.
+
+Run `smai verify` once your config is in place: it pings every
+configured plugin (a real 1-token LLM completion, a read-only store
+query, a HEAD on the artifact store, a no-op compute `status`) and
+reports PASS/FAIL per interface, so a misconfigured `smai.yaml` fails
+fast with a clear diagnostic instead of mid-run.
+
+---
+
+## Configuration
+
+`smai dev` boots with no config file and no flags. Past that, settings
+layer — in-code defaults, then `smai.yaml`, then `SMAI_*` env vars
+(double-underscore for nested keys, e.g.
+`SMAI_PLUGINS__METADATA_STORE_CONFIG__URI=...`), then CLI flags — each
+overriding the last. `smai start` (production) is the same machinery
+with the plugin selections made required instead of defaulted; it
+refuses to boot on an incomplete config or a stale schema.
+
+```yaml
+engine:
+  poll_interval_seconds: 30        # 10 under dev defaults
+  worker_count: 1                  # >1 turns on leasing; production only
+
+plugins:
+  llm_provider:   bedrock          # bedrock | anthropic | openai
+  metadata_store: sqlite           # sqlite | postgres
+  artifact_store: localfs          # localfs | s3
+  compute:        localgpu         # localgpu | modal | runpod
+
+  # Each *_config dict is passed verbatim as keyword arguments to the
+  # selected plugin's constructor; see the key table below. A wrong
+  # key fails fast at boot ("got an unexpected keyword argument ...").
+  llm_provider_config:   { region: us-east-1, model_id: us.anthropic.claude-opus-4-6-v1 }
+  metadata_store_config: {}                              # sqlite default: in-memory (see note below)
+  artifact_store_config: {}                              # localfs default: ~/.smai/artifacts
+  compute_config:        {}                              # localgpu default: smai-runtime:dev / smai-agent:dev
+
+# `smai ui` only — the whole block is optional.
+api:
+  host: 127.0.0.1
+  port: 8000
+  with_worker: auto                # auto: on for sqlite+localfs, off otherwise
+  auth: { enabled: false }         # opt-in bearer-token mode
+```
+
+**Per-plugin `*_config` keys.** The value of each `*_config` block is splatted as `**kwargs` into the plugin constructor, so the keys are exactly the constructor parameters:
+
+| plugin | `*_config` keys (defaults in parens) | credentials |
+|---|---|---|
+| `bedrock` | `region` (`us-east-1`), `model_id` | AWS default credential chain + Bedrock model access granted in the console for that model/region |
+| `anthropic` | `model_id` (`claude-opus-4-7`) | `ANTHROPIC_API_KEY` |
+| `openai` | `model_id` | `OPENAI_API_KEY` (**required at construction**, even for `smai verify`) |
+| `sqlite` | `uri` (`sqlite+aiosqlite:///:memory:`); a SQLAlchemy URL, absolute path = four slashes: `sqlite+aiosqlite:////home/me/.smai/state.db` | — |
+| `postgres` | `uri`, `use_advisory_locks` (`True`), `tenant_aware` (`False`), `fair_scheduling` (`off`), `fair_scheduling_weights`, `engine_kwargs` (e.g. `{pool_size: 10}`) | URL embeds credentials |
+| `localfs` | `root` (`$SMAI_ARTIFACTS_ROOT` or `~/.smai/artifacts`) | — |
+| `s3` | `bucket` (**required**), `region`, `prefix` (`""`), `presigned_url_expiry_seconds`, `max_object_size_bytes` | AWS default credential chain; the bucket must already exist |
+| `localgpu` | `agent_image` (`smai-agent:dev`), `runtime_image` (`smai-runtime:dev`), `workspace` | Docker running locally; build the images yourself (SMAI does not publish them) |
+| `modal` | `app_name` (`smai`), `default_gpu_type` (`T4`), `max_timeout_seconds` (`86400`) | `~/.modal.toml` or `MODAL_TOKEN_ID` + `MODAL_TOKEN_SECRET` |
+| `runpod` | `api_base`, `default_gpu_type` (`NVIDIA RTX A4000`), `default_timeout_seconds` (`3600`), `max_timeout_seconds`, `default_container_disk_gb` (`10`) | `RUNPOD_API_KEY` |
+
+Per-submit knobs like a Compute job's `gpu_type` / `cpu` / `memory_mb` (Modal) or `workspace` (localgpu) are *job* options the engine passes per dispatch, not constructor keys, so they don't go in `compute_config`.
+
+The same file works for `smai dev` and `smai start`. Swapping
+`sqlite`→`postgres`, `localfs`→`s3`, `localgpu`→`modal`/`runpod` is the
+entire local→production migration: the engine, the agent loops, the
+pipeline state machines, and the contract artifacts are untouched.
+`smai init` scaffolds an annotated `smai.yaml`; `smai verify` pings
+every configured plugin and reports PASS/FAIL per interface before you
+commit to a run.
+
+**Where state lives.** `smai dev` and `smai ui` provision `~/.smai/{state.db,artifacts,workspaces}` for you (creating the directories and injecting the paths), so a bare `metadata_store_config: {}` works under those verbs. `smai migrate`, `smai verify`, and `smai start` use the `smai.yaml` value verbatim, and an empty `metadata_store_config: {}` resolves to the sqlite plugin's *in-memory* default, which makes `smai migrate` a silent no-op (it reports success, then the database evaporates on exit). For those verbs, set an explicit file path:
+
+```yaml
+plugins:
+  metadata_store_config: { uri: "sqlite+aiosqlite:////absolute/path/state.db" }   # 4 slashes
+  # ...or for production:
+  # metadata_store_config: { uri: "postgresql+asyncpg://user:pw@host:5432/smai" }
+```
+
+(The sqlite plugin expands a leading `~` and creates the parent directory, so `sqlite+aiosqlite:///~/.smai/state.db` works too.)
+
+---
+
+## Two ways to use it
+
+| | What you get | What you import |
+|---|---|---|
+| **Tier A — deep delegation** | Hand SMAI a definition (or a plain-English technique description and let the planner draft one). Read back a verdict and the artifact set. The full pipeline runs: agents, orchestrator, runtime, plugins. | the `smai` CLI, or `Runtime` programmatically |
+| **Tier B — methodology as library** | Compile your own definitions, run the experiments on your own infrastructure, call the evaluator for the verdict. The pipeline layer never enters the picture. | `smai_core` alone |
+
+A "mixed" mode — some pipeline pieces, not others — works (the soundness
+guarantees are enforced at the `smai-core` boundary regardless) but
+isn't a documented happy path; the pipeline's between-turn coordination
+is tuned for the two canonical shapes.
+
+### Tier A — programmatic
+
+```python
+import asyncio
+from smai_cli import Runtime, dev_defaults, load_runtime_config
+
+async def main() -> None:
+    config = load_runtime_config(defaults=dev_defaults())
+    yaml_text = open("tests/fixtures/experiments/cutout_on_cifar10.yaml").read()
+
+    async with Runtime.start_in_band(config) as runtime:
+        # A multi-factor experiment registers N CGs; a single-factor one returns one.
+        cg_ids = await runtime.experiments.submit_text(yaml_text)
+        for cg_id in cg_ids:
+            snap = await runtime.status.wait_for_terminal(cg_id, timeout=None)
+            print(f"{cg_id}: {snap.state}")
+
+asyncio.run(main())
+```
+
+`Runtime.start_in_band(...)` is async-context-managed — plugins open on
+enter, drain and close on exit. The *primary* input path is proposals,
+not raw definitions: `runtime.proposals.submit(...)` hands the planner a
+technique description, it drafts an `ExperimentDefinition` into the
+`designed` state, a human gate approves it, and approval registers the
+CGs. For production (out-of-band worker, Postgres + S3 + remote compute)
+use `Runtime.start_worker(...)`; deployment recipes live in
+`packages/smai-cli/OPERATIONS.md`. The `smai ui` HTTP process wraps this
+*same* `Runtime` in FastAPI routes plus SSE plus an optional SPA mount.
+
+### Tier B — methodology as library
+
+```python
+import yaml
+from smai_core import compile_experiment, evaluate, load_default_registries
+from smai_core import EntryMetrics, RawMetrics, SeedRunOutcome
+from smai_core.dsl import DslDocumentAdapter
+
+# 1. Compile a YAML definition into the four contracts.
+doc = DslDocumentAdapter.validate_python(
+    yaml.safe_load(open("tests/fixtures/experiments/cutout_on_cifar10.yaml"))
+)
+artifact_set = compile_experiment(doc, load_default_registries())
+
+# 2. Run the experiment however you like; produce raw multi-seed metrics
+#    in SMAI's shape (the harness contract pins the per-entry metric keys).
+raw = RawMetrics(by_entry={
+    "baseline": EntryMetrics(seed_runs=[
+        SeedRunOutcome(seed=0, required={"top_k_accuracy_k_1": 0.802}, optional={}),
+        SeedRunOutcome(seed=1, required={"top_k_accuracy_k_1": 0.798}, optional={}),
+        SeedRunOutcome(seed=2, required={"top_k_accuracy_k_1": 0.805}, optional={}),
+    ]),
+    "cutout": EntryMetrics(seed_runs=[
+        SeedRunOutcome(seed=0, required={"top_k_accuracy_k_1": 0.823}, optional={}),
+        SeedRunOutcome(seed=1, required={"top_k_accuracy_k_1": 0.819}, optional={}),
+        SeedRunOutcome(seed=2, required={"top_k_accuracy_k_1": 0.826}, optional={}),
+    ]),
+})
+
+# 3. Evaluate — the locked verdict path. No LLM, no agent, deterministic.
+result = evaluate(artifact_set.validation_config, raw)
+print(result.verdict.result)   # "pass" | "fail" | "inconclusive"
+```
+
+`smai_core` exposes an entry-point-discoverable factor-type plugin
+contract (`smai.factor_types`), so a Tier-B integrator can register new
+factor types without forking; `additive` and `substitutive` ship
+built-in.
+
+---
+
+# Reference
+
+The sections below are the detail behind the overview — read them when
+you need the specifics, skip them when you don't.
+
+## The experiment definition
+
+A definition pins the comparative claim to a verifiable shape: one
+varying factor, everything else fixed, the deciding metric, and the
+baseline entry. In YAML, roughly:
 
 ```yaml
 kind: experiment
@@ -143,604 +450,266 @@ experiment:
 ```
 
 A multi-CG experiment — a *factor model* — groups several single-factor
-comparisons under a shared research question; each runs and verifies
-independently.
+comparisons under one research question; each compiles, runs, and is
+verified independently.
 
-### 2. The compiler verifies the claim is *answerable*
+## What the compiler checks
 
-Before any code runs, `compile_experiment(...)` checks the definition
-against several dozen mechanical rules grouped into eight categories.
-Confounded experiments fail at compile. What's caught:
+`compile_experiment(...)` runs the definition past several dozen rules in
+eight categories; a confounded experiment fails here, before any code
+runs. Each rule produces a structured violation with a stable code
+(e.g. `metric.parametric_required_parameters_present`,
+`validation.threshold_sign_matches_direction`). The categories:
 
-- **Factor structure** — exactly one factor varies; the factor name is
-  unique; the factor type is registered; entries cover at least two
-  levels.
-- **Entry vs factor compatibility** — every entry references the
-  declared factor at a level the factor admits; entries are
-  distinguishable (no two entries reduce to the same technique +
-  params).
-- **Controlled-conditions completeness** — required fields are present;
-  seed count matches `seed_count_required`; seeds are unique.
-- **Metric well-formedness** — the metric family is registered;
-  required parameters are present (`k` for `top_k_accuracy`); the
-  comparison threshold's sign agrees with `direction`; cost metrics
-  live in `optional_telemetry`, not `required`.
-- **Validation soundness** — the baseline entry resolves; the
-  comparison rule is well-formed; `seed_count_required` is positive;
-  any trend check is applicable.
+- **Factor structure** — exactly one factor varies; its name is unique;
+  its type is registered; entries cover at least two levels.
+- **Entry ↔ factor compatibility** — every entry references the declared
+  factor at a level it admits; no two entries reduce to the same
+  technique + params.
+- **Controlled-conditions completeness** — required fields present; seed
+  count matches `seed_count_required`; seeds unique.
+- **Metric well-formedness** — the metric family is registered; required
+  parameters present (`k` for `top_k_accuracy`); the comparison
+  threshold's sign agrees with `direction`; cost metrics live in
+  `optional_telemetry`, not `required`.
+- **Validation soundness** — the baseline entry resolves; the comparison
+  rule is well-formed; `seed_count_required` is positive; any trend
+  check is applicable.
 - **Technique compatibility** — every referenced `technique_id` is
-  registered; the technique's factor-type matches the factor; technique
-  params validate against the technique's schema; numeric level values
-  lie in declared ranges.
-- **Pipeline-encoding heuristics** — flags definitions that look like a
-  *sequence of steps* masquerading as a comparative experiment (a
-  common shape mistake the compiler refuses to allow through).
+  registered; its factor-type matches the factor; technique params
+  validate against the technique's schema; numeric level values lie in
+  declared ranges.
+- **Pipeline-encoding heuristics** — flags definitions shaped like a
+  *sequence of steps* masquerading as a comparative experiment.
 - **Cross-CG factor-model rules** — for grouped experiments, shared
   conditions are consistent and factor names don't collide across CGs.
 
-Each rule produces a structured violation with a stable code, e.g.
-`metric.parametric_required_parameters_present` or
-`validation.threshold_sign_matches_direction`. This is what "confounded
-experiments fail to compile" cashes out as.
-
-### 3. The compiler emits four immutable JSON artifacts
+## The four contracts
 
 A successful compile produces an `ArtifactSet` of four contracts. Each
-artifact carries an envelope with a content hash and the hash of its
-parent — so any downstream consumer can prove what it's reading
-against:
+artifact's envelope carries a content hash and its parent's hash, so a
+downstream consumer can prove what it's reading against.
 
-**`ExperimentPlan`** — substantively the same as the input definition,
-plus the envelope. The faithful design-time record.
+**`ExperimentPlan`** — substantively the input definition plus the
+envelope; the faithful design-time record.
 
 ```json
-{
-  "envelope": { "hash": "...", "parent_hash": null, "type": "ExperimentPlan", ... },
+{ "envelope": { "hash": "...", "parent_hash": null, "type": "ExperimentPlan" },
   "body": { "hypothesis": "...", "factors": [...], "controlled_conditions": {...},
-            "entries": [...], "validation": {...} }
-}
+            "entries": [...], "validation": {...} } }
 ```
 
 **`HarnessContract`** — what the harness substrate must expose. The
 factor is the lone variable the harness *doesn't* fix; everything else
-is flattened out of `controlled_conditions` into `fixed_variables`.
+in `controlled_conditions` is flattened into `fixed_variables`.
 
 ```json
-{
-  "envelope": { "hash": "...", "parent_hash": "<ExperimentPlan hash>", ... },
+{ "envelope": { "hash": "...", "parent_hash": "<ExperimentPlan hash>" },
   "body": {
-    "factor": { "name": "cutout_augmentation", "type": "additive", ... },
+    "factor": { "name": "cutout_augmentation", "type": "additive" },
     "seeds": [42, 1337, 2024, 9999, 55],
     "fixed_variables": [
-      { "path": "dataset.name",                "value": "cifar10" },
-      { "path": "architecture.name",           "value": "resnet50" },
-      { "path": "optimization.learning_rate",  "value": 0.001 },
+      { "path": "dataset.name",               "value": "cifar10" },
+      { "path": "architecture.name",          "value": "resnet50" },
+      { "path": "optimization.learning_rate", "value": 0.001 },
       "..."
     ],
     "required_metrics": [ { "kind": "parametric", "family": "top_k_accuracy", "parameters": { "k": 1 } } ],
     "optional_telemetry": [],
-    "no_go_zones": [ "..." ]
-  }
-}
+    "no_go_zones": [ "..." ] } }
 ```
 
-**`TechniqueContract[]`** — one per entry, each linked back to the
-harness it must conform to.
+**`TechniqueContract[]`** — one per entry, parented to the harness it
+must conform to; carries the entry's technique id, params, and baseline
+flag — nothing about how the result is judged.
+
+**`ValidationConfig`** — the single input the verdict path takes besides
+the raw metrics. Locked at compile time; never rewritten downstream; the
+technique implementer never sees it.
 
 ```json
-{
-  "envelope": { "hash": "...", "parent_hash": "<HarnessContract hash>", ... },
-  "body": {
-    "entry_id": "cutout_treatment",
-    "technique_id": "tech_cutout",
-    "technique_params": { "patch_size": 16 },
-    "is_baseline": false,
-    "parent_experiment_hash": "...",
-    "parent_harness_contract_hash": "..."
-  }
-}
-```
-
-**`ValidationConfig`** — the single input the verdict path takes
-besides the raw metrics.
-
-```json
-{
-  "envelope": { "hash": "...", "parent_hash": "<ExperimentPlan hash>", ... },
+{ "envelope": { "hash": "...", "parent_hash": "<ExperimentPlan hash>" },
   "body": {
     "metric":      { "kind": "parametric", "family": "top_k_accuracy", "parameters": { "k": 1 } },
     "direction":   "higher_is_better",
     "aggregation": { "method": "mean" },
     "comparison":  { "rule": "compare_to_baseline", "threshold": 0.003,
                      "baseline_entry_id": "no_aug_baseline" },
-    "seed_count_required": 5
-  }
-}
+    "seed_count_required": 5 } }
 ```
 
-These are JSON. The pipeline serializes them to `ArtifactStore` and
+These are JSON: the pipeline serializes them to the `ArtifactStore` and
 agents read them as JSON; a Tier-B integrator can dump them with
-`artifact_set.to_json()`. Anyone — including the code-reviewer agent —
-who wants to know "what is this experiment really comparing, and how
-will it be judged?" reads these artifacts, not the YAML.
+`artifact_set.to_json()`.
 
-### 4. `evaluate(...)` produces the verdict — mechanically
+## `evaluate(...)`
 
-Once raw multi-seed metrics exist (whoever produced them), the verdict
+Once raw multi-seed metrics exist — whoever produced them — the verdict
 is a pure function of two inputs:
 
 ```
 evaluate(
   validation_config: ValidationConfig,   # locked at compile time
   raw: RawMetrics,                       # { entry_id -> [ {seed, required, optional}, ... ] }
-) -> EvaluationResult                    # verdict: pass | fail | inconclusive
+) -> EvaluationResult                     # verdict: pass | fail | inconclusive
 ```
 
-This call has no LLM in it, no agent, and no metric substitution. It:
-
-1. Aggregates per-entry seed runs by the configured rule (`mean`, …).
-2. Compares each non-baseline entry against the baseline by the
-   configured rule (`compare_to_baseline`) and threshold.
-3. Emits a verdict with the structured intermediates attached.
-
-Two evaluations of the same `ValidationConfig` against the same
-`RawMetrics` produce byte-equal results. This determinism is why "the
-agent that wrote the implementation never sees the verdict criterion"
-is meaningful: the criterion is the `ValidationConfig`; the
-implementation only ever sees the `HarnessContract` and its own
+No LLM, no agent, no metric substitution. It (1) aggregates each entry's
+seed runs by the configured rule (`mean`, …), (2) compares each
+non-baseline entry against the baseline by the configured rule
+(`compare_to_baseline`) and threshold, and (3) emits a verdict with the
+structured intermediates attached. Two evaluations of the same
+`ValidationConfig` against the same `RawMetrics` produce byte-equal
+results — which is what makes "the implementer never sees the verdict
+criterion" mean something: the criterion *is* the `ValidationConfig`,
+and the implementation only ever sees the `HarnessContract` and its own
 `TechniqueContract`.
 
-That's `smai-core` in full: definition → compile (verify + emit) →
-evaluate. Everything else in this repo is the pipeline that automates
-producing the raw metrics in between.
+## The pipeline layer
 
----
+`smai-core` defines *what* a sound comparative experiment looks like; the
+pipeline layer is *how* you get from contracts to raw metrics without
+writing the harness or technique code yourself. Four pieces:
 
-## How the pipeline layer works
-
-`smai-core` defines *what* a sound comparative experiment looks like;
-the pipeline layer is *how* you go from contract artifacts to raw
-metrics without writing any of the harness or technique code yourself.
-It has three components, packaged independently:
-
-- **Agents** (`smai-agents`) — six fleet roles backed by a custom
-  Bedrock-Converse-style agent loop. The **planner** drafts an
-  `ExperimentDefinition` from a novel-technique description. The
-  **harness builder** writes the harness substrate from the
-  `HarnessContract`. The **technique implementer** fills in each
-  `TechniqueContract`. The **code reviewer** reads the contracts and
-  the diffs to flag drift. The **contextual evaluator** annotates the
-  numeric verdict with discussion. The **supervisor** sits over multi-CG
-  orchestration. Each role has its own per-task model selection.
+- **Agents** (`smai-agents`) — six fleet roles over a custom
+  Bedrock-Converse-style loop, each with its own per-task model
+  selection. The **planner** drafts an `ExperimentDefinition` from a
+  technique description; the **harness builder** writes the harness
+  substrate from the `HarnessContract`; the **technique implementer**
+  fills in each `TechniqueContract`; the **code reviewer** reads the
+  contracts and the diffs and flags drift; the **contextual evaluator**
+  annotates the numeric verdict with discussion; the **supervisor** sits
+  over multi-CG orchestration.
 - **Orchestrator** (`smai-orchestrator`) — a generic pipeline-spec
   engine: state machines + a worker loop with leasing + a checkpointer.
-  The same engine drives four different specs: comparison-group
-  execution (the inner state machine where harness and technique
-  implementations are produced and reviewed), the proposal pipeline
-  (primary input path, with a human gate at `designed`), paper
-  ingestion (supporting utility), and a `RunRecord` sub-spec the CG
-  loop inlines for each seed run. Multi-worker deployments use leasing
-  + fair scheduling; single-worker dev mode skips the leasing
-  fast-path.
-- **Plugins** — the boundary between the pipeline and the outside
-  world. Four interfaces, each a Python `Protocol`: `LlmProvider`
-  (where agent calls go), `MetadataStore` (where pipeline-tracking
-  records live), `ArtifactStore` (where the four JSON contracts and
-  harness/technique code live), `Compute` (where seed runs execute).
-  Reference implementations for local-dev and production are bundled
-  in this repo.
+  The same engine drives four specs: CG execution (the inner loop where
+  harness and technique code are produced and reviewed), the proposal
+  pipeline (primary input, with a human gate at `designed`), paper
+  ingestion (a supporting utility), and a `RunRecord` sub-spec the CG
+  loop inlines per seed. Multi-worker deployments lease + fair-schedule;
+  single-worker dev mode skips the leasing fast-path.
+- **Runtime** (`smai-runtime`) — the fixed templates and
+  manifest-driven type checks the harness builder emits against; it
+  sits between the agents and `Compute`.
+- **Plugins** — the boundary between the pipeline and the outside world.
+  Four Python `Protocol`s: `LlmProvider` (where agent calls go),
+  `MetadataStore` (where pipeline-tracking records live), `ArtifactStore`
+  (where the four contracts and the harness/technique code live),
+  `Compute` (where seed runs execute). Reference implementations for
+  local-dev and production ship for each — see the matrix below.
 
-The runtime substrate (`smai-runtime`) carries the fixed templates
-and manifest-driven type checks the harness builder emits against — it
-sits between the agents and `Compute`.
+## CLI verbs
 
-The split between `smai-core` and the pipeline is deliberate: the
-methodology layer is *atomic* (pulling out a piece breaks the others'
-guarantees), so it ships as one package with a tiny dep allowlist
-(`pydantic` + `jsonschema` + stdlib). The pipeline is *composable* —
-each piece is independently consumable, and a Tier-B integrator can
-import `smai-core` alone and run the methodology layer against their
-own infrastructure.
+```
+smai dev               Boot the laptop deployment (SQLite + LocalFs + LocalGpu + Bedrock;
+                       in-band worker; tighter poll; headless).
+smai start             Boot the production deployment (out-of-band worker; explicit plugin
+                       selections required; refuses incomplete config or stale schema).
+smai ui                Boot the API + SPA process. Auto-detects --with-worker from the plugin
+                       shape (sqlite+localfs → on; anything else → off).
+smai run <yaml>        Compile + register a CG; optional --watch polls until terminal.
+smai submit-proposal   Primary input verb. Submit a novel-technique description; the planner
+  <description>        drafts the ExperimentDefinition.
+smai approve-proposal  Human gate at `designed`. Approval atomically registers 1–N CGs.
+  <id> / reject-proposal
+smai ingest <arxiv-id> Supporting input verb. Fetch + parse + screen + plan + register
+                       paper-derived TechniqueRefs. Rarely needed in default workflows.
+smai status [<id>]     Read pipeline-tracking state from MetadataStore; optional --watch.
+smai compile <yaml>    Methodology-only: emit the four contracts to disk or stdout. Never
+                       touches MetadataStore or Compute.
+smai migrate           Apply schema migrations (Alembic-backed per MetadataStore plugin).
+                       --check / --dry-run / --prune.
+smai verify            Plugin-ping pre-flight: structured PASS/FAIL per plugin.
+smai init              Scaffold a smai.yaml with sensible defaults and inline comments.
+smai plugins           List discovered plugins per interface and the selected one.
+smai version           Print versions of smai, smai-core, and loaded plugin packages.
+smai serve             Deprecated in v2 — use `smai ui`. Read-only dashboard; source-tree
+                       removal scheduled for v2.1.
+```
 
----
+## Plugin matrix
 
-## Two integration patterns
+Four pluggable boundaries; every reference implementation ships in this
+repo, so the OSS package is self-contained. Discovery is entry-point
+based (the dbt-adapter pattern): namespaces `smai.llm_providers`,
+`smai.metadata_stores`, `smai.artifact_stores`, `smai.computes`. `smai
+plugins` walks all four.
 
-The two-layer split surfaces as two canonical integration patterns:
-
-| Pattern | What it gives you | What you import |
+| Interface | Plugin | What it is |
 |---|---|---|
-| **Tier A — deep delegation** | Hand SMAI a definition (or a description and let the planner draft one). Read back a verdict + artifact set. Full pipeline: agents, orchestrator, runtime, plugins. | `smai_cli.runtime.Runtime` (programmatic), or the `smai` CLI. |
-| **Tier B — methodology as library** | Compile your own definitions, run experiments on your own infrastructure, call the evaluator for the verdict. The pipeline layer isn't involved. | `smai_core` only — `compile_experiment`, `evaluate`, the four contract types, the four plugin Protocols. |
+| `LlmProvider` | `smai-llm-bedrock` | AWS Bedrock Converse; AWS credential chain + `model_id`; caching via `cachePoint`. (`smai dev` default.) |
+| | `smai-llm-anthropic` | Anthropic SDK; `ANTHROPIC_API_KEY`; caching via `cache_control: ephemeral`. |
+| | `smai-llm-openai` | OpenAI SDK; `OPENAI_API_KEY`; `supports_caching=False` (server-side caching is opaque to callers). |
+| `MetadataStore` | `smai-store-sqlite` | Single-file, zero-config; SQLAlchemy 2.0 async Core + aiosqlite. (`smai dev` default.) |
+| | `smai-store-postgres` | Production self-host; same Core schema as SQLite; advisory-lock fast path on lease acquisition; opt-in `tenant_aware=True`. |
+| `ArtifactStore` | `smai-artifacts-localfs` | Root-rooted local filesystem; no presigned URLs. (`smai dev` default.) |
+| | `smai-artifacts-s3` | BYO bucket; SigV4 presigned URLs; `boto3` + `asyncio.to_thread`. |
+| `Compute` | `smai-compute-localgpu` | Local Docker subprocess on the host GPU; ships agent + runtime Dockerfiles. (`smai dev` default.) |
+| | `smai-compute-modal` | Modal Sandboxes; sync SDK + `asyncio.to_thread`; GPU type via `**plugin_options`. |
+| | `smai-compute-runpod` | RunPod Pods API over raw `httpx`; six-tier GPU dispatch table. |
 
-A "mixed" pattern — using some pipeline components but not others — is
-supported by the modularity but is *not* a documented happy path;
-soundness guarantees still hold (they're enforced at the package
-boundary), but operational guarantees from the pipeline's between-turn
-coordination may degrade outside the canonical patterns.
-
----
+A new plugin lives in its own subdirectory under `plugins/`, declares
+its entry point in `pyproject.toml`, and subclasses the conformance test
+base from `smai-core` (`smai_core.plugins.conformance`) — override one
+`make_<interface>()` factory and inherit the contract suite. See
+[`CONTRIBUTING.md`](CONTRIBUTING.md) for the plugin-author guide.
 
 ## Repo layout
+
+`uv` workspace; every package and plugin is its own `pyproject.toml` /
+`src/` / `tests/` tree.
 
 ```
 smai/
 ├── packages/
-│   ├── smai-core/              # methodology layer: data model, DSL +
-│   │                           # compiler, contract artifacts, mechanical
-│   │                           # evaluator, four plugin Protocols.
-│   │                           # Allowlisted deps: pydantic, jsonschema, stdlib.
-│   ├── smai-runtime/           # harness/technique runtime + fixed templates.
-│   ├── smai-agents/            # custom Bedrock-Converse-style agent loop, six
-│   │                           # fleet roles (planner, harness builder, technique
-│   │                           # implementer, code reviewer, contextual evaluator,
-│   │                           # supervisor).
-│   ├── smai-orchestrator/      # engine + pipeline-spec format + worker loop +
-│   │                           # checkpointer; the four pipeline-spec instances
-│   │                           # (CG execution, proposal, paper ingestion,
-│   │                           # RunRecord sub-spec); Alembic migrations.
-│   ├── smai-cli/               # CLI verbs, config layering, RuntimeConfig,
-│   │                           # plugin instantiation, in-band Runtime.
-│   └── smai/                   # umbrella package (currently a stub; eventual
-│                               # `from smai import Runtime` re-export surface).
-├── plugins/
-│   ├── smai-llm-bedrock/       # LlmProvider — AWS Bedrock Converse (reference)
-│   ├── smai-llm-anthropic/     # LlmProvider — Anthropic SDK
-│   ├── smai-llm-openai/        # LlmProvider — OpenAI SDK
-│   ├── smai-store-sqlite/      # MetadataStore — SQLite reference (smai dev default)
-│   ├── smai-store-postgres/    # MetadataStore — Postgres production
-│   ├── smai-artifacts-localfs/ # ArtifactStore — local filesystem reference
-│   ├── smai-artifacts-s3/      # ArtifactStore — S3 (BYO bucket)
-│   ├── smai-compute-localgpu/  # Compute — local Docker on host GPU
-│   ├── smai-compute-modal/     # Compute — Modal Sandboxes
-│   └── smai-compute-runpod/    # Compute — RunPod Pods API
-├── tests/                      # cross-package integration + smoke tests
-├── tools/check_deps.py         # methodology-atomicity dependency lint
-├── pyproject.toml              # uv workspace root
-└── LICENSE                     # Apache 2.0
+│   ├── smai-core/            # methodology layer: data model, DSL + compiler, contract
+│   │                         # artifacts, mechanical evaluator, four plugin Protocols.
+│   │                         # Allowlisted deps: pydantic, jsonschema, stdlib.
+│   ├── smai-runtime/         # harness/technique runtime + fixed templates + manifest checks.
+│   ├── smai-agents/          # custom Bedrock-Converse-style agent loop; six fleet roles.
+│   ├── smai-orchestrator/    # engine + pipeline-spec format + worker loop + checkpointer;
+│   │                         # the four PipelineSpec instances; Alembic migrations.
+│   ├── smai-cli/             # CLI verbs, config layering, RuntimeConfig, plugin
+│   │                         # instantiation, in-band Runtime.
+│   ├── smai-api-spec/        # shared HTTP contract: Pydantic models + URL constants +
+│   │                         # error taxonomy. Imported by smai-api and Yaarp's hosted API.
+│   ├── smai-api-conformance/ # parameterizable pytest suite asserting wire-shape parity.
+│   ├── smai-events/          # EventChannel Protocol + in-process pub/sub; drives SSE.
+│   ├── smai-api/             # FastAPI implementation of the smai-api-spec contract + SSE.
+│   ├── smai-ui/              # Python wrapper for the React SPA bundle (Hatch build hook).
+│   └── smai/                 # umbrella package — currently a stub; eventual
+│                             # `from smai import Runtime` re-export surface.
+├── apps/
+│   └── ui/                   # React 19 + Vite 6 + TanStack Router/Query + Tailwind 4 SPA;
+│                             # OpenAPI-codegen'd typed client; SSE-as-cache-invalidator.
+├── plugins/                  # the four Protocol implementations (see Plugin matrix).
+├── tests/
+│   ├── integration/          # cross-package integration + smoke E2E tests.
+│   └── fixtures/             # shared YAML experiment fixtures.
+├── tools/check_deps.py       # methodology-atomicity dependency lint (DEC-029 enforcement).
+├── pyproject.toml            # uv workspace root + dev deps + pytest config.
+└── LICENSE                   # Apache 2.0
 ```
 
----
-
-## Quick start
-
-Requires [`uv`](https://docs.astral.sh/uv/) and Python 3.11+.
-
-```bash
-git clone <repo-url> smai
-cd smai
-uv sync                         # install workspace + dev deps
-uv run pytest                   # run the test suite (~2100 tests)
-```
-
-Boot the laptop deployment with the SPA:
-
-```bash
-# Configure AWS credentials in the default chain. The dev defaults use
-# the smai-llm-bedrock plugin (claude-opus-4-7 in us-east-1); to use
-# Anthropic or OpenAI directly, see "Configuration" below.
-$ uv run smai ui
-smai ui: starting in-process worker (sqlite metadata store detected).
-         Pass --no-worker to disable.
-         Listening on http://127.0.0.1:8000/
-```
-
-Open `http://127.0.0.1:8000/` in a browser. The dashboard shows live
-state badges and a recent activity feed:
-
-```
-+------------------------------------------------------------+
-|  SMAI                                       [v 0.1.0]      |
-+------------------------------------------------------------+
-|  Comparison groups        Proposals        Papers          |
-|  ------------------       ----------       --------        |
-|  cg_01J7PA8K... [running]    prop_xyz      arxiv:2103.x    |
-|  cg_01J7PA8L... [complete]   [designed]    [registered]    |
-|                                                            |
-|  Recent activity (live via SSE)                            |
-|   17:23:11  cg_01J7PA8K... implementing -> implemented     |
-|   17:23:14  prop_xyz       designing    -> designed        |
-+------------------------------------------------------------+
-```
-
-`smai ui` boots one process: SQLite (`~/.smai/state.db`) + LocalFs
-(`~/.smai/artifacts`) + LocalGpu (Docker) + Bedrock, single in-process
-worker, `poll_interval=10s`, plus FastAPI + the SPA bundle on
-`127.0.0.1:8000`. The `--with-worker` default flips off when any
-production-shape plugin (postgres, s3, modal, runpod) is configured;
-see `12-ui-process.md` §4.3. Ctrl+C drains the worker first, then the
-server.
-
-In a second terminal, submit an experiment:
-
-```bash
-$ uv run smai run tests/fixtures/experiments/cutout_on_cifar10.yaml --watch
-cg_01J7PA8K2X9F4ZB6QH4N0P1234
-cg_01J7PA8K2X9F4ZB6QH4N0P1234: complete
-```
-
-The CG appears in the SPA the instant the API write commits; live
-updates land via SSE without polling. `smai status <cg-id> --watch`
-does the same polling against the CLI without re-submitting.
-
-`smai dev` is the headless alternative for users who prefer a
-browser-less workflow; it boots the same plugin set without the API or
-the SPA. The two verbs have distinct identities (per
-`12-ui-process.md` §7.1); pick whichever fits the session.
-
----
-
-## Tier A — programmatic full pipeline
-
-The CLI is a thin wrapper around the in-process service surface.
-Programmatic Tier-A consumers import `Runtime` directly:
-
-```python
-import asyncio
-
-from smai_cli import Runtime, dev_defaults, load_runtime_config
-
-
-async def main() -> None:
-    runtime_config = load_runtime_config(defaults=dev_defaults())
-    yaml_text = open("tests/fixtures/experiments/cutout_on_cifar10.yaml").read()
-
-    async with Runtime.start_in_band(runtime_config) as runtime:
-        # Submit — returns one or more CG IDs (a multi-factor experiment
-        # may register N CGs; a single-factor returns one).
-        cg_ids = await runtime.experiments.submit_text(yaml_text)
-        for cg_id in cg_ids:
-            snap = await runtime.status.wait_for_terminal(cg_id, timeout=None)
-            print(f"{cg_id}: {snap.state}")
-
-
-asyncio.run(main())
-```
-
-`Runtime.start_in_band(...)` is async-context-managed: plugins are
-opened on enter and drained / closed on exit — no detached `Runtime`
-instance to manage. The `run_worker=False` keyword skips the in-band
-worker for one-shot submissions (the CLI's `smai run` uses this); the
-default boots the worker.
-
-The novel-technique input path uses `runtime.proposals` instead of
-`runtime.experiments`. The submit + approve flow is two synchronous
-calls around the planner's async work; a human gate sits between
-`designed` and `registered`:
-
-```python
-async with Runtime.start_in_band(runtime_config) as runtime:
-    submission = await runtime.proposals.submit(
-        proposal_id="prop_my_cutout_idea",
-        submission_kind="novel_technique",
-        technique_description="Add Cutout augmentation to ResNet-50 on CIFAR-10 ...",
-    )
-    # Planner drafts the ExperimentDefinition into the `designed` state.
-    # Use runtime.status / runtime.proposals.get to poll, then approve:
-    record = await runtime.proposals.get(submission.proposal_id)
-    if record.state == "designed":
-        await runtime.proposals.approve(submission.proposal_id)
-    # Approval registers 1..N CGs which then run through the CG pipeline.
-```
-
-For production deployment (out-of-band worker, Postgres + S3 + remote
-compute), use `Runtime.start_worker(...)`. See
-`packages/smai-cli/OPERATIONS.md` for systemd / supervisord / launchd
-recipes plus connection-pool sizing and structured-logging patterns.
-
-The HTTP API + SPA process (`smai ui`) reads the **same** `Runtime`
-the programmatic Tier-A flow uses; `make_api_app(runtime)` wraps it in
-FastAPI routes plus SSE plus an optional SPA mount. See
-`designs/smai/12-ui-process.md` for the verb's full deployment shape
-(Case A in-process worker, Case B remote-data UI-only) and
-`designs/smai/13-frontend.md` for the SPA architecture.
-
----
-
-## Tier B — methodology as library
-
-The methodology layer is atomic and pipeline-independent. The whole
-compile-then-evaluate pipeline imports from `smai_core` and depends
-only on `pydantic` + `jsonschema` + stdlib (enforced by
-`tools/check_deps.py`).
-
-```python
-import yaml
-
-from smai_core import (
-    compile_experiment,
-    evaluate,
-    load_default_registries,
-    EntryMetrics,
-    RawMetrics,
-    SeedRunOutcome,
-)
-from smai_core.dsl import DslDocumentAdapter
-
-# 1. Load and compile a YAML experiment definition.
-doc_dict = yaml.safe_load(open("tests/fixtures/experiments/cutout_on_cifar10.yaml"))
-doc = DslDocumentAdapter.validate_python(doc_dict)
-registries = load_default_registries()
-artifact_set = compile_experiment(doc, registries)
-
-# 2. Run the experiment yourself on your own infrastructure. Produce
-#    raw multi-seed metrics in the SMAI shape — the harness contract
-#    pins the per-entry required metric keys.
-raw = RawMetrics(
-    by_entry={
-        "baseline": EntryMetrics(seed_runs=[
-            SeedRunOutcome(seed=0, required={"top_k_accuracy_k_1": 0.802}, optional={}),
-            SeedRunOutcome(seed=1, required={"top_k_accuracy_k_1": 0.798}, optional={}),
-            SeedRunOutcome(seed=2, required={"top_k_accuracy_k_1": 0.805}, optional={}),
-        ]),
-        "cutout": EntryMetrics(seed_runs=[
-            SeedRunOutcome(seed=0, required={"top_k_accuracy_k_1": 0.823}, optional={}),
-            SeedRunOutcome(seed=1, required={"top_k_accuracy_k_1": 0.819}, optional={}),
-            SeedRunOutcome(seed=2, required={"top_k_accuracy_k_1": 0.826}, optional={}),
-        ]),
-    }
-)
-
-# 3. Evaluate. This is the locked verdict path — no LLM, no agent, no
-#    metric-substitution. The result is byte-equal-deterministic across
-#    runs.
-result = evaluate(artifact_set.validation_config, raw)
-print(result.verdict.result)        # "pass" | "fail" | "inconclusive"
-print(result.verdict.summary)
-```
-
-`smai_core` ships an entry-point-discoverable factor-type plugin
-contract (`smai.factor_types` namespace), so a Tier B integrator can
-register additional factor types without forking. The two built-in
-factor types are `additive` and `substitutive`.
-
----
-
-## CLI verb summary
-
-16 verbs, grouped by what they do:
-
-| Verb | Purpose |
-|---|---|
-| `smai dev` | Boot the laptop deployment (SQLite + LocalFs + LocalGpu + Bedrock; in-band worker; tighter poll for interactive feel). |
-| `smai start` | Boot the production deployment (out-of-band worker; explicit plugin selections required; refuses to boot on incomplete config or stale schema). |
-| `smai ui` | Boot the API + SPA process. Auto-detects `--with-worker` from plugin shape (sqlite + localfs → on; anything else → off); strict pre-flights when the worker is on, soft otherwise. See `designs/smai/12-ui-process.md`. |
-| `smai serve` | **Deprecated in v2 — use `smai ui` instead** (`12-ui-process.md` §7.2). Read-only Jinja dashboard; behavior preserved for one release; source-tree removal in v2.1. |
-| `smai run <experiment.yaml>` | Compile + register a CG; optional `--watch` polls until terminal. |
-| `smai submit-proposal <description>` | Primary input verb. Submit a novel-technique description; the planner drafts the `ExperimentDefinition`. |
-| `smai approve-proposal <id>` / `smai reject-proposal <id>` | Human gate at `designed`; approval atomically registers 1–N CGs. |
-| `smai ingest <arxiv-id>` | Supporting input verb. Fetch + parse + screen + plan + register paper-derived `TechniqueRef`s. Rarely needed in default workflows. |
-| `smai status [<id>] [--watch]` | Read pipeline-tracking state from `MetadataStore`. |
-| `smai compile <experiment.yaml>` | Methodology-only: emit the four contract artifacts to disk or stdout. Never touches `MetadataStore` or `Compute`. |
-| `smai migrate` | Apply schema migrations (Alembic-backed, per `MetadataStore` plugin). `--check` / `--dry-run` / `--prune` modes. |
-| `smai verify` | Plugin-ping pre-flight: structured PASS/FAIL per plugin via Protocol-level read-only methods. |
-| `smai init` | Scaffold a `smai.yaml` with sensible defaults and inline comments. |
-| `smai plugins` | List discovered plugins per interface and the currently-selected plugin. |
-| `smai version` | Print versions of `smai`, `smai-core`, and currently-loaded plugin packages. |
-
----
-
-## Configuration
-
-`smai dev` boots with no `smai.yaml` and no flags. Anything you set in
-a `smai.yaml` overrides the in-code defaults; environment variables
-override the file; CLI flags override env vars. Config layering:
-
-1. In-code defaults (`dev_defaults()` for `smai dev`; explicit required
-   for `smai start`).
-2. `smai.yaml` (current directory or `--config`).
-3. Environment variables (`SMAI_*`, double-underscore for nested
-   fields: `SMAI_PLUGINS__METADATA_STORE_CONFIG__URI=postgres://...`).
-4. CLI flags.
-
-Canonical `smai.yaml` shape:
-
-```yaml
-# Engine
-engine:
-  poll_interval_seconds: 30        # 10 in dev defaults
-  worker_count: 1                  # >1 implies leasing; production-only
-  orphan_grace_seconds: 600
-  lease_seconds: 120
-  fair_scheduling: "off"           # "off" | "round_robin" | "weighted"
-
-# Plugin selection
-plugins:
-  llm_provider: bedrock            # bedrock | anthropic | openai
-  metadata_store: sqlite           # sqlite | postgres
-  artifact_store: localfs          # localfs | s3
-  compute: localgpu                # localgpu | modal | runpod
-
-  llm_provider_config:
-    region: us-east-1
-    model_id: us.anthropic.claude-opus-4-7-v1
-  metadata_store_config:
-    path: ./.smai/state.db         # sqlite
-    # uri: postgres://user:pw@host:5432/smai_prod   # postgres
-  artifact_store_config:
-    root: ./.smai/artifacts        # localfs
-    # bucket: my-smai-artifacts    # s3
-    # prefix: smai/                # s3
-  compute_config:
-    workdir: ./.smai/compute       # localgpu
-    # gpu_type: T4                 # modal / runpod
-
-# `smai ui` settings (per `designs/smai/12-ui-process.md` §9.1).
-# All fields are optional; the entire `api:` block can be omitted.
-api:
-  host: 127.0.0.1                  # loopback by default per `11` §7
-  port: 8000
-  with_worker: auto                # auto | true | false
-  reload: false                    # dev-only: uvicorn auto-reload
-  auth:
-    enabled: false                 # opt-in bearer-token mode (`11` §7.3)
-    token_path: ~/.smai/api-token  # auto-generated 0o600 on first launch
-  sse:
-    heartbeat_seconds: 15
-    ring_buffer_size: 100
-    refetch_all_on_overflow: true
-```
-
-The same `smai.yaml` works for `smai dev` and `smai start`; the
-difference is which fields are defaulted vs required. `smai start`
-refuses to boot if any plugin selection is missing.
-
-`smai ui` reads the `api:` block; `smai dev` and `smai start` ignore
-it. The `--with-worker` flag overrides `api.with_worker`; the
-auto-detect rule (sqlite + localfs → on; anything else → off) fires
-when neither the flag nor the layered field forces a boolean.
-
-The local↔production swap is a config change, not a code change: swap
-`sqlite` → `postgres`, `localfs` → `s3`, `localgpu` → `modal` /
-`runpod`, and your engine, agent loops, pipeline-specs, and contract
-artifacts are unchanged.
-
----
-
-## Plugin matrix
-
-Four pluggable boundaries, each with one or more reference
-implementations bundled in this repo. The OSS package is fully
-self-contained — every reference plugin is here.
-
-| Interface | Plugin | What it is |
-|---|---|---|
-| `LlmProvider` | `smai-llm-bedrock` | AWS Bedrock Converse. AWS credential chain + `model_id`. Supports caching via `cachePoint`. |
-| | `smai-llm-anthropic` | Anthropic SDK adapter. `ANTHROPIC_API_KEY`. Supports caching via `cache_control: ephemeral`. |
-| | `smai-llm-openai` | OpenAI SDK adapter. `OPENAI_API_KEY`. `supports_caching=False` (server-side caching is opaque to callers). |
-| `MetadataStore` | `smai-store-sqlite` | `smai dev` default; single-file zero-config. SQLAlchemy 2.0 async Core + aiosqlite. |
-| | `smai-store-postgres` | Production self-host; same Core schema as SQLite via cross-plugin import. Advisory-lock fast path on lease acquisition. Opt-in `tenant_aware=True`. |
-| `ArtifactStore` | `smai-artifacts-localfs` | `smai dev` default; root-rooted local filesystem; presigned URLs unsupported. |
-| | `smai-artifacts-s3` | BYO bucket; SigV4 presigned URLs. `boto3` + `asyncio.to_thread`. |
-| `Compute` | `smai-compute-localgpu` | `smai dev` default. Local Docker subprocess; ships agent + runtime Dockerfiles. |
-| | `smai-compute-modal` | Modal Sandboxes; sync SDK + `asyncio.to_thread`. GPU type plumbed via `**plugin_options`. |
-| | `smai-compute-runpod` | RunPod Pods API over raw `httpx`. Six-tier GPU dispatch table. |
-
-Discovery is entry-point-based (dbt-adapter pattern). The namespaces
-are `smai.llm_providers`, `smai.metadata_stores`,
-`smai.artifact_stores`, `smai.computes`. `smai plugins` walks all four
-and prints what's discoverable.
-
-A future plugin lives in its own subdirectory under `plugins/`,
-declares its entry point in `pyproject.toml`, and subclasses the
-conformance test base from `smai-core`. See
-[`CONTRIBUTING.md`](CONTRIBUTING.md) for the plugin-author guide.
-
----
+`smai-core` depends on nothing inside the workspace; pipeline packages
+depend on `smai-core`; plugins depend on `smai-core` (and `MetadataStore`
+plugins additionally on `smai-orchestrator`'s record types — the one
+plugin→pipeline edge `tools/check_deps.py` allows); the CLI depends on
+everything. Full layout, dependency graph, dev setup, the five CI gates,
+and project conventions are in [`CONTRIBUTING.md`](CONTRIBUTING.md);
+production deployment recipes are in
+[`packages/smai-cli/OPERATIONS.md`](packages/smai-cli/OPERATIONS.md).
 
 ## Contributing
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for repo layout, local-dev
 setup, the project conventions, and the plugin-author guide. The four
-plugin Protocols ship parameterizable conformance test base classes
-under `smai_core.plugins.conformance` — a new plugin subclasses one,
-overrides a `make_<interface>()` factory, and inherits the contract
-suite.
-
----
+plugin Protocols ship parameterizable conformance test bases under
+`smai_core.plugins.conformance` — a new plugin subclasses one, overrides
+a factory, and inherits the contract suite.
 
 ## License
 
 Apache 2.0 — see [`LICENSE`](LICENSE). The SDK, DSL, agent loops,
-contracts, runtime, mechanical evaluator, and reference plugin
-implementations all ship under Apache 2.0.
+contracts, runtime, mechanical evaluator, HTTP API + SPA, and reference
+plugin implementations all ship under Apache 2.0.
