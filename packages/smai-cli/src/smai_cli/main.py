@@ -100,6 +100,36 @@ def _dev_artifact_paths() -> tuple[Path, Path, Path]:
     )
 
 
+def _reset_dev_state(home: Path) -> list[Path]:
+    """Wipe the three ``smai dev``-managed paths under ``$SMAI_HOME``.
+
+    Returns the list of paths that were removed (or attempted to be — a
+    missing path is a no-op, not an error). Touches only the three
+    canonical subpaths (``state.db``, ``artifacts/``, ``workspaces/``);
+    other files the user may have placed in ``~/.smai/`` are left alone.
+
+    Backs the ``smai dev --reset`` flag (Task: round-2 friction D-iii).
+    The friction it addresses: when a record (paper, proposal, CG, run)
+    gets wedged in a non-terminal state in a ``smai dev`` deployment,
+    there's no API-level recovery — orphan-reclaim resumes it on
+    restart and re-submitting no-ops on in-flight records, so the only
+    escape was editing the SQLite file by hand.
+    """
+    import shutil  # noqa: PLC0415 — local import; only used by this rarely-called helper
+
+    targets = [home / "state.db", home / "artifacts", home / "workspaces"]
+    removed: list[Path] = []
+    for path in targets:
+        if not path.exists() and not path.is_symlink():
+            continue
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path)
+        else:
+            path.unlink()
+        removed.append(path)
+    return removed
+
+
 def _apply_dev_filesystem_defaults(layered_overrides: dict[str, Any]) -> dict[str, Any]:
     """Materialize the ``smai dev`` filesystem defaults.
 
@@ -135,6 +165,27 @@ def smai_dev(
         bool,
         typer.Option("--no-dashboard", help="(Phase 3 placeholder.) Reserved."),
     ] = False,
+    reset: Annotated[
+        bool,
+        typer.Option(
+            "--reset",
+            help=(
+                "Wipe the dev-managed paths under $SMAI_HOME (state.db + "
+                "artifacts/ + workspaces/) before booting. Useful for "
+                "clearing test detritus or unsticking a record wedged in a "
+                "non-terminal state. Other files in $SMAI_HOME are left "
+                "alone. Prompts for confirmation unless --yes is passed."
+            ),
+        ),
+    ] = False,
+    assume_yes: Annotated[
+        bool,
+        typer.Option(
+            "--yes",
+            "-y",
+            help="Skip the --reset confirmation prompt. No effect without --reset.",
+        ),
+    ] = False,
 ) -> None:
     """Boot the laptop demo (`09` §5).
 
@@ -142,8 +193,32 @@ def smai_dev(
     ``localfs`` ArtifactStore (``~/.smai/artifacts``), ``localgpu``
     Compute, ``bedrock`` LlmProvider. ``poll_interval_seconds=10`` for
     interactive feel. Worker runs in-process; Ctrl+C drains gracefully.
+
+    ``--reset`` wipes the three dev-managed paths under ``$SMAI_HOME``
+    (default ``~/.smai``) before booting — the recovery hatch for a
+    record wedged in a non-terminal state when no cancel verb exists
+    yet (post-M5 backlog).
     """
     del no_dashboard  # Phase 3 wires the read-only dashboard (`09` §5.3).
+    if reset:
+        home = _smai_home()
+        targets = [home / "state.db", home / "artifacts", home / "workspaces"]
+        existing = [p for p in targets if p.exists() or p.is_symlink()]
+        if not existing:
+            typer.echo(f"smai dev: --reset: nothing to wipe under {home} (already clean).")
+        else:
+            if not assume_yes:
+                listing = "\n  ".join(str(p) for p in existing)
+                typer.echo(f"smai dev: --reset will delete:\n  {listing}")
+                if not typer.confirm("Continue?", default=False):
+                    _err("aborted.", exit_code=1)
+            removed = _reset_dev_state(home)
+            for path in removed:
+                typer.echo(f"smai dev: removed {path}")
+    elif assume_yes:
+        # `--yes` without `--reset` is benign but probably a mistake; warn
+        # so it doesn't silently get swallowed.
+        typer.echo("smai dev: --yes has no effect without --reset.", err=True)
     overrides: dict[str, Any] = _apply_dev_filesystem_defaults({})
     try:
         runtime_config = load_runtime_config(

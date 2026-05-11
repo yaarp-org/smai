@@ -69,7 +69,9 @@ function ProposalHeader({ proposal }: { proposal: ProposalDetail }) {
             {proposal.submission_kind}
           </span>
         </div>
-        <CardDescription>Pipeline-tracking entity audit + decision state.</CardDescription>
+        <CardDescription>
+          When it was submitted, how many design attempts, your decision.
+        </CardDescription>
       </CardHeader>
       <CardContent>
         <dl className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
@@ -107,7 +109,8 @@ function ProposalContextPanels({ proposal }: { proposal: ProposalDetail }) {
         <CardHeader>
           <CardTitle>Paper reference</CardTitle>
           <CardDescription>
-            This proposal is a reproduce-paper submission per DEC-032.
+            This proposal asks to reproduce a specific paper. Its technique pool came from ingesting
+            the arXiv source.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -132,7 +135,7 @@ function ProposalContextPanels({ proposal }: { proposal: ProposalDetail }) {
       <CardHeader>
         <CardTitle>Technique description</CardTitle>
         <CardDescription>
-          The submitted technique description body (persisted as an artifact).
+          The text you submitted describing the technique to compare.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -161,7 +164,7 @@ function DesignPlanPanel({ proposal }: { proposal: ProposalDetail }) {
         <CardHeader>
           <CardTitle>Design plan</CardTitle>
           <CardDescription>
-            Produced by the planner agent on the proposal_submitted → designing → designed path.
+            The planner agent produces this once it's finished designing the comparison.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -184,9 +187,7 @@ function DesignPlanPanel({ proposal }: { proposal: ProposalDetail }) {
           artifact: <code className="font-mono text-xs">{proposal.design_plan_artifact_key}</code>
         </p>
         <p className="mt-2 text-xs text-[var(--color-fg-subtle)]">
-          4.M6 wires the inline JSON viewer; the proposal-artifacts URL space is itself an open
-          question (proposals do not currently expose a /proposals/&lt;id&gt;/artifacts/ namespace
-          in the API contract).
+          Inline rendering of the plan body lands in a follow-up; for now the artifact key is shown.
         </p>
       </CardContent>
     </Card>
@@ -232,10 +233,10 @@ function HumanGatePanel({ proposal }: { proposal: ProposalDetail }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Human gate</CardTitle>
+        <CardTitle>Your decision</CardTitle>
         <CardDescription>
-          The proposal is awaiting your decision. Approving atomically registers 1+ comparison
-          groups; rejecting drops the proposal.
+          The planner has finished designing this proposal. Approving registers the comparison
+          groups so the worker can start running them; rejecting drops the proposal.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -275,7 +276,7 @@ function ChildCGsList({ proposal }: { proposal: ProposalDetail }) {
       <CardHeader>
         <CardTitle>Registered comparison groups</CardTitle>
         <CardDescription>
-          The CGs this proposal produced on the designed → registered transition.
+          The comparison groups this proposal produced when you approved it.
         </CardDescription>
       </CardHeader>
       <CardContent>

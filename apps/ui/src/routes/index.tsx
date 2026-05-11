@@ -28,7 +28,7 @@ function DashboardPage() {
       <header className="space-y-1">
         <h1 className="text-2xl font-bold tracking-tight">Dashboard</h1>
         <p className="text-sm text-[var(--color-fg-subtle)]">
-          In-flight entity counts and recent state transitions across the deployment.
+          What's running right now and what changed recently.
         </p>
       </header>
 
@@ -77,8 +77,7 @@ function RecentActivityFeed({ items }: { items: RecentActivityItem[] }) {
       <CardHeader>
         <CardTitle>Recent activity</CardTitle>
         <CardDescription>
-          Most recent state transitions across all kinds (proposals, papers, comparison groups,
-          entries, runs).
+          The latest state changes across proposals, papers, comparison groups, entries, and runs.
         </CardDescription>
       </CardHeader>
       <CardContent>

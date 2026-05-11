@@ -42,7 +42,8 @@ function SystemPage() {
       <header>
         <h1 className="text-2xl font-bold tracking-tight">System</h1>
         <p className="text-sm text-[var(--color-fg-subtle)]">
-          Plugin status, version, verify, migrate-status (per 13-frontend.md §11.2).
+          Versions, plugins, database migration status, and the verify pre-flight that pings every
+          configured plugin.
         </p>
       </header>
       <Tabs defaultValue="version" className="w-full">
@@ -76,7 +77,7 @@ function VersionTab() {
       <CardHeader>
         <CardTitle>Versions</CardTitle>
         <CardDescription>
-          smai-cli, smai-core, smai-api-spec, and currently loaded plugin distributions.
+          Versions of the core SMAI packages and every plugin distribution currently loaded.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3 text-sm">
@@ -126,8 +127,8 @@ function PluginsTab() {
       <CardHeader>
         <CardTitle>Discovered plugins</CardTitle>
         <CardDescription>
-          Each Protocol namespace lists the plugins available via entry points; the row marked
-          selected is the currently active configuration.
+          Every plugin pip can find, grouped by what it plugs into. The "selected" one is the plugin
+          your smai.yaml is using right now.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -197,9 +198,10 @@ function MigrateStatusTab() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Migrate status</CardTitle>
+        <CardTitle>Database migration status</CardTitle>
         <CardDescription>
-          Schema head vs. currently-stamped revision (smai migrate --check).
+          Whether the database schema matches the version SMAI expects. Equivalent to running
+          <code className="mx-1 font-mono">smai migrate --check</code> on the CLI.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-2 text-sm">
@@ -263,8 +265,8 @@ function VerifyTab() {
       <CardHeader>
         <CardTitle>Verify</CardTitle>
         <CardDescription>
-          Round-trips the four configured plugins through Protocol-level read probes. The LLM probe
-          issues a short prompt — running this <strong>costs real LLM tokens</strong>.
+          Pings every configured plugin to check the credentials and connectivity are working. The
+          LLM probe issues a tiny prompt, so running this <strong>costs real LLM tokens</strong>.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">

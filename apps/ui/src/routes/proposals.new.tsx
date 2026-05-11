@@ -120,19 +120,18 @@ function NewProposalPage() {
         </Link>
         <h1 className="mt-1 text-2xl font-bold tracking-tight">New proposal</h1>
         <p className="mt-1 text-sm text-[var(--color-fg-subtle)]">
-          Primary input verb per DEC-032. Submitting lands the proposal in{" "}
-          <code className="font-mono">proposal_submitted</code>; the planner agent drives it through{" "}
-          <code className="font-mono">designing</code> → <code className="font-mono">designed</code>
-          , then awaits your approval to register CGs.
+          Describe the comparison you want to test. After you submit, the planner agent designs it
+          into one or more comparison groups and waits for your approval before any run starts.
         </p>
       </header>
 
       <form onSubmit={handleSubmit} noValidate>
         <Card>
           <CardHeader>
-            <CardTitle>Submission</CardTitle>
+            <CardTitle>What to compare</CardTitle>
             <CardDescription>
-              Choose the submission kind, then provide the matching description.
+              Pick whether you're proposing a novel technique or reproducing a paper, then fill in
+              the matching description.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -188,8 +187,7 @@ function NewProposalPage() {
                   <FieldError msg={clientErrors.reproduce_paper_arxiv_id} />
                 )}
                 <p className="text-xs text-[var(--color-fg-subtle)]">
-                  The paper must already be in the <code className="font-mono">registered</code>{" "}
-                  state. Need to ingest it first?{" "}
+                  The paper must already be registered. Need to ingest it first?{" "}
                   <Link to="/papers/new" className="text-[var(--color-accent)] hover:underline">
                     Ingest a new paper
                   </Link>

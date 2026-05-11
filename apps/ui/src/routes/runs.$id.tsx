@@ -102,7 +102,7 @@ function MetricsPanel({ run }: { run: RunDetail }) {
       <CardHeader>
         <CardTitle>Metrics</CardTitle>
         <CardDescription>
-          Raw metrics produced by the run (rendered as JSON until 4.M6's JsonTree lands).
+          The raw metrics this run produced (JSON; a structured viewer lands later).
         </CardDescription>
       </CardHeader>
       <CardContent>

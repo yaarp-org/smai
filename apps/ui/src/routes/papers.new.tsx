@@ -65,9 +65,9 @@ function NewPaperPage() {
         </Link>
         <h1 className="mt-1 text-2xl font-bold tracking-tight">Ingest a paper</h1>
         <p className="mt-1 text-sm text-[var(--color-fg-subtle)]">
-          Supporting input utility per DEC-032 — fetch + parse + screen + plan, then register the
-          paper&apos;s technique pool. Idempotent: resubmitting the same arXiv ID promotes a{" "}
-          <code className="font-mono">partial</code> record or no-ops on an in-flight one.
+          Fetch an arXiv paper, parse its techniques, and register them so a proposal can ask for a
+          reproduction. Safe to resubmit: an in-flight ingest is a no-op, and a previously partial
+          one will retry.
         </p>
       </header>
 

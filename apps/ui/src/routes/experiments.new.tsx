@@ -116,10 +116,9 @@ function NewExperimentPage() {
         </Link>
         <h1 className="mt-1 text-2xl font-bold tracking-tight">New experiment</h1>
         <p className="mt-1 text-sm text-[var(--color-fg-subtle)]">
-          The HTTP analog of <code className="font-mono">smai run</code>. Compile previews the four
-          contract artifacts (methodology-only, no persistence). Compile + submit additionally
-          persists the artifacts and creates 1+ CG records in{" "}
-          <code className="font-mono">draft</code>.
+          The browser equivalent of <code className="font-mono">smai run</code>. "Compile" previews
+          the four contract artifacts without saving anything. "Compile + submit" saves them and
+          registers one or more comparison groups so the worker can start running them.
         </p>
       </header>
 
@@ -127,11 +126,11 @@ function NewExperimentPage() {
         <CardHeader>
           <CardTitle>Experiment YAML</CardTitle>
           <CardDescription>
-            Paste a complete experiment definition. The methodology compiler produces the four
-            contract artifacts (<code className="font-mono">ExperimentPlan</code>,{" "}
+            Paste a complete experiment definition. SMAI compiles it into four locked artifacts (
+            <code className="font-mono">ExperimentPlan</code>,{" "}
             <code className="font-mono">HarnessContract</code>,{" "}
             <code className="font-mono">TechniqueContract[]</code>,{" "}
-            <code className="font-mono">ValidationConfig</code>).
+            <code className="font-mono">ValidationConfig</code>) that pin the experiment's shape.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -194,8 +193,8 @@ function CompilePreview({
       <CardHeader>
         <CardTitle>Compile preview</CardTitle>
         <CardDescription>
-          {compilations.length} comparison-group{compilations.length === 1 ? "" : "s"} compiled.
-          Nothing has been persisted — click &ldquo;Compile + submit&rdquo; to register.
+          {compilations.length} comparison group{compilations.length === 1 ? "" : "s"} compiled.
+          Nothing has been saved yet. Click &ldquo;Compile + submit&rdquo; to register.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">

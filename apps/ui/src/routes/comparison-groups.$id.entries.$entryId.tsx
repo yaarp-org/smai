@@ -68,7 +68,7 @@ function EntryHeader({ entry }: { entry: EntryDetail }) {
           )}
         </div>
         <CardDescription>
-          Per-entry projection (one entry per technique/baseline in the CG).
+          One entry of the comparison: either the baseline or one technique variant.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -106,7 +106,10 @@ function TechniqueContractPanel({ entry }: { entry: EntryDetail }) {
     <Card>
       <CardHeader>
         <CardTitle>Technique contract</CardTitle>
-        <CardDescription>Locked at compile time; hashed for content addressing.</CardDescription>
+        <CardDescription>
+          The contract this technique was compiled against. Locked at compile time and
+          content-addressed so the same input always produces the same hash.
+        </CardDescription>
       </CardHeader>
       <CardContent>
         <p className="font-mono text-sm">
@@ -114,12 +117,11 @@ function TechniqueContractPanel({ entry }: { entry: EntryDetail }) {
           {entry.technique_contract_hash}
         </p>
         <p className="mt-2 text-xs text-[var(--color-fg-subtle)]">
-          4.M6 wires the inline JSON viewer; the contract artifact lives at{" "}
+          The contract JSON lives at{" "}
           <code className="font-mono">
-            /api/v1/comparison-groups/{entry.cg_id}/artifacts/entries/{entry.id}
-            /technique_contract.json
+            /comparison-groups/{entry.cg_id}/artifacts/entries/{entry.id}/technique_contract.json
           </code>
-          .
+          . Inline viewing lands later.
         </p>
       </CardContent>
     </Card>
@@ -135,19 +137,19 @@ function CodePanel({ entry }: { entry: EntryDetail }) {
       <CardHeader>
         <CardTitle>Code</CardTitle>
         <CardDescription>
-          Generated technique source. M6 swaps in the syntax-highlighted code viewer.
+          The source the technique-implementer agent wrote for this entry.
         </CardDescription>
       </CardHeader>
       <CardContent>
         <p className="text-sm">
           Source files live under{" "}
           <code className="font-mono text-xs">
-            /api/v1/comparison-groups/{entry.cg_id}/artifacts/entries/{entry.id}/code/
+            /comparison-groups/{entry.cg_id}/artifacts/entries/{entry.id}/code/
           </code>
           .
         </p>
         <p className="mt-2 text-xs text-[var(--color-fg-subtle)]">
-          Browse via the per-CG artifact list endpoint (4.M6 wires &lt;ArtifactFrame&gt; here).
+          Syntax-highlighted inline viewing lands later.
         </p>
       </CardContent>
     </Card>
@@ -159,12 +161,12 @@ function RunsPanel({ entry }: { entry: EntryDetail }) {
     <Card>
       <CardHeader>
         <CardTitle>Runs</CardTitle>
-        <CardDescription>One row per seed.</CardDescription>
+        <CardDescription>One row per random seed this entry was run at.</CardDescription>
       </CardHeader>
       <CardContent>
         {entry.runs.length === 0 ? (
           <p className="text-sm text-[var(--color-fg-subtle)]">
-            No runs (the entry has not yet reached implemented + dispatched).
+            No runs yet. They start once this entry's code has been implemented and dispatched.
           </p>
         ) : (
           <Table>
@@ -206,7 +208,7 @@ function DiffToBaselinePlaceholder() {
               </Button>
             </span>
           </TooltipTrigger>
-          <TooltipContent>4.M6 wires the diff viewer</TooltipContent>
+          <TooltipContent>Side-by-side diff lands in a follow-up.</TooltipContent>
         </Tooltip>
       </CardContent>
     </Card>

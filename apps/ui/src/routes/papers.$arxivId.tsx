@@ -113,17 +113,17 @@ function TechniqueRefsPanel({ paper }: { paper: PaperDetail }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Technique refs</CardTitle>
+        <CardTitle>Techniques from this paper</CardTitle>
         <CardDescription>
-          The technique pool produced by paper ingestion. Submit a reproduce-paper proposal against
-          one of these to run it.
+          Techniques pulled out of the paper and registered. Submit a "reproduce paper" proposal
+          against one to run it.
         </CardDescription>
       </CardHeader>
       <CardContent>
         {paper.technique_refs.length === 0 ? (
           <p className="text-sm text-[var(--color-fg-subtle)]">
-            No technique refs registered (the registered state implies at least one — surface as a
-            data anomaly if this is what you are seeing).
+            No techniques registered. A "registered" paper is expected to have at least one; seeing
+            none here is a data anomaly worth reporting.
           </p>
         ) : (
           <ul className="space-y-2">
@@ -168,10 +168,10 @@ function PromotePartialPanel({ paper }: { paper: PaperDetail }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Promote partial</CardTitle>
+        <CardTitle>Retry ingestion</CardTitle>
         <CardDescription>
-          The paper is in a partial state. Promoting fires the partial → submitted edge so the
-          ingestion pipeline picks it up again.
+          Ingestion got partway through and stopped. Hit "Promote partial" to put the paper back in
+          the queue and let ingestion try again.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -204,8 +204,8 @@ function ArtifactsPanel({ paper }: { paper: PaperDetail }) {
       <CardHeader>
         <CardTitle>Artifacts</CardTitle>
         <CardDescription>
-          Paper-level artifacts produced during ingestion. Filenames render here as monospace
-          identifiers; 4.M6 wires the artifact viewer.
+          Files produced while ingesting this paper (the LaTeX bundle, extracted text, figures, and
+          so on). Inline viewing lands later; for now the artifact keys are shown.
         </CardDescription>
       </CardHeader>
       <CardContent>
