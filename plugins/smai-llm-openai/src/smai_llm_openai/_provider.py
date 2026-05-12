@@ -54,6 +54,11 @@ from smai_llm_openai._translation import (
 # backoff. The seam for fast-forward in tests is the ``sleep`` ctor arg.
 _DEFAULT_TRANSIENT_BACKOFF_SECONDS = 30.0
 
+# Round-6 item C — the OpenAI SDK defaults to a ~10-minute per-request
+# timeout; pass an explicit, config-exposed value so a stalled call
+# doesn't pin the inline worker for ten minutes.
+_DEFAULT_REQUEST_TIMEOUT_SECONDS = 120.0
+
 # Sensible default model. Per-task model selection (DEC-022) typically
 # overrides; this is the "you forgot to specify" fallback.
 _DEFAULT_MODEL_ID = "gpt-4o"
@@ -100,11 +105,12 @@ class OpenAIProvider:
         capabilities: LlmCapabilities | None = None,
         max_tokens_default: int = 4096,
         transient_backoff_seconds: float = _DEFAULT_TRANSIENT_BACKOFF_SECONDS,
+        request_timeout_seconds: float = _DEFAULT_REQUEST_TIMEOUT_SECONDS,
         sleep: Callable[[float], Awaitable[None]] | None = None,
     ) -> None:
         self._model_id = model_id
         self.capabilities = capabilities or lookup_capabilities(model_id)
-        self._client: _OpenAIClient = openai_client or _build_openai_client()
+        self._client: _OpenAIClient = openai_client or _build_openai_client(request_timeout_seconds)
         self._max_tokens_default = max_tokens_default
         self._transient_backoff_seconds = transient_backoff_seconds
         self._sleep = sleep or asyncio.sleep
@@ -231,11 +237,16 @@ class OpenAIProvider:
 # --- module-level helpers ---------------------------------------------------
 
 
-def _build_openai_client() -> Any:
+def _build_openai_client(
+    request_timeout_seconds: float = _DEFAULT_REQUEST_TIMEOUT_SECONDS,
+) -> Any:
     """Construct a real :class:`openai.AsyncOpenAI` client.
 
     Lazily imported so the plugin module is importable in environments
     without the ``openai`` SDK installed.
+
+    Per round-6 item C an explicit ``timeout`` is passed (the SDK
+    default is ~10 minutes — far too long for an inline worker).
     """
     try:
         import openai  # noqa: PLC0415  # pyright: ignore[reportMissingImports]
@@ -244,7 +255,7 @@ def _build_openai_client() -> Any:
             "smai-llm-openai requires the `openai` SDK; install with `pip install smai-llm-openai`"
         ) from exc
     factory: Any = openai.AsyncOpenAI
-    return factory()
+    return factory(timeout=request_timeout_seconds)
 
 
 def _build_outcomes(kind: str) -> list[Any]:

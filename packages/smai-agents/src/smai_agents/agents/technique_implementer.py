@@ -296,6 +296,13 @@ async def run_technique_implementer_session(
         compute=compute,
         status_artifact_path=status_artifact_path,
         nudge_artifact_path=nudge_artifact_path,
+        # Round-6 item 5: persist this attempt's trace under the same
+        # key ``retry_context.load_retry_context`` reads on the *next*
+        # attempt — this finally makes the DEC-023 retry-context feature
+        # work end-to-end (it was always ``ArtifactNotFound`` before).
+        conversation_trace_artifact_path=DEFAULT_PREV_TRACE_KEY_TEMPLATE.format(
+            cg_id=cg_id, entry_id=entry_id
+        ),
         progress_sink=progress_sink,
         # The technique implementer threads ``implementation_attempt``
         # into its prompt; mirror it onto the session so the status
@@ -533,36 +540,41 @@ def make_dispatch_technique_implementation(
             agent_role="technique_implementer",
             llm=llm,
         )
-        outcome = await run_technique_implementer_session(
-            workspace_path=workspace_path,
-            cg_id=cg_id,
-            entry_id=entry_id,
-            technique_id=technique_id,
-            technique_name=technique_name,
-            factor_dimension=harness_contract.body.factor.name,
-            factor_type=harness_contract.body.factor.type,
-            context_kind=_resolve_context_kind(technique_contract),
-            grounding_path=None,
-            harness_contract=harness_contract,
-            technique_contract=technique_contract,
-            manifest=manifest,
-            harness_files=harness_files,
-            baseline_module=baseline_module,
-            llm=llm,
-            artifact_store=ctx.artifact_store,
-            compute=ctx.compute,
-            status_artifact_path=status_key,
-            nudge_artifact_path=nudge_key,
-            run_experiment_image=run_experiment_image,
-            run_experiment_gpu=run_experiment_gpu,
-            prev_conversation_trace_path=prev_trace_key,
-            implementation_attempt=entry_record.implementation_attempt,
-            runner=inline_runner,
-            supervisor_llm=llm if supervisor_on else None,
-            config=loop_config,
-            progress_sink=make_progress_sink(ctx.metadata_store, session_id),
-        )
-        await close_agent_session(ctx.metadata_store, session_id, outcome)
+        # Round-6 item D: close the ``agent_sessions`` row on EVERY exit
+        # path (including a raised session).
+        outcome = None
+        try:
+            outcome = await run_technique_implementer_session(
+                workspace_path=workspace_path,
+                cg_id=cg_id,
+                entry_id=entry_id,
+                technique_id=technique_id,
+                technique_name=technique_name,
+                factor_dimension=harness_contract.body.factor.name,
+                factor_type=harness_contract.body.factor.type,
+                context_kind=_resolve_context_kind(technique_contract),
+                grounding_path=None,
+                harness_contract=harness_contract,
+                technique_contract=technique_contract,
+                manifest=manifest,
+                harness_files=harness_files,
+                baseline_module=baseline_module,
+                llm=llm,
+                artifact_store=ctx.artifact_store,
+                compute=ctx.compute,
+                status_artifact_path=status_key,
+                nudge_artifact_path=nudge_key,
+                run_experiment_image=run_experiment_image,
+                run_experiment_gpu=run_experiment_gpu,
+                prev_conversation_trace_path=prev_trace_key,
+                implementation_attempt=entry_record.implementation_attempt,
+                runner=inline_runner,
+                supervisor_llm=llm if supervisor_on else None,
+                config=loop_config,
+                progress_sink=make_progress_sink(ctx.metadata_store, session_id),
+            )
+        finally:
+            await close_agent_session(ctx.metadata_store, session_id, outcome)
         return DispatchOutcome(
             submitted_handles=[
                 JobHandle(plugin="inline", handle=f"inline-{entry_id}"),

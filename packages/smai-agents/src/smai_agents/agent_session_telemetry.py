@@ -89,18 +89,38 @@ def make_progress_sink(
 async def close_agent_session(
     metadata_store: MetadataStore,
     session_id: str | None,
-    outcome: AgentOutcome,
+    outcome: AgentOutcome | None,
 ) -> None:
-    """Final UPDATE on loop exit — write the realized totals + ``ended_at``."""
+    """Final UPDATE on loop exit — write ``ended_at`` (+ the realized
+    totals when an :class:`AgentOutcome` is available).
+
+    Per round-6 item D, callers wrap their ``run_*_session`` call in a
+    ``try/finally`` and pass ``outcome=None`` from the ``finally`` so
+    the ``agent_sessions`` row is closed even when the session raised
+    (it would otherwise be left with ``ended_at=NULL`` forever)."""
     if session_id is None:
         return
     try:
+        if outcome is not None:
+            turn_count = outcome.turn_count
+            input_tokens = outcome.usage_total.input_tokens
+            cached_input_tokens = outcome.usage_total.cache_read_tokens
+            output_tokens = outcome.usage_total.output_tokens
+        else:
+            # No outcome (the session raised) — preserve whatever totals
+            # the progress_sink last wrote rather than clobbering them
+            # with zeros; just stamp ``ended_at``.
+            prior = await metadata_store.get_agent_session(session_id)
+            turn_count = prior.turn_count if prior is not None else 0
+            input_tokens = prior.input_tokens if prior is not None else 0
+            cached_input_tokens = prior.cached_input_tokens if prior is not None else 0
+            output_tokens = prior.output_tokens if prior is not None else 0
         await metadata_store.update_agent_session(
             session_id,
-            turn_count=outcome.turn_count,
-            input_tokens=outcome.usage_total.input_tokens,
-            cached_input_tokens=outcome.usage_total.cache_read_tokens,
-            output_tokens=outcome.usage_total.output_tokens,
+            turn_count=turn_count,
+            input_tokens=input_tokens,
+            cached_input_tokens=cached_input_tokens,
+            output_tokens=output_tokens,
             ended_at=datetime.now(UTC),
         )
     except Exception:  # noqa: BLE001 — telemetry must not break dispatch

@@ -102,6 +102,7 @@ DEFAULT_HARNESS_CONTRACT_KEY_TEMPLATE = "comparison-groups/{cg_id}/harness/contr
 DEFAULT_HARNESS_MANIFEST_KEY_TEMPLATE = "comparison-groups/{cg_id}/harness/manifest.json"
 DEFAULT_HARNESS_STATUS_KEY_TEMPLATE = "comparison-groups/{cg_id}/harness/status.json"
 DEFAULT_HARNESS_NUDGE_KEY_TEMPLATE = "comparison-groups/{cg_id}/harness/nudge.txt"
+DEFAULT_HARNESS_TRACE_KEY_TEMPLATE = "comparison-groups/{cg_id}/harness/conversation-trace.json"
 
 
 # Test-only seam: a ``runner`` callable that takes the assembled
@@ -244,6 +245,7 @@ async def run_harness_builder_session(
         compute=compute,
         status_artifact_path=status_artifact_path,
         nudge_artifact_path=nudge_artifact_path,
+        conversation_trace_artifact_path=DEFAULT_HARNESS_TRACE_KEY_TEMPLATE.format(cg_id=cg_id),
         progress_sink=progress_sink,
         # Harness builder has no attempt counter — leave attempt_index None.
         config=config or AgentLoopConfig(),
@@ -412,24 +414,29 @@ def make_dispatch_harness_build(
                 agent_role="harness_builder",
                 llm=llm,
             )
-            outcome = await run_harness_builder_session(
-                workspace_path=workspace_path,
-                harness_contract=harness_contract,
-                cg_id=cg_id,
-                llm=llm,
-                artifact_store=ctx.artifact_store,
-                compute=ctx.compute,
-                manifest_artifact_path=manifest_key,
-                status_artifact_path=status_key,
-                nudge_artifact_path=nudge_key,
-                run_experiment_image=run_experiment_image,
-                run_experiment_gpu=run_experiment_gpu,
-                runner=inline_runner,
-                supervisor_llm=llm if supervisor_on else None,
-                config=loop_config,
-                progress_sink=make_progress_sink(ctx.metadata_store, session_id),
-            )
-            await close_agent_session(ctx.metadata_store, session_id, outcome)
+            # Round-6 item D: close the ``agent_sessions`` row on EVERY
+            # exit path (including a raised session).
+            outcome = None
+            try:
+                outcome = await run_harness_builder_session(
+                    workspace_path=workspace_path,
+                    harness_contract=harness_contract,
+                    cg_id=cg_id,
+                    llm=llm,
+                    artifact_store=ctx.artifact_store,
+                    compute=ctx.compute,
+                    manifest_artifact_path=manifest_key,
+                    status_artifact_path=status_key,
+                    nudge_artifact_path=nudge_key,
+                    run_experiment_image=run_experiment_image,
+                    run_experiment_gpu=run_experiment_gpu,
+                    runner=inline_runner,
+                    supervisor_llm=llm if supervisor_on else None,
+                    config=loop_config,
+                    progress_sink=make_progress_sink(ctx.metadata_store, session_id),
+                )
+            finally:
+                await close_agent_session(ctx.metadata_store, session_id, outcome)
             return DispatchOutcome(
                 submitted_handles=[
                     JobHandle(plugin="inline", handle=f"inline-{cg_id}"),
@@ -496,6 +503,7 @@ __all__ = [
     "DEFAULT_HARNESS_MANIFEST_KEY_TEMPLATE",
     "DEFAULT_HARNESS_NUDGE_KEY_TEMPLATE",
     "DEFAULT_HARNESS_STATUS_KEY_TEMPLATE",
+    "DEFAULT_HARNESS_TRACE_KEY_TEMPLATE",
     "WORKSPACE_HARNESS_CONTRACT_PATH",
     "SessionRunner",
     "make_dispatch_harness_build",

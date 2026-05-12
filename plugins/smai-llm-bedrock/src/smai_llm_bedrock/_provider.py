@@ -58,6 +58,27 @@ from smai_llm_bedrock._translation import (
 # below — overridable via the ``_sleep`` constructor arg for tests.
 _DEFAULT_TRANSIENT_BACKOFF_SECONDS = 30.0
 
+# Round-6 item C — client-level timeout / retry ceiling. A bare
+# ``boto3.client("bedrock-runtime")`` has *no* connect/read timeout, so
+# a stalled call hangs forever; because the planner / supervisor run
+# inline in the worker, that wedges the worker. We construct the client
+# with an explicit :class:`botocore.config.Config` (connect/read
+# timeouts + bounded internal retries) AND wrap the ``to_thread`` call
+# in :func:`asyncio.wait_for` with a hard ceiling so the ``await``
+# always unblocks. (Cancelling a ``to_thread`` does NOT kill the
+# underlying boto3 call — the worker thread keeps running until the
+# call returns — but it unblocks the loop so a timeout surfaces as a
+# retryable :class:`LlmProviderUnavailable`; the orphan thread dies
+# when the call eventually returns.)
+_DEFAULT_CONNECT_TIMEOUT_SECONDS = 10.0
+# 90s comfortably covers a full ~4k-token generation; capping internal
+# retries at 2 keeps the hard ceiling at 90*(2+1)+30 = 300s and the
+# retry-once worst case at ~2*300 + backoff ≈ 10min, rather than the
+# ~21min the old 120s/4-retry defaults allowed. All config-overridable.
+_DEFAULT_READ_TIMEOUT_SECONDS = 90.0
+_DEFAULT_MAX_RETRIES = 2
+_HARD_CEILING_SLACK_SECONDS = 30.0
+
 # Default request shape echoed back when no real call is made (used
 # by the in-process FakeBedrockClient in tests). Never reached at
 # runtime — the production path always goes through the boto3 client.
@@ -123,13 +144,26 @@ class BedrockProvider:
         bedrock_client: _BedrockClient | None = None,
         capabilities: LlmCapabilities | None = None,
         transient_backoff_seconds: float = _DEFAULT_TRANSIENT_BACKOFF_SECONDS,
+        connect_timeout_seconds: float = _DEFAULT_CONNECT_TIMEOUT_SECONDS,
+        read_timeout_seconds: float = _DEFAULT_READ_TIMEOUT_SECONDS,
+        max_retries: int = _DEFAULT_MAX_RETRIES,
         sleep: Callable[[float], Awaitable[None]] | None = None,
     ) -> None:
         self._region = region
         self._model_id = model_id
         self.capabilities = capabilities or lookup_capabilities(model_id)
-        self._client: _BedrockClient = bedrock_client or _build_bedrock_client(region)
+        self._client: _BedrockClient = bedrock_client or _build_bedrock_client(
+            region,
+            connect_timeout_seconds=connect_timeout_seconds,
+            read_timeout_seconds=read_timeout_seconds,
+            max_retries=max_retries,
+        )
         self._transient_backoff_seconds = transient_backoff_seconds
+        # Hard ceiling for the per-call ``await``: every internal botocore
+        # retry costs up to ``read_timeout`` seconds, plus slack.
+        self._call_timeout_seconds = read_timeout_seconds * (max_retries + 1) + (
+            _HARD_CEILING_SLACK_SECONDS
+        )
         self._sleep = sleep or asyncio.sleep
 
     @property
@@ -211,7 +245,20 @@ class BedrockProvider:
 
     async def _send(self, request: dict[str, Any]) -> dict[str, Any]:
         try:
-            raw_response = await asyncio.to_thread(self._client.converse, **request)
+            # Hard ceiling on the ``await`` — cancelling the ``to_thread``
+            # does not kill the boto3 call (the orphan thread runs until
+            # the call returns), but it unblocks the loop so a wedged
+            # call surfaces as a retryable error rather than hanging the
+            # inline worker forever (round-6 item C).
+            raw_response = await asyncio.wait_for(
+                asyncio.to_thread(self._client.converse, **request),
+                timeout=self._call_timeout_seconds,
+            )
+        except TimeoutError as exc:
+            raise LlmProviderUnavailable(
+                f"Bedrock Converse exceeded the {self._call_timeout_seconds:.0f}s "
+                f"client-call ceiling; treating as transient"
+            ) from exc
         except Exception as exc:
             raise self._classify_exception(exc) from exc
         if not isinstance(raw_response, dict):
@@ -288,21 +335,38 @@ class BedrockProvider:
 # --- module-level helpers ---------------------------------------------------
 
 
-def _build_bedrock_client(region: str) -> Any:
+def _build_bedrock_client(
+    region: str,
+    *,
+    connect_timeout_seconds: float = _DEFAULT_CONNECT_TIMEOUT_SECONDS,
+    read_timeout_seconds: float = _DEFAULT_READ_TIMEOUT_SECONDS,
+    max_retries: int = _DEFAULT_MAX_RETRIES,
+) -> Any:
     """Construct a real ``bedrock-runtime`` boto3 client.
 
     Lazily imported so the plugin module is importable in environments
     without boto3 installed (e.g., ``pyright`` on a CI runner that hasn't
     synced workspace dependencies yet).
+
+    Per round-6 item C the client carries an explicit
+    :class:`botocore.config.Config` — a bare ``boto3.client(...)`` has no
+    connect/read timeout, so a stalled call would hang the inline worker
+    forever.
     """
     try:
         import boto3  # noqa: PLC0415  # pyright: ignore[reportMissingTypeStubs]
+        import botocore.config  # noqa: PLC0415  # pyright: ignore[reportMissingTypeStubs]
     except ImportError as exc:  # pragma: no cover — declared dep
         raise LlmProviderError(
             "smai-llm-bedrock requires boto3; install with `pip install smai-llm-bedrock`"
         ) from exc
+    boto_config = cast("Any", botocore.config.Config)(
+        connect_timeout=connect_timeout_seconds,
+        read_timeout=read_timeout_seconds,
+        retries={"max_attempts": max_retries, "mode": "standard"},
+    )
     factory = cast("Any", boto3).client
-    client: Any = factory("bedrock-runtime", region_name=region)
+    client: Any = factory("bedrock-runtime", region_name=region, config=boto_config)
     return client
 
 

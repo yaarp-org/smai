@@ -53,6 +53,11 @@ from smai_llm_anthropic._translation import (
 # backoff. The seam for fast-forward in tests is the ``sleep`` ctor arg.
 _DEFAULT_TRANSIENT_BACKOFF_SECONDS = 30.0
 
+# Round-6 item C — the Anthropic SDK defaults to a ~10-minute per-request
+# timeout; pass an explicit, config-exposed value so a stalled call
+# doesn't pin the inline worker for ten minutes.
+_DEFAULT_REQUEST_TIMEOUT_SECONDS = 120.0
+
 # Sensible default model. Surfaced in the §3.F5 brief: pick a current
 # Opus tier; the per-task model selection (DEC-022) typically overrides.
 _DEFAULT_MODEL_ID = "claude-opus-4-7"
@@ -101,11 +106,14 @@ class AnthropicProvider:
         capabilities: LlmCapabilities | None = None,
         max_tokens_default: int = 4096,
         transient_backoff_seconds: float = _DEFAULT_TRANSIENT_BACKOFF_SECONDS,
+        request_timeout_seconds: float = _DEFAULT_REQUEST_TIMEOUT_SECONDS,
         sleep: Callable[[float], Awaitable[None]] | None = None,
     ) -> None:
         self._model_id = model_id
         self.capabilities = capabilities or lookup_capabilities(model_id)
-        self._client: _AnthropicClient = anthropic_client or _build_anthropic_client()
+        self._client: _AnthropicClient = anthropic_client or _build_anthropic_client(
+            request_timeout_seconds
+        )
         self._max_tokens_default = max_tokens_default
         self._transient_backoff_seconds = transient_backoff_seconds
         self._sleep = sleep or asyncio.sleep
@@ -247,12 +255,17 @@ class AnthropicProvider:
 # --- module-level helpers ---------------------------------------------------
 
 
-def _build_anthropic_client() -> Any:
+def _build_anthropic_client(
+    request_timeout_seconds: float = _DEFAULT_REQUEST_TIMEOUT_SECONDS,
+) -> Any:
     """Construct a real :class:`anthropic.AsyncAnthropic` client.
 
     Lazily imported so the plugin module is importable in environments
     without the ``anthropic`` SDK installed (e.g., ``pyright`` on a CI
     runner that hasn't synced workspace dependencies yet).
+
+    Per round-6 item C an explicit ``timeout`` is passed (the SDK
+    default is ~10 minutes — far too long for an inline worker).
     """
     try:
         import anthropic  # noqa: PLC0415  # pyright: ignore[reportMissingImports]
@@ -262,7 +275,7 @@ def _build_anthropic_client() -> Any:
             "`pip install smai-llm-anthropic`"
         ) from exc
     factory: Any = anthropic.AsyncAnthropic
-    return factory()
+    return factory(timeout=request_timeout_seconds)
 
 
 def _build_outcomes(kind: str) -> list[Any]:

@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict
 from smai_core.plugins import (
@@ -55,6 +55,7 @@ from smai_orchestrator.engine.types import (
     DispatchOutcome,
     EdgeDef,
     EngineSpec,
+    GateContext,
     StateDef,
 )
 
@@ -166,6 +167,14 @@ async def run_dispatch(  # noqa: PLR0913
         checkpointer=None,
     )
 
+    _log.info(
+        "dispatching %s for %s/%s (worker=%s)",
+        action.name,
+        spec.entity_kind,
+        entity_id,
+        worker_id,
+    )
+
     handler_outcome: DispatchOutcome
     handler_failed = False
     handler_error: str | None = None
@@ -180,20 +189,35 @@ async def run_dispatch(  # noqa: PLR0913
         handler_outcome = DispatchOutcome(error=handler_error)
 
     if handler_failed:
-        rollback_status = await _forward_rollback(
+        assert handler_error is not None  # set whenever handler_failed
+        _log.info(
+            "dispatch %s for %s/%s: outcome=failed error=%s (worker=%s)",
+            action.name,
+            spec.entity_kind,
+            entity_id,
+            handler_error,
+            worker_id,
+        )
+        return await _handle_dispatch_failure(
             spec=spec,
             metadata_store=metadata_store,
+            artifact_store=artifact_store,
             config=config,
             edge=edge,
+            target_state=target_state,
             entity_id=entity_id,
-            current_version=post_transition_record.version,
             worker_id=worker_id,
-        )
-        return DriveOutcome(
-            status=rollback_status,
-            fired_edge=edge,
             error=handler_error,
         )
+
+    _log.info(
+        "dispatch %s for %s/%s: outcome=ok handles=%d (worker=%s)",
+        action.name,
+        spec.entity_kind,
+        entity_id,
+        len(handler_outcome.submitted_handles),
+        worker_id,
+    )
 
     # ---- Step 3: persist the JobHandle on the entity ---------------------
     # Inline dispatches skip step 3 (no handle to record).
@@ -212,18 +236,15 @@ async def run_dispatch(  # noqa: PLR0913
         # handler error: the engine's invariant is "external dispatches
         # produce a handle for phase-1 polling"; absent that, the entity
         # is half-transitioned and would otherwise be stuck.
-        rollback_status = await _forward_rollback(
+        return await _handle_dispatch_failure(
             spec=spec,
             metadata_store=metadata_store,
+            artifact_store=artifact_store,
             config=config,
             edge=edge,
+            target_state=target_state,
             entity_id=entity_id,
-            current_version=post_transition_record.version,
             worker_id=worker_id,
-        )
-        return DriveOutcome(
-            status=rollback_status,
-            fired_edge=edge,
             error=(
                 f"dispatch handler {action.name!r} declared "
                 f"handle_field={action.handle_field!r} but returned no JobHandle"
@@ -277,27 +298,116 @@ async def run_dispatch(  # noqa: PLR0913
     )
 
 
-async def _forward_rollback(
+async def _handle_dispatch_failure(  # noqa: PLR0913
     *,
     spec: EngineSpec,
     metadata_store: MetadataStore,
+    artifact_store: ArtifactStore,
     config: EngineConfig,
     edge: EdgeDef,
+    target_state: StateDef,
     entity_id: str,
-    current_version: int,
-    worker_id: str | None = None,
-) -> Literal["dispatch_failed_rolled_back", "conflict"]:
-    """Forward-roll-back the entity's state to ``edge.from_state`` (`05` §1.4).
+    worker_id: str | None,
+    error: str,
+) -> DriveOutcome:
+    """A dispatch handler returned an error (or raised, or — for an
+    external dispatch — returned no :class:`JobHandle`). Move the entity
+    out of its half-transitioned dispatch state instead of leaving it
+    silently parked (round-6 fix for the "proposal wedged in
+    ``designing`` forever" friction).
 
-    Per the spec: a *version-incrementing* forward write that resets
-    the state field — NOT a version decrement. Version monotonicity is
-    a load-bearing invariant of CAS discipline; rolling the version
-    backwards would expose every concurrent reader to ABA shapes.
+    Sequence:
 
-    On CAS conflict (someone else has already moved the entity since
-    step 1), surface ``"conflict"`` so the caller drops the result;
-    the next cycle's phase-1 polling reconciles.
+    1. **Re-read the entity for a fresh version.** The dispatch handler
+       may itself have performed field-only writes (e.g. the
+       ``cg_execution.py`` / ``proposal.py`` retry-counter-bump pattern:
+       ``transition_*_state`` with the state held), which bump the row's
+       ``version``. A rollback CAS keyed on the *pre-handler* version
+       would then spuriously conflict and strand the entity in its
+       dispatch state with a null handle — invisible to the phase-1
+       scheduling queries that filter on a non-null handle, so it is
+       never re-discovered. That is exactly the wedge this function
+       exists to prevent.
+    2. **Re-evaluate the dispatch state's outgoing ``dispatch_time``
+       edges** — the spec's declared error-handling paths (e.g. a
+       ``*_failed`` retry-exhausted terminal whose gate reads an
+       attempt counter the handler just bumped). If one fires, CAS-
+       transition the entity there with ``last_error`` recorded so
+       ``smai status`` / the API surface the diagnostic.
+    3. **Otherwise forward-roll-back to ``edge.from_state``** (the
+       ``05`` §1.4 rollback shape — a *version-incrementing* forward
+       write, never a decrement) with ``last_error`` recorded. The
+       entity is re-discovered by the ``from_state`` scheduling query
+       and re-dispatched; dispatch handlers bump their own attempt
+       counter on re-entry, so the retry budget converges and step 2's
+       terminal edge eventually fires.
+
+    The invariant established (and tested): a dispatch handler returning
+    an error NEVER leaves the entity silently parked in its dispatch
+    state — it either advances to a spec-declared error/retry state or
+    rolls back to be re-dispatched, and ``last_error`` is populated in
+    both cases.
+
+    Returns:
+        ``DriveOutcome`` with ``status="advanced"`` (a spec error-
+        handling edge fired), ``status="dispatch_failed_rolled_back"``
+        (rolled back to ``edge.from_state``), or ``status="conflict"``
+        (a peer moved the entity out from under us; the next cycle
+        reconciles).
     """
+    # Lazy import to break the dispatch ↔ state_machine import cycle.
+    from smai_orchestrator.engine.state_machine import (  # noqa: PLC0415
+        DriveOutcome,
+        evaluate_outgoing_edges_with_outcome,
+    )
+
+    refreshed = await get_entity(metadata_store, spec.entity_kind, entity_id)
+    if refreshed is None or refreshed.state != target_state.name:
+        # The entity vanished or a peer already transitioned it out of
+        # the dispatch state (orphan reclaim / manual intervention).
+        # Surface a conflict so the worker drops this cycle's result;
+        # the next phase-1 cycle reconciles.
+        return DriveOutcome(status="conflict", fired_edge=edge, error=error)
+    current_version = refreshed.version
+
+    gate_context = GateContext(
+        entity_kind=spec.entity_kind,
+        entity_id=entity_id,
+        entity_state=target_state.name,
+        entity_version=current_version,
+        metadata_store=metadata_store,
+        artifact_store=artifact_store,
+        config=config,
+        job_outcome=None,
+    )
+    evaluated = await evaluate_outgoing_edges_with_outcome(
+        spec=spec,
+        entity_state=target_state.name,
+        phase="dispatch_time",
+        gate_context=gate_context,
+    )
+    if evaluated is not None:
+        fail_edge, fail_outcome = evaluated
+        try:
+            await transition_state(
+                metadata_store,
+                spec.entity_kind,
+                entity_id,
+                current_version,
+                fail_edge.target_state,
+                fields={"last_error": error},
+                event_channel=config.event_channel,
+                from_state=target_state.name,
+                edge_name=fail_edge.name,
+                worker_id=worker_id,
+                gate_outcome_reason=fail_outcome.reason,
+            )
+        except ConflictError:
+            return DriveOutcome(status="conflict", fired_edge=edge, error=error)
+        return DriveOutcome(status="advanced", fired_edge=fail_edge, error=error)
+
+    # No spec-declared error-handling edge fired — forward-roll-back so
+    # the entity is re-discovered and re-dispatched.
     try:
         await transition_state(
             metadata_store,
@@ -305,15 +415,15 @@ async def _forward_rollback(
             entity_id,
             current_version,
             edge.from_state,
-            fields={},
+            fields={"last_error": error},
             event_channel=config.event_channel,
-            from_state=edge.target_state,
+            from_state=target_state.name,
             edge_name=f"{edge.name}:rollback",
             worker_id=worker_id,
         )
     except ConflictError:
-        return "conflict"
-    return "dispatch_failed_rolled_back"
+        return DriveOutcome(status="conflict", fired_edge=edge, error=error)
+    return DriveOutcome(status="dispatch_failed_rolled_back", fired_edge=edge, error=error)
 
 
 async def reset_orphan(  # noqa: PLR0913

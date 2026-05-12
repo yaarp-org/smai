@@ -479,6 +479,26 @@ async def run_worker_loop(  # noqa: PLR0913
         )
         cycle_id += 1
         cycles_processed += 1
+        # Per round-6 item 6: one INFO line per cycle that actually moved
+        # something — idle cycles stay quiet so a steady-state worker
+        # doesn't spam the log.
+        if (
+            stats.phase1_advanced
+            or stats.phase1_orphan_reset
+            or stats.phase3_advanced
+            or stats.phase3_dispatch_failed
+        ):
+            _log.info(
+                "worker %s cycle %d: phase1_advanced=%d orphan_reset=%d "
+                "phase3_advanced=%d dispatch_failed=%d candidates=%d",
+                resolved_worker_id,
+                cycle_id,
+                stats.phase1_advanced,
+                stats.phase1_orphan_reset,
+                stats.phase3_advanced,
+                stats.phase3_dispatch_failed,
+                stats.phase2_candidates,
+            )
         if on_cycle_complete is not None:
             await on_cycle_complete(stats)
         # Per Task 4.K2 (`12` §6.4): fire the worker_heartbeat SSE

@@ -247,6 +247,7 @@ async def test_novel_technique_variant_finalize_returns_errors_on_missing_valida
         workspace_path=tmp_path / "ws",
         artifact_store=artifact_store,  # type: ignore[arg-type]
         config=AgentLoopConfig(max_turns=10),
+        max_finalize_reprompts=0,  # this test exercises finalize-rejection, not re-prompting
     )
     # Agent finished but the buffer was NOT finalized — finalize_plan
     # rejected the structure-incomplete buffer.
@@ -284,6 +285,7 @@ async def test_novel_technique_search_techniques_matches_pool(tmp_path: Path) ->
         workspace_path=tmp_path / "ws",
         artifact_store=artifact_store,  # type: ignore[arg-type]
         config=AgentLoopConfig(max_turns=5),
+        max_finalize_reprompts=0,
     )
     # The search_techniques tool result was appended to the conversation
     # as a tool_result with the matching line. Inspect only the
@@ -347,6 +349,7 @@ async def test_novel_technique_draft_create_rejects_unanchored_non_standard(
         workspace_path=tmp_path / "ws",
         artifact_store=artifact_store,  # type: ignore[arg-type]
         config=AgentLoopConfig(max_turns=5),
+        max_finalize_reprompts=0,
     )
     assert result.outcome.kind == "finished"
     # The technique should NOT be in the buffer (the tool returned
@@ -438,6 +441,7 @@ async def test_paper_ingestion_variant_rejects_empty_buffer(tmp_path: Path) -> N
         workspace_path=tmp_path / "ws",
         artifact_store=artifact_store,  # type: ignore[arg-type]
         config=AgentLoopConfig(max_turns=5),
+        max_finalize_reprompts=0,
     )
     assert result.outcome.kind == "finished"
     assert result.buffer.finalized is False
@@ -471,6 +475,7 @@ async def test_variant_selects_distinct_tool_surfaces(tmp_path: Path) -> None:
         workspace_path=tmp_path / "ws-nt",
         artifact_store=None,
         config=AgentLoopConfig(max_turns=2),
+        max_finalize_reprompts=0,
     )
     novel_tools = {t["name"] for t in novel_llm.calls[0]["tools"]}  # type: ignore[index, union-attr]
     assert "draft_comparison" in novel_tools
@@ -491,6 +496,7 @@ async def test_variant_selects_distinct_tool_surfaces(tmp_path: Path) -> None:
         workspace_path=tmp_path / "ws-pi",
         artifact_store=None,
         config=AgentLoopConfig(max_turns=2),
+        max_finalize_reprompts=0,
     )
     paper_tools = {t["name"] for t in paper_llm.calls[0]["tools"]}  # type: ignore[index, union-attr]
     # Per DEC-032 narrowing — these are absent.
@@ -538,3 +544,119 @@ async def test_planner_buffer_round_trip(tmp_path: Path) -> None:
     assert parsed.finalized is True
     assert len(parsed.comparison_groups) == 1
     assert parsed.proposal_id == "prop-1"
+
+
+# === Round-6 friction B: finalize re-prompting ==============================
+
+
+@pytest.mark.asyncio
+async def test_planner_reprompts_when_buffer_not_finalized(tmp_path: Path) -> None:
+    """The loop returns ``end_turn`` (no tool) with the buffer un-finalized
+    → :func:`run_planner_session` re-prompts up to the bound, then returns
+    ``finalized=False`` with the re-prompt count recorded."""
+    # 1 initial run + 3 re-prompts = 4 loop runs; each ends immediately.
+    responses = [
+        model_response(text="nothing more to say", stop_reason="end_turn") for _ in range(4)
+    ]
+    llm = StubLlmProvider(responses)
+    planner_input = PlannerInput(variant="novel_technique", proposal_id="prop-1", pool_summary="")
+    result = await run_planner_session(
+        input=planner_input,
+        llm=llm,  # type: ignore[arg-type]
+        workspace_path=tmp_path / "ws",
+        artifact_store=None,
+        config=AgentLoopConfig(max_turns=4),
+        max_finalize_reprompts=3,
+    )
+    assert result.buffer.finalized is False
+    assert result.finalize_reprompts == 3
+    assert len(llm.calls) == 4  # one LLM call per loop run
+    # The re-prompt nudges reference the finalize tool.
+    assert "finalize_plan" in json.dumps(llm.calls[-1]["messages"])
+
+
+@pytest.mark.asyncio
+async def test_planner_reprompt_succeeds_on_second_run(tmp_path: Path) -> None:
+    """The first loop run stops without finalizing; the re-prompt drives a
+    full draft → finalize → finish run that succeeds."""
+    artifact_store = StubArtifactStore()
+    responses = [
+        model_response(text="hmm, done?", stop_reason="end_turn"),  # run 1: stops short
+        model_response(tool_uses=[_set_classification_call()], stop_reason="tool_use"),
+        model_response(
+            tool_uses=[_draft_create_technique_call(symbolic_name="tech-cutout")],
+            stop_reason="tool_use",
+        ),
+        model_response(tool_uses=[_draft_comparison_call()], stop_reason="tool_use"),
+        model_response(tool_uses=[_set_conditions_call()], stop_reason="tool_use"),
+        model_response(tool_uses=[_draft_assertion_call()], stop_reason="tool_use"),
+        model_response(tool_uses=[_finalize_plan_call()], stop_reason="tool_use"),
+        model_response(tool_uses=[_finish_call(True)], stop_reason="tool_use"),
+    ]
+    llm = StubLlmProvider(responses)
+    planner_input = PlannerInput(
+        variant="novel_technique",
+        proposal_id="prop-1",
+        submission_kind="novel_technique",
+        technique_description="t",
+        pool_summary="",
+    )
+    result = await run_planner_session(
+        input=planner_input,
+        llm=llm,  # type: ignore[arg-type]
+        workspace_path=tmp_path / "ws",
+        artifact_store=artifact_store,  # type: ignore[arg-type]
+        config=AgentLoopConfig(max_turns=20),
+        max_finalize_reprompts=3,
+    )
+    assert result.buffer.finalized is True
+    assert result.finalize_reprompts == 1
+    assert result.artifact_key in artifact_store._data
+
+
+@pytest.mark.asyncio
+async def test_planner_finish_before_finalize_not_accepted(tmp_path: Path) -> None:
+    """Calling ``finish`` before ``finalize_plan`` succeeded does NOT count
+    as a successful finalize — :func:`run_planner_session` keeps re-prompting
+    until the bound is exhausted."""
+    responses = [
+        model_response(tool_uses=[_finish_call(True)], stop_reason="tool_use") for _ in range(4)
+    ]
+    llm = StubLlmProvider(responses)
+    planner_input = PlannerInput(variant="novel_technique", proposal_id="prop-1", pool_summary="")
+    result = await run_planner_session(
+        input=planner_input,
+        llm=llm,  # type: ignore[arg-type]
+        workspace_path=tmp_path / "ws",
+        artifact_store=None,
+        config=AgentLoopConfig(max_turns=4),
+        max_finalize_reprompts=3,
+    )
+    assert result.buffer.finalized is False
+    assert result.finalize_reprompts == 3
+
+
+@pytest.mark.asyncio
+async def test_planner_persists_conversation_trace(tmp_path: Path) -> None:
+    """``run_loop`` serializes the conversation to the planner trace key on
+    loop exit (round-6 item 5 — nothing wrote it before)."""
+    from smai_agents.agents.planner import DEFAULT_PLANNER_TRACE_KEY_TEMPLATE  # noqa: PLC0415
+
+    artifact_store = StubArtifactStore()
+    llm = StubLlmProvider([model_response(text="done", stop_reason="end_turn")])
+    planner_input = PlannerInput(
+        variant="novel_technique", proposal_id="prop-trace", pool_summary=""
+    )
+    await run_planner_session(
+        input=planner_input,
+        llm=llm,  # type: ignore[arg-type]
+        workspace_path=tmp_path / "ws",
+        artifact_store=artifact_store,  # type: ignore[arg-type]
+        config=AgentLoopConfig(max_turns=2),
+        max_finalize_reprompts=0,
+    )
+    key = DEFAULT_PLANNER_TRACE_KEY_TEMPLATE.format(proposal_id="prop-trace")
+    assert key in artifact_store._data
+    parsed = json.loads(artifact_store._data[key])
+    assert isinstance(parsed, list) and parsed
+    assert parsed[0]["role"] == "user"

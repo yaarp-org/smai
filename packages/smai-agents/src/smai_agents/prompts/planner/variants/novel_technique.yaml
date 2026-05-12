@@ -34,6 +34,19 @@ system_prompt: |
   paper's extracted text + figures + per-technique method-extraction
   artifacts.
 
+  Required terminal sequence — NOT optional:
+
+    1. Draft the buffer with the tools below.
+    2. Call `finalize_plan`. It runs the structural-soundness check; on
+       failure it returns the rule errors — FIX THEM and call
+       `finalize_plan` again.
+    3. ONLY AFTER `finalize_plan` has SUCCEEDED, call `finish`.
+
+  Do NOT call `finish` before `finalize_plan` has succeeded. Do NOT end
+  your turn without a tool call while the buffer is un-finalized — if
+  you have nothing more to draft, that means it is time to call
+  `finalize_plan`, not time to stop.
+
   Output: a finalized buffer of methodology entities that the
   registration step will commit atomically. The buffer carries:
 

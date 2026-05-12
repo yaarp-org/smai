@@ -263,6 +263,15 @@ async def transition_state(  # noqa: PLR0913
         assert from_state is not None
         async with await store.transaction() as txn:
             record = await _txn_transition(txn, kind, entity_id, expected_version, state, fields)
+            _log.info(
+                "transition %s/%s: %s→%s via %s (worker=%s)",
+                kind,
+                entity_id,
+                from_state,
+                target_state,
+                edge_name or "(unknown)",
+                worker_id,
+            )
             # Audit row in the SAME transaction as the CAS UPDATE so a
             # ROLLBACK suppresses both the wire signal and the log row.
             await txn.append_transition_log(
@@ -294,6 +303,15 @@ async def transition_state(  # noqa: PLR0913
     record = await _bare_transition(store, kind, entity_id, expected_version, state, fields)
     if is_transition:
         assert from_state is not None
+        _log.info(
+            "transition %s/%s: %s→%s via %s (worker=%s)",
+            kind,
+            entity_id,
+            from_state,
+            target_state,
+            edge_name or "(unknown)",
+            worker_id,
+        )
         # Audit row, post-commit, best-effort — a failed audit write
         # must not break the engine (the state transition already
         # committed). Mirrors the fire-on-transition error handling.

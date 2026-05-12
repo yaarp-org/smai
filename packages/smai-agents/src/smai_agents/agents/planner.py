@@ -126,10 +126,15 @@ DEFAULT_PAPER_PLAN_KEY_TEMPLATE = "papers/{arxiv_id}/planner_buffer.json"
 # ``nudge_artifact_path`` the nudge is silently dropped).
 DEFAULT_PLANNER_STATUS_KEY_TEMPLATE = "proposals/{proposal_id}/planner_status.json"
 DEFAULT_PLANNER_NUDGE_KEY_TEMPLATE = "proposals/{proposal_id}/planner_nudge.txt"
+# Conversation-trace artifact (round-6 item 5 — wire the trace
+# :class:`AgentSession` docstring claims is persisted; nothing wrote
+# it before). The paper-ingestion pipeline-spec wires the paper variant.
+DEFAULT_PLANNER_TRACE_KEY_TEMPLATE = "proposals/{proposal_id}/conversation-trace.json"
 # Paper-ingestion equivalents (the paper-ingestion pipeline-spec wires
 # these; only the novel_technique path is wired by this module today).
 DEFAULT_PAPER_PLANNER_STATUS_KEY_TEMPLATE = "papers/{arxiv_id}/planner_status.json"
 DEFAULT_PAPER_PLANNER_NUDGE_KEY_TEMPLATE = "papers/{arxiv_id}/planner_nudge.txt"
+DEFAULT_PAPER_PLANNER_TRACE_KEY_TEMPLATE = "papers/{arxiv_id}/conversation-trace.json"
 
 
 # === Buffer schema ==========================================================
@@ -1154,6 +1159,46 @@ class PlannerSessionResult(BaseModel):
     buffer: PlannerBuffer
     artifact_key: str
 
+    finalize_reprompts: int = 0
+    """How many ``finalize_plan`` re-prompts :func:`run_planner_session`
+    issued after the agent loop returned with the buffer not finalized
+    (see ``DEFAULT_MAX_FINALIZE_REPROMPTS``). ``0`` on the happy path."""
+
+
+# Per round-6 friction B: the planner agent loop sometimes returns
+# ``finished_without_tool_use`` (or ``finished`` via the ``finish`` tool)
+# after only a couple of turns WITHOUT ever calling ``finalize_plan`` —
+# the buffer is left un-finalized and (pre-round-6) the dispatch failure
+# vanished silently. :func:`run_planner_session` now re-prompts up to this
+# many times to nudge the agent back to ``finalize_plan`` (and to forbid
+# ``finish`` before ``finalize_plan`` has succeeded) before giving up; on
+# exhaustion the dispatch handler's error propagates through the engine's
+# dispatch-failure machinery (forward-rollback + ``last_error`` + re-
+# dispatch, then the ``designing → failed`` terminal).
+DEFAULT_MAX_FINALIZE_REPROMPTS = 3
+
+# The two loop outcomes that mean "the agent voluntarily stopped" — the
+# only ones worth re-prompting. ``exhausted_turns`` would just hit the
+# turn cap again immediately; ``aborted_by_supervisor`` is an explicit
+# kill; ``truncated_output`` is a resume signal the caller handles
+# separately.
+_REPROMPTABLE_OUTCOME_KINDS = frozenset({"finished_without_tool_use", "finished"})
+
+
+def _finalize_reprompt_text(buffer: PlannerBuffer, finalize_tool: str) -> str:
+    """Build the user-role re-prompt nudging the agent to ``finalize_*``."""
+    cg_count = len(buffer.comparison_groups)
+    technique_count = len(buffer.techniques)
+    classification = "set" if buffer.classification else "unset"
+    return (
+        f"You have not yet called `{finalize_tool}`. Current buffer: {cg_count} "
+        f"comparison group(s), {technique_count} technique(s), classification "
+        f"{classification}. Either continue drafting the missing pieces, or call "
+        f"`{finalize_tool}` to run the structural-soundness check (and fix any rule "
+        f"failures it reports), then call `finish`. Do not call `finish` before "
+        f"`{finalize_tool}` has succeeded."
+    )
+
 
 async def run_planner_session(
     *,
@@ -1168,7 +1213,9 @@ async def run_planner_session(
     supervisor_llm: LlmProvider | None = None,
     status_artifact_path: str | None = None,
     nudge_artifact_path: str | None = None,
+    conversation_trace_artifact_key: str | None = None,
     progress_sink: Callable[[Any], Awaitable[None]] | None = None,
+    max_finalize_reprompts: int = DEFAULT_MAX_FINALIZE_REPROMPTS,
 ) -> PlannerSessionResult:
     """Drive the planner agent loop in-process.
 
@@ -1193,6 +1240,17 @@ async def run_planner_session(
             ``planner`` role with the variant.
         config: Optional :class:`AgentLoopConfig`; defaults to stock.
         runner: Test-only seam — when ``None``, calls :func:`run_loop`.
+        conversation_trace_artifact_key: Optional override for the
+            ArtifactStore key the conversation trace is persisted to on
+            loop exit. ``None`` defaults to
+            :data:`DEFAULT_PLANNER_TRACE_KEY_TEMPLATE` (novel-technique)
+            or :data:`DEFAULT_PAPER_PLANNER_TRACE_KEY_TEMPLATE`.
+        max_finalize_reprompts: Per round-6 friction B — if the agent
+            loop returns with the buffer not finalized (``finished`` or
+            ``finished_without_tool_use``), re-prompt it to call the
+            finalize tool up to this many times before giving up.
+            ``DEFAULT_MAX_FINALIZE_REPROMPTS`` (3) by default; ``0``
+            disables re-prompting.
 
     Returns:
         A :class:`PlannerSessionResult` carrying the loop's terminal
@@ -1201,6 +1259,10 @@ async def run_planner_session(
         and the artifact key the buffer would be persisted under.
     """
     artifact_key = design_plan_artifact_key or _default_artifact_key(input)
+    trace_key = conversation_trace_artifact_key or _default_trace_key(input)
+    finalize_tool = (
+        "finalize_paper_techniques" if input.variant == "paper_ingestion" else "finalize_plan"
+    )
 
     # === Buffer + tool registry (variant-keyed) =============================
     buffer = PlannerBuffer(
@@ -1250,6 +1312,7 @@ async def run_planner_session(
         compute=None,
         status_artifact_path=status_artifact_path,
         nudge_artifact_path=nudge_artifact_path,
+        conversation_trace_artifact_path=trace_key,
         progress_sink=progress_sink,
         config=config or AgentLoopConfig(),
     )
@@ -1259,11 +1322,50 @@ async def run_planner_session(
 
     actual_runner = runner if runner is not None else run_loop
     outcome = await actual_runner(session)
+
+    # Round-6 friction B: the planner loop sometimes returns having
+    # voluntarily stopped (``finished_without_tool_use`` after a couple
+    # of turns, or ``finished`` via the ``finish`` tool) WITHOUT ever
+    # calling the finalize tool — the buffer is un-finalized and the
+    # dispatch handler's resulting error used to vanish silently. Re-
+    # prompt to nudge the agent back to ``finalize_plan`` (and forbid
+    # ``finish`` before finalize succeeded), bounded by
+    # ``max_finalize_reprompts``. On exhaustion we return as before and
+    # the engine's dispatch-failure machinery (forward-rollback +
+    # ``last_error`` + re-dispatch → ``designing → failed``) handles it.
+    reprompts = 0
+    while (
+        not buffer.finalized
+        and reprompts < max_finalize_reprompts
+        and outcome.kind in _REPROMPTABLE_OUTCOME_KINDS
+    ):
+        reprompts += 1
+        session.messages.append(
+            NormalizedMessage(
+                role="user",
+                content=[TextContent(text=_finalize_reprompt_text(buffer, finalize_tool))],
+            )
+        )
+        outcome = await actual_runner(session)
+
     return PlannerSessionResult(
         outcome=outcome,
         buffer=buffer,
         artifact_key=artifact_key,
+        finalize_reprompts=reprompts,
     )
+
+
+def _default_trace_key(input: PlannerInput) -> str | None:
+    """Default conversation-trace ArtifactStore key per variant.
+
+    ``None`` when the variant's identity field is unset (the trace is
+    then not persisted — fine for ad-hoc unit sessions)."""
+    if input.variant == "novel_technique" and input.proposal_id:
+        return DEFAULT_PLANNER_TRACE_KEY_TEMPLATE.format(proposal_id=input.proposal_id)
+    if input.paper_arxiv_id:
+        return DEFAULT_PAPER_PLANNER_TRACE_KEY_TEMPLATE.format(arxiv_id=input.paper_arxiv_id)
+    return None
 
 
 def _default_artifact_key(input: PlannerInput) -> str:
@@ -1437,27 +1539,38 @@ def make_dispatch_planner(
         )
         progress_sink = make_progress_sink(ctx.metadata_store, session_id)
 
-        result = await run_planner_session(
-            input=planner_input,
-            llm=llm,
-            workspace_path=workspace_path,
-            artifact_store=ctx.artifact_store,
-            design_plan_artifact_key=artifact_key,
-            runner=inline_runner,
-            supervisor_llm=llm if supervisor_on else None,
-            config=loop_config,
-            status_artifact_path=status_key,
-            nudge_artifact_path=nudge_key,
-            progress_sink=progress_sink,
-        )
-        await close_agent_session(ctx.metadata_store, session_id, result.outcome)
+        # Round-6 item D: close the ``agent_sessions`` row on EVERY exit
+        # path (including a raised session), not just the success return.
+        result: PlannerSessionResult | None = None
+        try:
+            result = await run_planner_session(
+                input=planner_input,
+                llm=llm,
+                workspace_path=workspace_path,
+                artifact_store=ctx.artifact_store,
+                design_plan_artifact_key=artifact_key,
+                runner=inline_runner,
+                supervisor_llm=llm if supervisor_on else None,
+                config=loop_config,
+                status_artifact_path=status_key,
+                nudge_artifact_path=nudge_key,
+                progress_sink=progress_sink,
+            )
+        finally:
+            await close_agent_session(
+                ctx.metadata_store,
+                session_id,
+                result.outcome if result is not None else None,
+            )
+        assert result is not None  # the finally re-raises on the failure path
 
         if not result.buffer.finalized:
             return DispatchOutcome(
                 submitted_handles=[],
                 error=(
-                    f"planner did not finalize: agent outcome="
-                    f"{result.outcome.kind!r} after {result.outcome.turn_count} turn(s)"
+                    f"planner did not finalize after {result.finalize_reprompts} re-prompt(s): "
+                    f"agent outcome={result.outcome.kind!r} "
+                    f"after {result.outcome.turn_count} turn(s)"
                 ),
             )
         # Synthesize a JobHandle so the engine writes it to the
@@ -1561,11 +1674,14 @@ def variant_for_submission_kind(submission_kind: str) -> PlannerVariant:
 
 __all__ = [
     "DEFAULT_DESIGN_PLAN_KEY_TEMPLATE",
+    "DEFAULT_MAX_FINALIZE_REPROMPTS",
     "DEFAULT_PAPER_PLANNER_NUDGE_KEY_TEMPLATE",
     "DEFAULT_PAPER_PLANNER_STATUS_KEY_TEMPLATE",
+    "DEFAULT_PAPER_PLANNER_TRACE_KEY_TEMPLATE",
     "DEFAULT_PAPER_PLAN_KEY_TEMPLATE",
     "DEFAULT_PLANNER_NUDGE_KEY_TEMPLATE",
     "DEFAULT_PLANNER_STATUS_KEY_TEMPLATE",
+    "DEFAULT_PLANNER_TRACE_KEY_TEMPLATE",
     "AddFollowUpInput",
     "DraftAssertionInput",
     "DraftComparisonGroup",

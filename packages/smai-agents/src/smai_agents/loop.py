@@ -26,6 +26,8 @@ The loop owns sequencing only; domain logic lives in
 
 from __future__ import annotations
 
+import json
+import logging
 import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -56,6 +58,8 @@ from smai_agents.truncation import TruncationPolicy
 
 if TYPE_CHECKING:
     pass
+
+_log = logging.getLogger(__name__)
 
 
 class AgentLoopConfig(BaseModel):
@@ -110,6 +114,14 @@ class AgentLoopConfig(BaseModel):
     truncation_check_every_turns: int = 1
     """How often the loop checks the truncation threshold. Set to ``0``
     to disable."""
+
+    persist_conversation_trace: bool = True
+    """Whether :func:`run_loop` serializes :attr:`AgentSession.messages`
+    to :attr:`AgentSession.conversation_trace_artifact_path` on loop
+    exit (per ``04-agents.md`` §3.1 / DEC-023 — the trace the
+    technique-implementer's retry context (:func:`retry_context.load_retry_context`)
+    reads). No-op when the path or :attr:`AgentSession.artifact_store`
+    is ``None``. Set ``False`` to disable (unit tests that don't care)."""
 
 
 class AgentOutcome(BaseModel):
@@ -203,6 +215,19 @@ class AgentSession(BaseModel):
     """Path under which :func:`smai_agents.between_turn.maybe_check_supervisor_nudge`
     looks for a supervisor nudge. Same provenance as
     :attr:`status_artifact_path`."""
+
+    conversation_trace_artifact_path: str | None = None
+    """ArtifactStore key under which :func:`run_loop` persists the
+    serialized conversation (:attr:`messages`) on loop exit (per
+    ``04-agents.md`` §3.1's "the conversation trace is persisted at
+    session end"). Per role: planner →
+    ``proposals/{proposal_id}/conversation-trace.json``; harness
+    builder → ``comparison-groups/{cg_id}/harness/conversation-trace.json``;
+    technique implementer →
+    ``comparison-groups/{cg_id}/entries/{entry_id}/conversation-trace.json``
+    (the key :func:`smai_agents.retry_context.load_retry_context`
+    reads on a retry). ``None`` disables persistence; the dispatch
+    handler sets it."""
 
     last_tool_call: str | None = None
     """Name of the most-recently-invoked tool (set in
@@ -334,7 +359,40 @@ async def run_loop(session: AgentSession) -> AgentOutcome:
     :mod:`smai_agents.between_turn`; the import is local to break the
     module-import cycle (``between_turn`` types its argument as
     :class:`AgentSession`).
+
+    On exit (any kind, including an exception) the conversation trace is
+    persisted to :attr:`AgentSession.conversation_trace_artifact_path`
+    when configured (per ``04-agents.md`` §3.1 / DEC-023).
     """
+    try:
+        return await _run_turn_loop(session)
+    finally:
+        await _persist_conversation_trace(session)
+
+
+async def _persist_conversation_trace(session: AgentSession) -> None:
+    """Serialize :attr:`AgentSession.messages` to ArtifactStore.
+
+    No-op when persistence is disabled
+    (:attr:`AgentLoopConfig.persist_conversation_trace`) or when the
+    path / store seam is absent. Best-effort: a failed trace write is
+    logged-and-swallowed — observability persistence must never mask
+    the loop's actual outcome (or turn a clean exit into a crash)."""
+    if not session.config.persist_conversation_trace:
+        return
+    key = session.conversation_trace_artifact_path
+    store = session.artifact_store
+    if key is None or store is None:
+        return
+    try:
+        trace = [json.loads(m.model_dump_json()) for m in session.messages]
+        await store.put(key, json.dumps(trace, indent=2).encode("utf-8"))
+    except Exception:  # noqa: BLE001 — trace persistence is best-effort
+        _log.exception("failed to persist conversation trace to %s", key)
+
+
+async def _run_turn_loop(session: AgentSession) -> AgentOutcome:
+    """The turn loop proper — see :func:`run_loop`."""
     # Imported here, not at module top, to avoid the
     # loop ↔ between_turn module-import cycle: the between-turn
     # module references AgentSession at runtime.

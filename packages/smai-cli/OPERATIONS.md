@@ -204,11 +204,22 @@ of API processes.
 > burns whatever LLM / GPU spend the step had accrued, and the re-dispatch
 > starts over. A SQL-backed checkpointer is post-M5 backlog.
 
-`smai start` uses Python's standard `logging` module — no structured
-loggers (per `09` §8 — no log-format commitments in v1). Default log
-level is `WARNING`; for production, surface INFO via the
-`SMAI_LOG_LEVEL` env var or by passing
-`logging.config.dictConfig(...)` from a wrapper script.
+`smai start` (and `smai dev`) install a stderr log handler via Python's
+standard `logging` module on boot — no structured loggers (per `09` §8
+— no log-format commitments in v1). Default level is `WARNING`. Raise it
+two ways:
+
+* `--verbose` / `-v` → `INFO`; `-vv` → `DEBUG` (per-invocation).
+* `SMAI_LOG_LEVEL=<LEVEL>` env var (a standard level name —
+  `DEBUG` / `INFO` / `WARNING` / …) — honored when no `--verbose` flag
+  is passed. Set it in the systemd unit (`Environment=SMAI_LOG_LEVEL=INFO`).
+
+At `INFO` the worker emits one line per dispatch (`dispatching <action>
+for <kind>/<id>`), per dispatch outcome (`outcome=ok handles=N` /
+`outcome=failed error=…`), per state transition (`transition
+<kind>/<id>: <from>→<to> via <edge>`), and one per poll cycle that
+advanced something (idle cycles stay quiet). A wrapper script can still
+override the handler / formatter via `logging.config.dictConfig(...)`.
 
 The four plugins each emit logs through their own `logger = logging.getLogger(__name__)`; capture with a single root handler:
 

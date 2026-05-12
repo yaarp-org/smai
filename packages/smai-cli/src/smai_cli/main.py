@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import signal
 import sys
@@ -73,6 +74,44 @@ def _err(message: str, *, exit_code: int = 1) -> NoReturn:
     """Print a user-facing error and exit non-zero."""
     typer.echo(f"smai: error: {message}", err=True)
     raise typer.Exit(code=exit_code)
+
+
+_LOG_LEVEL_NAMES = {"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG", "NOTSET"}
+
+
+def _resolve_log_level(verbosity: int) -> int:
+    """Resolve the root log level for ``smai dev`` / ``smai start``.
+
+    Precedence: an explicit ``--verbose`` (``-v`` → INFO, ``-vv`` →
+    DEBUG) wins; otherwise the ``SMAI_LOG_LEVEL`` env var (a standard
+    level name) is honored — this is what makes ``OPERATIONS.md`` §5's
+    long-standing claim true; otherwise WARNING."""
+    if verbosity >= 2:  # noqa: PLR2004 — -vv
+        return logging.DEBUG
+    if verbosity == 1:
+        return logging.INFO
+    env = (os.environ.get("SMAI_LOG_LEVEL") or "").strip().upper()
+    if env in _LOG_LEVEL_NAMES:
+        return getattr(logging, env)
+    return logging.WARNING
+
+
+def _configure_logging(verbosity: int = 0) -> None:
+    """Install a stderr log handler at the resolved level.
+
+    Without this nothing in the worker / engine ever emits — the
+    ``_log.info`` / ``_log.debug`` calls in ``worker/loop.py``,
+    ``engine/dispatch.py``, and ``engine/_metadata_ops.py`` go to the
+    root logger, which has no handler by default in a CLI process."""
+    level = _resolve_log_level(verbosity)
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        stream=sys.stderr,
+    )
+    # basicConfig is a no-op if the root logger already has handlers
+    # (e.g., a test harness installed one) — force the level regardless.
+    logging.getLogger().setLevel(level)
 
 
 def _smai_home() -> Path:
@@ -186,6 +225,16 @@ def smai_dev(
             help="Skip the --reset confirmation prompt. No effect without --reset.",
         ),
     ] = False,
+    verbose: Annotated[
+        int,
+        typer.Option(
+            "--verbose",
+            "-v",
+            count=True,
+            help="-v → INFO worker/engine logging; -vv → DEBUG. Default WARNING. "
+            "Overridden by SMAI_LOG_LEVEL when neither is set.",
+        ),
+    ] = 0,
 ) -> None:
     """Boot the laptop demo (`09` §5).
 
@@ -200,6 +249,7 @@ def smai_dev(
     yet (post-M5 backlog).
     """
     del no_dashboard  # Phase 3 wires the read-only dashboard (`09` §5.3).
+    _configure_logging(verbose)
     if reset:
         home = _smai_home()
         targets = [home / "state.db", home / "artifacts", home / "workspaces"]
@@ -1591,6 +1641,16 @@ def smai_start(
             ),
         ),
     ] = None,
+    verbose: Annotated[
+        int,
+        typer.Option(
+            "--verbose",
+            "-v",
+            count=True,
+            help="-v → INFO worker/engine logging; -vv → DEBUG. Default WARNING. "
+            "Overridden by SMAI_LOG_LEVEL when neither is set.",
+        ),
+    ] = 0,
 ) -> None:
     """Boot the production-mode worker process (`09` §6 / `05` §7.2).
 
@@ -1626,6 +1686,7 @@ def smai_start(
     wrapper round-trips it as the ``leased_by`` column. Concurrent
     workers against the same Postgres are supported.
     """
+    _configure_logging(verbose)
     try:
         runtime_config = load_runtime_config(
             config_path=config,
