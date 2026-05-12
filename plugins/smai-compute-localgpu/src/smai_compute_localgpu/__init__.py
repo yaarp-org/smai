@@ -18,12 +18,14 @@ Task 2.C3); Tier B integrators import :class:`LocalGpuCompute` directly.
 
 from smai_compute_localgpu._compute import (
     DEFAULT_AGENT_IMAGE,
+    DEFAULT_RUNTIME_CPU_IMAGE,
     DEFAULT_RUNTIME_IMAGE,
     LocalGpuCompute,
 )
 
 __all__ = [
     "DEFAULT_AGENT_IMAGE",
+    "DEFAULT_RUNTIME_CPU_IMAGE",
     "DEFAULT_RUNTIME_IMAGE",
     "LocalGpuCompute",
 ]

@@ -227,15 +227,23 @@ defaults (`smai dev` / `smai ui`) need:
   console for the configured model + region. A bare credential chain
   is not enough; an ungranted model fails with
   `AccessDeniedException: ... is not available for this account`.
-- **Docker running locally**, with the `smai-runtime:dev` and
-  `smai-agent:dev` images built. SMAI does not publish these; build
-  them yourself (see `CONTRIBUTING.md`). On macOS / Apple Silicon,
-  Docker Desktop has no GPU passthrough, so the dev-default LocalGpu
-  Compute refuses GPU jobs; add `controlled_conditions: { compute: {
-  gpu: false } }` to an experiment YAML for CPU-only runs (methodology
-  smoke runs, kNN comparisons, small models). It also flows into the
-  `HarnessContract`, so a Modal / RunPod deployment honors the same
-  setting.
+- **Docker running locally**, with the reference images built. SMAI
+  does not publish these; build them yourself from
+  `plugins/smai-compute-localgpu/dockerfiles/` (the `docker build`
+  command is in each Dockerfile's header comment):
+  `smai-agent:dev` (agent-side code exec, lean, no ML stack),
+  `smai-runtime:dev` (GPU experiment runs, `nvidia/cuda` base, ~5-8 GB,
+  amd64), and `smai-runtime-cpu:dev` (CPU-only experiment runs, lean
+  multi-arch base + ML stack). On macOS / Apple Silicon, Docker Desktop
+  has no GPU passthrough, so the dev-default LocalGpu Compute refuses
+  GPU jobs; add `controlled_conditions: { compute: { gpu: false } }` to
+  an experiment YAML for CPU-only runs (methodology smoke runs, kNN
+  comparisons, small models). That makes the dispatcher hand the run
+  `smai-runtime-cpu:dev` — lean and multi-arch, so it runs natively on
+  Apple Silicon rather than emulating the amd64 CUDA image. The setting
+  also flows into the `HarnessContract`, so a Modal / RunPod deployment
+  honors it too. Override the image names per deployment via
+  `engine.runtime_image` / `engine.runtime_cpu_image` in `smai.yaml`.
 
 Pointing at a different plugin set changes the requirements: Anthropic
 needs `ANTHROPIC_API_KEY`; OpenAI needs `OPENAI_API_KEY` (and the SDK
@@ -267,6 +275,9 @@ refuses to boot on an incomplete config or a stale schema.
 engine:
   poll_interval_seconds: 30        # 10 under dev defaults
   worker_count: 1                  # >1 turns on leasing; production only
+  # runtime_image / runtime_cpu_image: GPU vs CPU container images for
+  # experiment seed runs (defaults: smai-runtime:dev / smai-runtime-cpu:dev).
+  # The run-record dispatcher picks per the CG's compute.gpu flag.
 
 plugins:
   llm_provider:   bedrock          # bedrock | anthropic | openai
@@ -280,7 +291,7 @@ plugins:
   llm_provider_config:   { region: us-east-1, model_id: us.anthropic.claude-opus-4-6-v1 }
   metadata_store_config: {}                              # sqlite default: in-memory (see note below)
   artifact_store_config: {}                              # localfs default: ~/.smai/artifacts
-  compute_config:        {}                              # localgpu default: smai-runtime:dev / smai-agent:dev
+  compute_config:        {}                              # localgpu default: smai-agent:dev / smai-runtime:dev / smai-runtime-cpu:dev
 
 # `smai ui` only — the whole block is optional.
 api:
@@ -301,7 +312,7 @@ api:
 | `postgres` | `uri`, `use_advisory_locks` (`True`), `tenant_aware` (`False`), `fair_scheduling` (`off`), `fair_scheduling_weights`, `engine_kwargs` (e.g. `{pool_size: 10}`) | URL embeds credentials |
 | `localfs` | `root` (`$SMAI_ARTIFACTS_ROOT` or `~/.smai/artifacts`) | — |
 | `s3` | `bucket` (**required**), `region`, `prefix` (`""`), `presigned_url_expiry_seconds`, `max_object_size_bytes` | AWS default credential chain; the bucket must already exist |
-| `localgpu` | `agent_image` (`smai-agent:dev`), `runtime_image` (`smai-runtime:dev`), `workspace` | Docker running locally; build the images yourself (SMAI does not publish them) |
+| `localgpu` | `agent_image` (`smai-agent:dev`), `runtime_image` (`smai-runtime:dev`), `runtime_cpu_image` (`smai-runtime-cpu:dev`), `workspace` — these only tune the "image not found" build hint; the experiment-run image is `engine.runtime_image` / `runtime_cpu_image` | Docker running locally; build all three reference images yourself (SMAI does not publish them). On Linux the workspace bind-mount must be writable by uid 1000 (the image's `smai` user). |
 | `modal` | `app_name` (`smai`), `default_gpu_type` (`T4`), `max_timeout_seconds` (`86400`) | `~/.modal.toml` or `MODAL_TOKEN_ID` + `MODAL_TOKEN_SECRET` |
 | `runpod` | `api_base`, `default_gpu_type` (`NVIDIA RTX A4000`), `default_timeout_seconds` (`3600`), `max_timeout_seconds`, `default_container_disk_gb` (`10`) | `RUNPOD_API_KEY` |
 

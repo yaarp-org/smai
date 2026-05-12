@@ -1,15 +1,19 @@
-# Agent-side image for smai-compute-localgpu (CPU-only, ~500 MB).
+# Agent-side image for smai-compute-localgpu (CPU-only, ~500 MB, multi-arch).
 #
-# Used when ``LocalGpuCompute.submit(..., gpu=False)`` — i.e., the
-# agent loop's harness builder, technique implementer, code reviewer,
-# and contextual evaluator. Mac hosts get this image and only this
-# image; Docker Desktop on Mac cannot pass GPU through, so experiment
-# runs (gpu=True) must point at smai-compute-modal / smai-compute-runpod.
+# Used for agent-side *code execution* — the agent loop's harness
+# builder, technique implementer, code reviewer, contextual evaluator
+# (``LocalGpuCompute.submit(..., gpu=False)`` from the agent dispatch
+# handlers). Per Task 2.A4 / ``10-runtime-and-templates.md`` §8.5 the
+# runtime expects POSIX + Python 3.11+ + the ML stack; agents don't
+# need the ML stack (they generate code, they don't train models), so
+# this image is intentionally lean.
 #
-# Per Task 2.A4 / ``10-runtime-and-templates.md`` §8.5: the runtime
-# expects POSIX + Python 3.11+ + the ML stack. Agents don't need the
-# ML stack (they generate code, they don't train models), so this
-# image is intentionally lean.
+# Sibling images: ``runtime.Dockerfile`` (``smai-runtime:dev``, GPU
+# experiment runs, ``nvidia/cuda`` base) and ``runtime-cpu.Dockerfile``
+# (``smai-runtime-cpu:dev``, CPU-only experiment runs — same lean base
+# as this one *plus* the ML stack). This file is NOT the image used for
+# ``compute.gpu=false`` experiment seed runs — that's
+# ``smai-runtime-cpu:dev``.
 #
 # Build with::
 #
@@ -18,6 +22,12 @@
 #
 # SMAI does NOT publish prebuilt images for the OSS plugin in v1
 # (commit a9e57bd / ``07-plugin-interfaces.md`` §7.4).
+#
+# Linux bind-mount caveat (shared with the other two images): the
+# container runs as the non-root ``smai`` user (uid 1000). On Linux a
+# workspace directory bind-mounted at ``/workspace`` must be writable by
+# uid 1000 (``chmod -R a+rwX`` it, or run smai as uid 1000); on macOS /
+# Docker Desktop the virtiofs mount is writable regardless of host uid.
 
 FROM python:3.11-slim-bookworm
 

@@ -21,6 +21,7 @@ from unittest.mock import patch
 import pytest
 from smai_compute_localgpu import (
     DEFAULT_AGENT_IMAGE,
+    DEFAULT_RUNTIME_CPU_IMAGE,
     DEFAULT_RUNTIME_IMAGE,
     LocalGpuCompute,
 )
@@ -35,6 +36,7 @@ def test_default_image_tags_match_documented_defaults() -> None:
     """The build-hint format depends on these tag names — pin them."""
     assert DEFAULT_AGENT_IMAGE == "smai-agent:dev"
     assert DEFAULT_RUNTIME_IMAGE == "smai-runtime:dev"
+    assert DEFAULT_RUNTIME_CPU_IMAGE == "smai-runtime-cpu:dev"
 
 
 def test_preflight_raises_compute_unavailable_when_docker_missing() -> None:
@@ -107,6 +109,18 @@ def test_build_hint_for_default_runtime_image() -> None:
     )
     assert isinstance(err, JobImageInvalid)
     assert "runtime.Dockerfile" in err.reason
+
+
+def test_build_hint_for_default_runtime_cpu_image() -> None:
+    """``compute.gpu=false`` experiments get the CPU image; a missing one
+    should point at ``runtime-cpu.Dockerfile`` (round-4 friction (A))."""
+    instance = LocalGpuCompute(skip_preflight=True)
+    err = instance._make_image_invalid(  # pyright: ignore[reportPrivateUsage]
+        DEFAULT_RUNTIME_CPU_IMAGE, "image not found"
+    )
+    assert isinstance(err, JobImageInvalid)
+    assert "runtime-cpu.Dockerfile" in err.reason
+    assert DEFAULT_RUNTIME_CPU_IMAGE in err.reason
 
 
 def test_unknown_image_omits_build_hint() -> None:

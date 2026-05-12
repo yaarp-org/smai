@@ -46,9 +46,9 @@ jobs:
         run: pytest
 
       - name: hadolint (Dockerfile lint)
-        # Lint the two reference Dockerfiles shipped with smai-compute-localgpu
-        # (Task 2.A4 deliverable). Pinned action version so a hadolint upgrade
-        # cannot break CI without a deliberate bump.
+        # Lint the three reference Dockerfiles shipped with smai-compute-localgpu
+        # (Task 2.A4 deliverable + the runtime-cpu image). Pinned action version
+        # so a hadolint upgrade cannot break CI without a deliberate bump.
         uses: hadolint/hadolint-action@v3.1.0
         with:
           dockerfile: plugins/smai-compute-localgpu/dockerfiles/agent.Dockerfile
@@ -58,4 +58,10 @@ jobs:
         uses: hadolint/hadolint-action@v3.1.0
         with:
           dockerfile: plugins/smai-compute-localgpu/dockerfiles/runtime.Dockerfile
+          recursive: false
+
+      - name: hadolint (runtime-cpu.Dockerfile)
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: plugins/smai-compute-localgpu/dockerfiles/runtime-cpu.Dockerfile
           recursive: false

@@ -1,15 +1,23 @@
-# Runtime-side image for smai-compute-localgpu (GPU, ~5-8 GB).
+# Runtime-side image for smai-compute-localgpu — GPU experiment runs
+# (~5-8 GB, amd64-only).
 #
-# Used when ``LocalGpuCompute.submit(..., gpu=True)`` — i.e., the
+# Used for *experiment seed runs* whose CG requests GPU
+# (``controlled_conditions.compute.gpu=true``, the default) — i.e., the
 # pipeline-runtime substrate that hosts harness pipelines and technique
 # modules per ``10-runtime-and-templates.md`` §8.5. Includes the ML
 # stack the runtime expects (torch, torchvision, numpy, scipy, einops,
 # timm) on top of CUDA + cuDNN.
 #
+# Sibling images: ``agent.Dockerfile`` (``smai-agent:dev``, agent-side
+# code exec, no ML stack) and ``runtime-cpu.Dockerfile``
+# (``smai-runtime-cpu:dev``, the lean multi-arch CPU variant the
+# run-record dispatcher picks when ``compute.gpu=false``).
+#
 # Mac caveat: Docker Desktop on macOS / Apple Silicon cannot pass GPU
 # through. This image will build on Mac but ``LocalGpuCompute`` rejects
-# ``gpu=True`` jobs on Darwin upstream and points the user at
-# smai-compute-modal / smai-compute-runpod.
+# ``gpu=true`` jobs on Darwin upstream and points the user at
+# smai-compute-modal / smai-compute-runpod; ``compute.gpu=false``
+# experiments use ``smai-runtime-cpu:dev`` instead.
 #
 # Build with::
 #
@@ -20,6 +28,12 @@
 # (https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/).
 # SMAI does NOT publish prebuilt images for the OSS plugin in v1
 # (commit a9e57bd / ``07-plugin-interfaces.md`` §7.4).
+#
+# Linux bind-mount caveat (shared with the other two images): the
+# container runs as the non-root ``smai`` user (uid 1000). On Linux a
+# workspace directory bind-mounted at ``/workspace`` must be writable by
+# uid 1000 (``chmod -R a+rwX`` it, or run smai as uid 1000); on macOS /
+# Docker Desktop the virtiofs mount is writable regardless of host uid.
 
 # Pinned digest-equivalent: CUDA 12.4.1 + cuDNN 9 + Ubuntu 22.04. The
 # runtime variant excludes development headers; nothing in the runtime

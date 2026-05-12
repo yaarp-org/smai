@@ -53,6 +53,45 @@ package (and every plugin) editably along with the dev tools (`pytest`,
 `pytest-asyncio`, `ruff`, `pyright`, `pyyaml`, `hypothesis`, `httpx`,
 `modal`).
 
+### Local Compute Docker images (`localgpu`)
+
+The `smai-compute-localgpu` plugin shells out to `docker run`; SMAI does
+**not** publish prebuilt images, so build the three reference images
+locally before running anything that dispatches a job (`smai dev`,
+`smai ui`, `smai run`). The `docker build` command is in each
+Dockerfile's header comment under
+`plugins/smai-compute-localgpu/dockerfiles/`:
+
+| Image | Dockerfile | Used for | Notes |
+|---|---|---|---|
+| `smai-agent:dev` | `agent.Dockerfile` | agent-side code execution (`gpu=false`) | `python:3.11-slim`, no ML stack, ~500 MB, multi-arch |
+| `smai-runtime:dev` | `runtime.Dockerfile` | GPU experiment seed runs | `nvidia/cuda` base + ML stack, ~5-8 GB, **amd64-only**, needs the NVIDIA Container Toolkit on the host |
+| `smai-runtime-cpu:dev` | `runtime-cpu.Dockerfile` | CPU-only experiment seed runs (`controlled_conditions.compute.gpu: false`) | `python:3.11-slim` + CPU torch wheels, ~1-2 GB, multi-arch (runs natively on Apple Silicon) |
+
+```bash
+docker build -t smai-agent:dev       -f plugins/smai-compute-localgpu/dockerfiles/agent.Dockerfile .
+docker build -t smai-runtime:dev     -f plugins/smai-compute-localgpu/dockerfiles/runtime.Dockerfile .       # amd64 / NVIDIA hosts only
+docker build -t smai-runtime-cpu:dev -f plugins/smai-compute-localgpu/dockerfiles/runtime-cpu.Dockerfile .
+```
+
+The run-record dispatcher picks `smai-runtime:dev` vs `smai-runtime-cpu:dev`
+per the CG's `compute.gpu` flag; override either name via
+`engine.runtime_image` / `engine.runtime_cpu_image` in `smai.yaml`. On
+**macOS** you can only build / run `smai-agent:dev` + `smai-runtime-cpu:dev`
+usefully (Docker Desktop has no GPU passthrough — the runtime falls to
+Modal / RunPod for GPU work, and `compute.gpu: false` experiments use
+the CPU image).
+
+**Linux bind-mount UID:** all three images run as the non-root `smai`
+user (uid 1000). `LocalGpuCompute` bind-mounts a per-CG workspace dir
+at `/workspace`; on Linux that dir (created by the runtime under
+`~/.smai/workspaces` or your configured `workspace_root`) must be
+writable by uid 1000, or an agent's `write_file` into `/workspace`
+fails with a permission error. Either `chmod -R a+rwX` the workspace
+root, or run `smai` as uid 1000. (On macOS / Docker Desktop the
+virtiofs mount is writable regardless of host uid, so this doesn't
+bite.)
+
 ### Running the gates locally
 
 The five gates each run in seconds-to-tens-of-seconds against the

@@ -1103,7 +1103,8 @@ class Runtime:
         plugin_overrides: PluginOverrides | None = None,
         per_role_overrides: dict[str, str] | None = None,
         env: Mapping[str, str] | None = None,
-        runtime_image: str = "smai-runtime:dev",
+        runtime_image: str | None = None,
+        runtime_cpu_image: str | None = None,
         paper_fetcher: PaperFetcher | None = None,
     ) -> AsyncGenerator[Runtime, None]:
         """Out-of-band production worker (`09` §6 / `05` §7.2 / DEC-024).
@@ -1150,6 +1151,7 @@ class Runtime:
             per_role_overrides=per_role_overrides,
             env=env,
             runtime_image=runtime_image,
+            runtime_cpu_image=runtime_cpu_image,
             run_worker=True,
             paper_fetcher=paper_fetcher,
             worker_id=worker_id,
@@ -1166,7 +1168,8 @@ class Runtime:
         plugin_overrides: PluginOverrides | None = None,
         per_role_overrides: dict[str, str] | None = None,
         env: Mapping[str, str] | None = None,
-        runtime_image: str = "smai-runtime:dev",
+        runtime_image: str | None = None,
+        runtime_cpu_image: str | None = None,
         run_worker: bool = True,
         paper_fetcher: PaperFetcher | None = None,
         worker_id: str | None = None,
@@ -1197,8 +1200,21 @@ class Runtime:
         ``None`` (the default) auto-generates ``f"in-band-{uuid4()}"``.
         Multi-worker deployments (Task 3.G3 ``smai start``) pin a
         process-stable id (typically host+pid+uuid).
+
+        ``runtime_image`` / ``runtime_cpu_image`` are the GPU / CPU
+        container images for experiment seed runs. ``None`` (the
+        default) reads them from :attr:`config.engine.runtime_image` /
+        :attr:`config.engine.runtime_cpu_image` — pass an explicit
+        string only to override (tests). The run-record dispatcher
+        picks between the two off each CG's :class:`HarnessContract`.
         """
         resolved_worker_id = worker_id if worker_id is not None else f"in-band-{uuid4().hex[:8]}"
+        effective_runtime_image = (
+            runtime_image if runtime_image is not None else config.engine.runtime_image
+        )
+        effective_runtime_cpu_image = (
+            runtime_cpu_image if runtime_cpu_image is not None else config.engine.runtime_cpu_image
+        )
         workspace_root = workspace_root or (Path.home() / ".smai" / "workspaces")
         workspace_root.mkdir(parents=True, exist_ok=True)
 
@@ -1243,7 +1259,7 @@ class Runtime:
                 workspace_root=workspace_root,
                 llm_for_code_reviewer=llm_for_code_reviewer,
                 llm_for_contextual_evaluator=llm_for_contextual_evaluator,
-                runtime_image=runtime_image,
+                runtime_image=effective_runtime_image,
             )
             # Register the :class:`RunRecord` sub-state-machine spec
             # alongside the Phase-2 specs (per Task 3.E3 / DEC-034 #3).
@@ -1259,7 +1275,10 @@ class Runtime:
             # pipeline-spec) lands too — keeping the registration
             # explicit here for now avoids a multi-task signature change
             # collision.
-            run_spec = register_run_record_spec(runtime_image=runtime_image)
+            run_spec = register_run_record_spec(
+                runtime_image=effective_runtime_image,
+                runtime_cpu_image=effective_runtime_cpu_image,
+            )
             # Register the proposal pipeline-spec (per Task 3.E1 /
             # DEC-032 — the v2 primary input path). Same supervisor-
             # merge note as the run-record registration above.

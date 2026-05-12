@@ -64,11 +64,21 @@ from smai_compute_localgpu._docker import docker_binary, run_docker
 # === Constants ==============================================================
 
 # Default image tags expected by the plugin. Users build these locally
-# from the two reference Dockerfiles shipped under ``dockerfiles/``;
+# from the three reference Dockerfiles shipped under ``dockerfiles/``;
 # SMAI does not publish prebuilt images for the OSS plugin in v1
 # (commit a9e57bd / ``07`` §7.4 / Task 2.A4).
+#
+# * ``smai-agent:dev`` (``agent.Dockerfile``) — agent-side code exec, no
+#   ML stack, lean.
+# * ``smai-runtime:dev`` (``runtime.Dockerfile``) — GPU experiment runs,
+#   ``nvidia/cuda`` base + ML stack, ~5-8 GB, amd64-only.
+# * ``smai-runtime-cpu:dev`` (``runtime-cpu.Dockerfile``) — CPU-only
+#   experiment runs, lean multi-arch base + ML stack. Used when a CG's
+#   ``controlled_conditions.compute.gpu`` is ``false`` (the orchestrator's
+#   run-record dispatcher passes this image; round-4 friction A).
 DEFAULT_AGENT_IMAGE = "smai-agent:dev"
 DEFAULT_RUNTIME_IMAGE = "smai-runtime:dev"
+DEFAULT_RUNTIME_CPU_IMAGE = "smai-runtime-cpu:dev"
 
 # Container-name prefix used when invoking ``docker run --name``.
 # ``--label smai-localgpu=1`` is also applied so users can prune via::
@@ -129,12 +139,20 @@ class LocalGpuCompute:
 
     Constructor::
 
-        LocalGpuCompute()  # uses smai-agent:dev / smai-runtime:dev defaults
+        LocalGpuCompute()  # uses smai-agent:dev / smai-runtime:dev / smai-runtime-cpu:dev defaults
         LocalGpuCompute(
             agent_image="smai-agent:dev",
             runtime_image="smai-runtime:dev",
+            runtime_cpu_image="smai-runtime-cpu:dev",
             workspace="/path/to/workspace",  # bind-mounted at /workspace
         )
+
+    The image kwargs are used only to make ``submit``'s "image not
+    found" error actionable (it appends a ``docker build -t <name> ...``
+    hint when the failing image matches one of these). The actual image
+    for any given job is whatever the caller passes to ``submit`` — the
+    orchestrator's run-record dispatcher hands ``runtime_image`` for
+    GPU jobs and ``runtime_cpu_image`` for ``compute.gpu=false`` ones.
 
     The constructor performs the ``docker info`` preflight (per ``07``
     §7 / Task 2.A4); a missing daemon raises :class:`ComputeUnavailable`
@@ -150,11 +168,13 @@ class LocalGpuCompute:
         *,
         agent_image: str = DEFAULT_AGENT_IMAGE,
         runtime_image: str = DEFAULT_RUNTIME_IMAGE,
+        runtime_cpu_image: str = DEFAULT_RUNTIME_CPU_IMAGE,
         workspace: str | None = None,
         skip_preflight: bool = False,
     ) -> None:
         self._agent_image = agent_image
         self._runtime_image = runtime_image
+        self._runtime_cpu_image = runtime_cpu_image
         self._workspace = workspace
         # Capabilities reflect host shape: GPU is reported as "supported"
         # whenever the host isn't macOS — Docker Desktop on Mac cannot
@@ -546,6 +566,11 @@ class LocalGpuCompute:
                 f"docker build -t {self._runtime_image} "
                 "-f plugins/smai-compute-localgpu/dockerfiles/runtime.Dockerfile ."
             )
+        if image == self._runtime_cpu_image:
+            return (
+                f"docker build -t {self._runtime_cpu_image} "
+                "-f plugins/smai-compute-localgpu/dockerfiles/runtime-cpu.Dockerfile ."
+            )
         return None
 
     # --- internal helpers --------------------------------------------------
@@ -643,6 +668,7 @@ def _is_not_running(stderr: str) -> bool:
 
 __all__ = [
     "DEFAULT_AGENT_IMAGE",
+    "DEFAULT_RUNTIME_CPU_IMAGE",
     "DEFAULT_RUNTIME_IMAGE",
     "LocalGpuCompute",
 ]

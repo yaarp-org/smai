@@ -172,6 +172,28 @@ class EngineConfig(BaseModel):
     :class:`EngineConfig`. Ignored when :attr:`supervisor_enabled` is
     ``False``."""
 
+    # ---- Runtime container images (round-4 friction A) -------------------
+
+    runtime_image: str = "smai-runtime:dev"
+    """Container image hosting *experiment seed runs* whose
+    ``controlled_conditions.compute.gpu`` is ``true`` (the default). The
+    reference build is ``runtime.Dockerfile`` — ``nvidia/cuda``-based,
+    needs the NVIDIA Container Toolkit, amd64-only. The run-record
+    dispatcher passes this to :meth:`Compute.submit` when the CG's
+    :class:`HarnessContract` requests GPU. Override per deployment via
+    ``smai.yaml`` (e.g. to point at a published internal image)."""
+
+    runtime_cpu_image: str = "smai-runtime-cpu:dev"
+    """Container image hosting experiment seed runs whose
+    ``controlled_conditions.compute.gpu`` is ``false`` (round-4 friction
+    A). The reference build is ``runtime-cpu.Dockerfile`` — lean,
+    multi-arch ``python:3.11-slim-bookworm`` base with CPU torch wheels,
+    so CPU-only experiments don't drag in the ~5-8 GB CUDA image and the
+    macOS / Apple-Silicon path runs natively. Distinct from
+    :attr:`runtime_image` and from the agent-side ``smai-agent:dev``
+    (which has no ML stack). Selected automatically by the run-record
+    dispatcher at the same read site as the ``gpu`` flag; override here."""
+
     # ---- Retention sweep (Task 3.H2 / DEC-033 #1, #2) ---------------------
 
     # ---- Live updates (Task 4.K2 / `12-ui-process.md` §6.4) ---------------

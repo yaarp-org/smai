@@ -379,7 +379,13 @@ async def test_reproduce_paper_workflow(tmp_path: Path) -> None:
         assert len(cgs.items) >= 1
         cg = cgs.items[0]
         assert cg.proposal_id == proposal_id
-        assert cg.state == "draft"
+        # The CG is created in ``draft`` by the registration transition; if
+        # the cycle that drove the proposal to ``registered`` also gave the
+        # CG-execution spec a turn, it's already advanced to ``implementing``.
+        # Either is fine here — the cross-pipeline coordination this test
+        # asserts is "the CG got created and is progressing", not its exact
+        # cycle-count position.
+        assert cg.state in {"draft", "implementing"}
 
         # The proposal carries the reproduce_paper_arxiv_id link.
         prop = await runtime.proposals.get(proposal_id)

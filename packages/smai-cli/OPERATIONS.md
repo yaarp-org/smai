@@ -368,9 +368,24 @@ Postgres + S3 wiring; tracked in §8 backlog).
 ## 7. Plugin substrate notes
 
 Per-plugin credential and environment requirements are tabulated in
-`README.md` "Configuration" (the per-plugin `*_config` key table). Two
-that bite in practice:
+`README.md` "Configuration" (the per-plugin `*_config` key table). A
+few that bite in practice:
 
+- **`localgpu` images + Linux bind-mount UID.** Build all three
+  reference images (`smai-agent:dev`, `smai-runtime:dev`,
+  `smai-runtime-cpu:dev`) from
+  `plugins/smai-compute-localgpu/dockerfiles/` before deploying with
+  `compute: localgpu` (SMAI publishes none). The run-record dispatcher
+  selects `smai-runtime:dev` for GPU experiment runs and
+  `smai-runtime-cpu:dev` for `controlled_conditions.compute.gpu: false`
+  ones; override the names via `engine.runtime_image` /
+  `engine.runtime_cpu_image`. All three images run as the non-root
+  `smai` user (uid 1000), and `LocalGpuCompute` bind-mounts a per-CG
+  workspace dir at `/workspace`; on Linux that dir must be writable by
+  uid 1000 (`chmod -R a+rwX` the `workspace_root`, or run `smai` as uid
+  1000), or an agent's writes into `/workspace` fail with a permission
+  error. (macOS / Docker Desktop's virtiofs mount is writable
+  regardless of host uid.)
 - **Modal compute needs `python` (not just `python3`) on `PATH`.** The
   Modal SDK shells out to a bare `python` for some operations.
   `uv run smai start ...` puts one there, and so does a virtualenv with

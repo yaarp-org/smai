@@ -393,7 +393,9 @@ async def test_dispatch_compute_submit_calls_compute_with_runtime_command(
     handle = make_job_handle("submitted-job-handle")
     fake_compute.enqueue_submit_handle(handle)
 
-    handler = _make_dispatch_run_compute_submit(image="smai-runtime:test")
+    handler = _make_dispatch_run_compute_submit(
+        gpu_image="smai-runtime:test", cpu_image="smai-runtime-cpu:test"
+    )
     ctx = DispatchContext(
         entity_kind="run",
         entity_id="run-s",
@@ -430,8 +432,9 @@ async def test_dispatch_reads_gpu_from_harness_contract(
 ) -> None:
     """When the CG's persisted :class:`HarnessContract` declares
     ``compute.gpu=False`` (a CPU-only / macOS-LocalGpu experiment), the
-    ``submitted`` dispatch hands ``gpu=False`` to :meth:`Compute.submit`
-    rather than the historical hardcoded ``True`` (round-3 friction (C)).
+    ``submitted`` dispatch hands ``gpu=False`` *and the CPU image* to
+    :meth:`Compute.submit` rather than the historical hardcoded ``True``
+    + the GPU image (round-3 friction (C) + round-4 friction (A)).
     """
     from _specs_fakes import make_harness_contract  # type: ignore[import-not-found]
     from smai_orchestrator.specs.cg_execution import HARNESS_CONTRACT_KEY_TEMPLATE
@@ -451,7 +454,9 @@ async def test_dispatch_reads_gpu_from_harness_contract(
 
     fake_compute = FakeCompute()
     fake_compute.enqueue_submit_handle(make_job_handle("cpu-handle"))
-    handler = _make_dispatch_run_compute_submit(image="smai-runtime:test")
+    handler = _make_dispatch_run_compute_submit(
+        gpu_image="smai-runtime:test", cpu_image="smai-runtime-cpu:test"
+    )
     ctx = DispatchContext(
         entity_kind="run",
         entity_id="run-cpu",
@@ -467,6 +472,7 @@ async def test_dispatch_reads_gpu_from_harness_contract(
     outcome = await handler(ctx)
     assert outcome.error is None
     assert fake_compute.submit_calls[0]["gpu"] is False
+    assert fake_compute.submit_calls[0]["image"] == "smai-runtime-cpu:test"
 
 
 async def test_dispatch_defaults_gpu_true_when_harness_contract_missing(
@@ -475,7 +481,8 @@ async def test_dispatch_defaults_gpu_true_when_harness_contract_missing(
 ) -> None:
     """If the harness contract artifact is absent — a contract-flow bug,
     since dispatch only runs after the CG left ``draft`` — the handler
-    falls back to the historical ``gpu=True`` rather than crashing."""
+    falls back to the historical ``gpu=True`` + GPU image rather than
+    crashing."""
     cg_id = "cg-no-contract"
     await sqlite_store.create_cg(make_cg(cg_id=cg_id, state="running"))
     await sqlite_store.create_entry(
@@ -486,7 +493,9 @@ async def test_dispatch_defaults_gpu_true_when_harness_contract_missing(
 
     fake_compute = FakeCompute()
     fake_compute.enqueue_submit_handle(make_job_handle("nc-handle"))
-    handler = _make_dispatch_run_compute_submit(image="smai-runtime:test")
+    handler = _make_dispatch_run_compute_submit(
+        gpu_image="smai-runtime:test", cpu_image="smai-runtime-cpu:test"
+    )
     ctx = DispatchContext(
         entity_kind="run",
         entity_id="run-nc",
@@ -502,6 +511,7 @@ async def test_dispatch_defaults_gpu_true_when_harness_contract_missing(
     outcome = await handler(ctx)
     assert outcome.error is None
     assert fake_compute.submit_calls[0]["gpu"] is True
+    assert fake_compute.submit_calls[0]["image"] == "smai-runtime:test"
 
 
 async def test_dispatch_compute_submit_returns_error_when_run_missing(
@@ -512,7 +522,9 @@ async def test_dispatch_compute_submit_returns_error_when_run_missing(
     (e.g., another worker cleaned it up), the handler reports an error
     and the engine forward-rolls-back."""
     fake_compute = FakeCompute()
-    handler = _make_dispatch_run_compute_submit(image="smai-runtime:test")
+    handler = _make_dispatch_run_compute_submit(
+        gpu_image="smai-runtime:test", cpu_image="smai-runtime-cpu:test"
+    )
     ctx = DispatchContext(
         entity_kind="run",
         entity_id="run-missing",

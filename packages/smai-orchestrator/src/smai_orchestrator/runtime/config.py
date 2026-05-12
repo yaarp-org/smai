@@ -83,7 +83,11 @@ class PluginSelection(BaseModel):
 
     compute_config: dict[str, Any] = Field(default_factory=dict)
     """Plugin-specific kwargs. LocalGpuCompute: ``agent_image``,
-    ``runtime_image``, ``workspace``, ``skip_preflight``."""
+    ``runtime_image``, ``runtime_cpu_image``, ``workspace``,
+    ``skip_preflight`` (these only tune the "image not found" build
+    hint — the experiment-run image is chosen by the orchestrator from
+    :attr:`EngineConfig.runtime_image` / :attr:`runtime_cpu_image` per
+    the CG's ``compute.gpu`` flag)."""
 
 
 class ApiAuthConfig(BaseModel):

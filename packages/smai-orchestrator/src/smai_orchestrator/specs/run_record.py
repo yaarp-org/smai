@@ -304,7 +304,8 @@ async def _load_compute_requirements_gpu(artifact_store: ArtifactStore, cg_id: s
 
 def _make_dispatch_run_compute_submit(
     *,
-    image: str,
+    gpu_image: str,
+    cpu_image: str,
 ) -> Callable[[DispatchContext], Awaitable[DispatchOutcome]]:
     """``submitted`` on-entry dispatch — submits the per-(entry × seed)
     training job to :class:`Compute`.
@@ -327,12 +328,16 @@ def _make_dispatch_run_compute_submit(
     budget (`03` §3.9 open item) — re-discovery is unconditional;
     operators with budget concerns can add a deployment-specific gate.
 
-    The ``gpu`` argument to :meth:`Compute.submit` is read from the
-    CG's :class:`HarnessContract` artifact (see
-    :func:`_load_compute_requirements_gpu`) so CPU-only experiments
-    (e.g. methodology smoke runs, kNN comparisons, anything not GPU-
-    bound, and the macOS-LocalGpu path which refuses ``gpu=True``)
-    dispatch correctly. The contract is the locked source of truth;
+    Both the ``gpu`` flag *and the image* are derived from the CG's
+    :class:`HarnessContract` artifact at the same read site (see
+    :func:`_load_compute_requirements_gpu`): ``gpu=true`` →
+    ``gpu_image`` (the ``nvidia/cuda``-based ``runtime.Dockerfile``),
+    ``gpu=false`` → ``cpu_image`` (the lean multi-arch
+    ``runtime-cpu.Dockerfile``). So a CPU-only experiment (methodology
+    smoke run, kNN comparison, anything not GPU-bound, and the
+    macOS-LocalGpu path which refuses ``gpu=true``) dispatches
+    ``gpu=false`` *and* runs on the lean image rather than dragging in
+    the ~5-8 GB CUDA image. The contract is the locked source of truth;
     one artifact-store read per submit.
     """
 
@@ -342,6 +347,7 @@ def _make_dispatch_run_compute_submit(
             return DispatchOutcome(error=f"RunRecord {ctx.entity_id!r} not found")
 
         gpu = await _load_compute_requirements_gpu(ctx.artifact_store, run.cg_id)
+        image = gpu_image if gpu else cpu_image
         metrics_key = _metrics_key_for_run(run)
         command = [
             "python",
@@ -379,14 +385,21 @@ def _make_dispatch_run_compute_submit(
 def build_run_record_spec(
     *,
     runtime_image: str = "smai-runtime:dev",
+    runtime_cpu_image: str = "smai-runtime-cpu:dev",
 ) -> PipelineSpec:
     """Build the SMAI :class:`RunRecord` sub-state-machine
     :class:`PipelineSpec` (entity_kind=``"run"``).
 
     Args:
-        runtime_image: Container image the per-(entry × seed) training
-            jobs run inside. Defaults to ``smai-runtime:dev`` (Task 2.D1
-            convention; matches :func:`build_cg_execution_spec`).
+        runtime_image: Container image for per-(entry × seed) training
+            jobs whose CG requests GPU (``compute.gpu=true``, the
+            default). ``smai-runtime:dev`` (``runtime.Dockerfile``,
+            ``nvidia/cuda``-based).
+        runtime_cpu_image: Container image for jobs whose CG requests
+            CPU only (``compute.gpu=false``). ``smai-runtime-cpu:dev``
+            (``runtime-cpu.Dockerfile``, lean multi-arch base). The
+            run-record dispatcher selects between the two at dispatch
+            time off the CG's :class:`HarnessContract`.
 
     Per `01` §5.5 the canonical :class:`RunState` literal is
     ``pending → submitted → running → succeeded | failed | inconclusive``;
@@ -399,7 +412,10 @@ def build_run_record_spec(
     spec changes. Today the engine drives every run through
     ``pending → submitted → {succeeded | failed | inconclusive}``.
     """
-    submit_dispatch = _make_dispatch_run_compute_submit(image=runtime_image)
+    submit_dispatch = _make_dispatch_run_compute_submit(
+        gpu_image=runtime_image,
+        cpu_image=runtime_cpu_image,
+    )
 
     states: list[StateDef] = [
         StateDef(name="pending"),
@@ -515,6 +531,7 @@ def build_run_record_spec(
 def register_run_record_spec(
     *,
     runtime_image: str = "smai-runtime:dev",
+    runtime_cpu_image: str = "smai-runtime-cpu:dev",
 ) -> PipelineSpec:
     """Construct and register the :class:`RunRecord` sub-spec.
 
@@ -523,10 +540,16 @@ def register_run_record_spec(
     Phase-3 spec registrations into :func:`register_smai_specs` at
     commit time without touching the per-task brief.
 
+    ``runtime_image`` / ``runtime_cpu_image`` are the GPU / CPU
+    container images; see :func:`build_run_record_spec`.
+
     Returns the constructed spec for callers that want a direct
     reference (e.g., to project to :class:`EngineSpec` for the worker
     loop or to drive a single cycle in tests).
     """
-    spec = build_run_record_spec(runtime_image=runtime_image)
+    spec = build_run_record_spec(
+        runtime_image=runtime_image,
+        runtime_cpu_image=runtime_cpu_image,
+    )
     register_pipeline_spec(spec)
     return spec
