@@ -487,9 +487,17 @@ async def seed_state(runtime: SmaiApiTestRuntime) -> SeededState:
     )
     # Seed a small harness/status.json artifact under the CG's namespace
     # so the artifact-fetch + agent-status tests have something to read.
+    # Shape matches ``smai_agents.between_turn.write_status``'s payload.
     await runtime.plugins.artifact_store.put(
         f"comparison-groups/{cg_id}/harness/status.json",
-        b'{"state": "writing", "turn": 1, "cost_usd": 0.0}',
+        (
+            b'{"role": "harness_builder", "turn_count": 1, "monotonic_timestamp": 12.5, '
+            b'"wall_clock_utc": "2026-05-11T00:00:00+00:00", '
+            b'"usage_total": {"input_tokens": 10, "output_tokens": 2}, '
+            b'"nudges_consumed": 0, "truncations_fired": 0, '
+            b'"last_tool_call": "write_file", "last_tool_error": null, '
+            b'"tool_errors_fired": 0, "attempt_index": null, "supervisor_aborted": false}'
+        ),
     )
     return SeededState(
         cg_id=cg_id,

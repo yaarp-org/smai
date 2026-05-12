@@ -95,29 +95,39 @@ class CGStatusResponse(APIBaseModel):
 
 
 class HarnessAgentStatus(APIBaseModel):
-    """Mirrors what the harness builder writes to ``harness/status.json``.
+    """Mirrors what an agent loop writes to its per-turn ``status.json``.
 
-    The full schema is owned by ``04-agents.md``; the contract surface
-    here is a narrow projection of the fields the SPA renders. Each
-    field is optional so partial / in-progress writes parse cleanly.
+    The schema is owned by ``04-agents.md`` /
+    :func:`smai_agents.between_turn.write_status`; the field set here
+    matches the payload that function emits. Every field is optional so
+    partial / in-progress / older writes parse cleanly.
 
     Per ``11`` §5.2.3 the joining + parsing happens server-side so the
     SPA gets one round-trip instead of fanning out to N artifact reads.
     """
 
-    state: str | None = None
-    turn: int | None = None
-    cost_usd: float | None = None
-    last_message_at: datetime | None = None
+    role: str | None = None
+    turn_count: int | None = None
+    monotonic_timestamp: float | None = None
+    wall_clock_utc: datetime | None = None
+    usage_total: dict[str, object] | None = None
+    nudges_consumed: int | None = None
+    truncations_fired: int | None = None
+    last_tool_call: str | None = None
+    last_tool_error: str | None = None
+    tool_errors_fired: int | None = None
+    attempt_index: int | None = None
+    supervisor_aborted: bool | None = None
 
 
 class EntryAgentStatus(APIBaseModel):
     """Per-entry agent-status projection.
 
-    ``status`` is the parsed contents of
-    ``entries/{id}/code/status.json`` (a free-form JSON object whose
-    schema is owned by ``04-agents.md``); ``None`` if the agent has not
-    yet written it.
+    ``status`` is the parsed contents of ``entries/{id}/status.json``
+    (the technique implementer's per-turn status payload — same shape as
+    :class:`HarnessAgentStatus`, kept as a free-form object here so the
+    SPA can render whatever keys are present); ``None`` if the agent has
+    not yet written it.
     """
 
     technique_id: str | None

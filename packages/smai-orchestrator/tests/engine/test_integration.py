@@ -293,3 +293,136 @@ async def test_end_to_end_full_lifecycle_with_orphan_recovery(
     assert final is not None
     assert final.state == "implemented"
     assert final.version == 5
+
+
+def _spec_with_gate_reasons(*, dispatch_handler) -> EngineSpec:
+    """Same shape as :func:`_full_e2e_spec` but the gates carry a
+    ``reason`` so we can assert it lands in the ``transition_log`` row."""
+    in_progress = StateDef(
+        name="implementing",
+        on_entry_dispatch=DispatchAction(
+            name="harness_build",
+            handler=dispatch_handler,
+            pool="agents",
+            handle_field="harness_job_handle",
+        ),
+    )
+    return EngineSpec(
+        entity_kind="cg",
+        initial_state="draft",
+        states=[
+            StateDef(name="draft"),
+            in_progress,
+            StateDef(name="implemented", is_terminal=True),
+            StateDef(name="implementation_failed", is_terminal=True),
+        ],
+        edges=[
+            EdgeDef(
+                name="advance",
+                from_state="draft",
+                target_state="implementing",
+                gate_rule=make_gate(advance=True, reason="ready to build"),
+            ),
+            EdgeDef(
+                name="job-failed",
+                from_state="implementing",
+                target_state="implementation_failed",
+                gate_rule=make_gate(advance=True, reason="harness build failed"),
+                fires_on="job_failed",
+            ),
+        ],
+    )
+
+
+async def _read_transition_log(store, *, entity_id: str):  # type: ignore[no-untyped-def]
+    from typing import Any as _Any  # noqa: PLC0415
+
+    from sqlalchemy import text  # noqa: PLC0415
+
+    async with await store.transaction() as tx:
+        conn: _Any = tx.connection
+        result = await conn.execute(
+            text(
+                "SELECT from_state, to_state, edge_name, worker_id, gate_outcome_reason "
+                "FROM transition_log WHERE entity_kind = 'cg' AND entity_id = :i "
+                "ORDER BY occurred_at, rowid"
+            ),
+            {"i": entity_id},
+        )
+        return result.mappings().all()
+
+
+async def test_phase3_transition_log_records_gate_reason(
+    sqlite_store, fake_compute: FakeCompute, fake_artifact_store: FakeArtifactStore
+) -> None:
+    """A phase-3 dispatch transition records the firing gate's
+    :attr:`GateOutcome.reason` in the ``transition_log`` row (item 3 of
+    the observability follow-up — the engine threads ``gate_outcome_reason``
+    through ``transition_state``)."""
+    handle = make_job_handle("h-translog-reason")
+    spec = _spec_with_gate_reasons(dispatch_handler=make_dispatch(handle=handle))
+    cfg = EngineConfig()
+    cg = await _create_initial_cg(sqlite_store, cg_id="cg_translog_reason")
+
+    outcome = await drive_entity_phase3(
+        spec=spec,
+        metadata_store=sqlite_store,
+        artifact_store=fake_artifact_store,
+        compute=fake_compute,
+        llm=None,
+        config=cfg,
+        record=cg,
+        worker_id="worker-translog",
+    )
+    assert outcome.status == "advanced"
+
+    rows = await _read_transition_log(sqlite_store, entity_id="cg_translog_reason")
+    # Step-1 (draft → implementing) carries the gate reason; the step-3
+    # handle-recording write is a same-state field-only update and is NOT
+    # logged as a transition.
+    step1 = next(r for r in rows if r["to_state"] == "implementing")
+    assert step1["from_state"] == "draft"
+    assert step1["edge_name"] == "advance"
+    assert step1["worker_id"] == "worker-translog"
+    assert step1["gate_outcome_reason"] == "ready to build"
+    assert all(r["to_state"] != "implementing" or r["from_state"] == "draft" for r in rows)
+
+
+async def test_phase1_transition_log_records_gate_reason(
+    sqlite_store, fake_compute: FakeCompute, fake_artifact_store: FakeArtifactStore
+) -> None:
+    """A phase-1 job-terminal transition records the firing gate's reason."""
+    handle = make_job_handle("h-translog-p1")
+    spec = _spec_with_gate_reasons(dispatch_handler=make_dispatch(handle=handle))
+    cfg = EngineConfig()
+    cg = await _create_initial_cg(sqlite_store, cg_id="cg_translog_p1")
+
+    o1 = await drive_entity_phase3(
+        spec=spec,
+        metadata_store=sqlite_store,
+        artifact_store=fake_artifact_store,
+        compute=fake_compute,
+        llm=None,
+        config=cfg,
+        record=cg,
+    )
+    assert o1.status == "advanced"
+    cg_v = await sqlite_store.get_cg("cg_translog_p1")
+    assert cg_v is not None and cg_v.state == "implementing"
+
+    fake_compute.set_status("h-translog-p1", make_job_status("failed", exit_code=1))
+    o2 = await phase1_step(
+        spec=spec,
+        metadata_store=sqlite_store,
+        artifact_store=fake_artifact_store,
+        compute=fake_compute,
+        config=cfg,
+        record=cg_v,
+    )
+    assert o2.status == "advanced"
+
+    rows = await _read_transition_log(sqlite_store, entity_id="cg_translog_p1")
+    failed_row = next(r for r in rows if r["to_state"] == "implementation_failed")
+    assert failed_row["from_state"] == "implementing"
+    assert failed_row["edge_name"] == "job-failed"
+    assert failed_row["gate_outcome_reason"] == "harness build failed"

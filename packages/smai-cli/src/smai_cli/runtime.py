@@ -100,6 +100,17 @@ TERMINAL_CG_STATES: frozenset[str] = frozenset(
     {"complete", "implementation_failed", "running_failed", "evaluation_failed"}
 )
 
+# Proposal / paper terminal states (`08-novel-technique-pipeline.md`
+# §2.5 / §5.7). Used by ``smai status`` for the "(terminal)" marker on
+# proposal / paper ids.
+TERMINAL_PROPOSAL_STATES: frozenset[str] = frozenset({"registered", "rejected", "failed"})
+TERMINAL_PAPER_STATES: frozenset[str] = frozenset({"ingested", "failed"})
+
+# In-progress *agent* states — entities in these states have an agent
+# loop running with a per-turn ``status.json`` worth reading.
+_PROPOSAL_AGENT_STATES: frozenset[str] = frozenset({"designing"})
+_CG_AGENT_STATES: frozenset[str] = frozenset({"implementing"})
+
 # In-flight state catalogs per the :class:`*State` Literal definitions
 # in :mod:`smai_orchestrator.entities.tracking`. The dashboard surfaces
 # these via :meth:`StatusService.summary_counts` (the index-page count
@@ -140,6 +151,16 @@ class CGNotFoundError(LookupError):
     def __init__(self, cg_id: str) -> None:
         self.cg_id = cg_id
         super().__init__(f"no CG with id {cg_id!r} found in MetadataStore")
+
+
+class EntityNotFoundError(LookupError):
+    """Raised by :meth:`StatusService.resolve_status` when an id matches
+    no CG, proposal, or paper record.
+    """
+
+    def __init__(self, entity_id: str) -> None:
+        self.entity_id = entity_id
+        super().__init__(f"no CG, proposal, or paper with id {entity_id!r} found in MetadataStore")
 
 
 class ProposalNotFoundError(LookupError):
@@ -238,6 +259,47 @@ class CGStatus:
 
 
 @dataclass(frozen=True)
+class AgentStatusSnippet:
+    """Parsed slice of an agent loop's per-turn ``status.json``.
+
+    Surfaced by :meth:`StatusService.resolve_status` when an entity is
+    in an in-progress agent state. Best-effort — every field is
+    optional and a missing / unparseable artifact just yields ``None``.
+    """
+
+    label: str
+    role: str | None = None
+    turn_count: int | None = None
+    last_tool_call: str | None = None
+    last_tool_error: str | None = None
+    wall_clock_utc: str | None = None
+    attempt_index: int | None = None
+
+
+@dataclass(frozen=True)
+class EntityStatusSnapshot:
+    """Generalized status snapshot for a CG / proposal / paper.
+
+    Returned by :meth:`StatusService.resolve_status`, which probes the
+    three id namespaces in order. Carries the entity kind, current
+    state, the relevant attempt counter(s), ``last_error``, the elapsed
+    time since the record's ``updated_at``, and (when the entity is in
+    an in-progress agent state) one or more :class:`AgentStatusSnippet`s
+    read from the per-turn ``status.json`` artifacts.
+    """
+
+    kind: str  # "cg" | "proposal" | "paper"
+    entity_id: str
+    state: str
+    is_terminal: bool
+    updated_at: datetime
+    seconds_since_updated: float
+    last_error: str | None
+    attempts: dict[str, int]
+    agent_status: list[AgentStatusSnippet]
+
+
+@dataclass(frozen=True)
 class SummaryCounts:
     """In-flight entity counts per :meth:`StatusService.summary_counts`.
 
@@ -311,6 +373,19 @@ def _dedupe_by_id(items: list[_T], key_fn: Callable[[_T], str]) -> list[_T]:
         seen.add(key)
         out.append(item)
     return out
+
+
+def _aware(dt: datetime) -> datetime:
+    """Return ``dt`` as a tz-aware UTC datetime (naive → UTC)."""
+    return dt if dt.tzinfo is not None else dt.replace(tzinfo=UTC)
+
+
+def _str_or_none(value: Any) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+def _int_or_none(value: Any) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
 
 
 def _parse_yaml_text(yaml_text: str) -> dict[str, Any]:
@@ -485,6 +560,133 @@ class StatusService:
             state=record.state,
             updated_at=record.updated_at,
             is_terminal=record.state in TERMINAL_CG_STATES,
+        )
+
+    async def resolve_status(self, entity_id: str) -> EntityStatusSnapshot:
+        """Probe ``entity_id`` as a CG → proposal → paper, in order.
+
+        Returns an :class:`EntityStatusSnapshot` carrying the entity
+        kind, state, the relevant attempt counter(s), ``last_error``,
+        ``seconds_since_updated``, and (when the entity is in an
+        in-progress agent state) the parsed per-turn ``status.json``
+        snippet(s). Raises :class:`EntityNotFoundError` if no namespace
+        matches.
+        """
+        store = self._plugins.metadata_store
+        now = datetime.now(UTC)
+
+        cg = await store.get_cg(entity_id)
+        if cg is not None:
+            elapsed = (now - _aware(cg.updated_at)).total_seconds()
+            snippets = await self._read_agent_status_for_cg(cg)
+            return EntityStatusSnapshot(
+                kind="cg",
+                entity_id=cg.id,
+                state=cg.state,
+                is_terminal=cg.state in TERMINAL_CG_STATES,
+                updated_at=cg.updated_at,
+                seconds_since_updated=elapsed,
+                last_error=cg.last_error,
+                attempts={"code_review_attempt": cg.code_review_attempt},
+                agent_status=snippets,
+            )
+
+        proposal = await store.get_proposal(entity_id)
+        if proposal is not None:
+            elapsed = (now - _aware(proposal.updated_at)).total_seconds()
+            snippets: list[AgentStatusSnippet] = []
+            if proposal.state in _PROPOSAL_AGENT_STATES:
+                snip = await self._read_status_artifact(
+                    f"proposals/{proposal.id}/planner_status.json", label="planner"
+                )
+                if snip is not None:
+                    snippets.append(snip)
+            return EntityStatusSnapshot(
+                kind="proposal",
+                entity_id=proposal.id,
+                state=proposal.state,
+                is_terminal=proposal.state in TERMINAL_PROPOSAL_STATES,
+                updated_at=proposal.updated_at,
+                seconds_since_updated=elapsed,
+                last_error=proposal.last_error,
+                attempts={
+                    "design_attempt": proposal.design_attempt,
+                    "registration_attempt": proposal.registration_attempt,
+                },
+                agent_status=snippets,
+            )
+
+        paper = await store.get_paper(entity_id)
+        if paper is not None:
+            elapsed = (now - _aware(paper.updated_at)).total_seconds()
+            return EntityStatusSnapshot(
+                kind="paper",
+                entity_id=paper.arxiv_id,
+                state=paper.state,
+                is_terminal=paper.state in TERMINAL_PAPER_STATES,
+                updated_at=paper.updated_at,
+                seconds_since_updated=elapsed,
+                last_error=paper.last_error,
+                attempts={
+                    "screening_attempt": paper.screening_attempt,
+                    "planning_attempt": paper.planning_attempt,
+                    "registration_attempt": paper.registration_attempt,
+                },
+                agent_status=[],
+            )
+
+        raise EntityNotFoundError(entity_id)
+
+    async def _read_agent_status_for_cg(
+        self, cg: ComparisonGroupRecord
+    ) -> list[AgentStatusSnippet]:
+        if cg.state not in _CG_AGENT_STATES:
+            return []
+        out: list[AgentStatusSnippet] = []
+        harness = await self._read_status_artifact(
+            f"comparison-groups/{cg.id}/harness/status.json", label="harness builder"
+        )
+        if harness is not None:
+            out.append(harness)
+        for entry in await self.list_entries_for_cg(cg.id):
+            snip = await self._read_status_artifact(
+                f"comparison-groups/{cg.id}/entries/{entry.id}/status.json",
+                label=f"entry {entry.id}",
+            )
+            if snip is not None:
+                out.append(snip)
+        return out
+
+    async def _read_status_artifact(self, key: str, *, label: str) -> AgentStatusSnippet | None:
+        """Best-effort read + parse of a per-turn agent ``status.json``."""
+        from smai_core.plugins import ArtifactNotFound  # noqa: PLC0415
+
+        try:
+            raw = await self._plugins.artifact_store.get(key)
+        except ArtifactNotFound:
+            return None
+        except Exception:  # noqa: BLE001 — status read is best-effort
+            return None
+        try:
+            parsed = json.loads(raw)
+        except (ValueError, UnicodeDecodeError):
+            return None
+        if not isinstance(parsed, dict):
+            return None
+        d = cast("dict[str, Any]", parsed)
+
+        def _get(k: str) -> Any:
+            v = d.get(k)
+            return v
+
+        return AgentStatusSnippet(
+            label=label,
+            role=_str_or_none(_get("role")),
+            turn_count=_int_or_none(_get("turn_count")),
+            last_tool_call=_str_or_none(_get("last_tool_call")),
+            last_tool_error=_str_or_none(_get("last_tool_error")),
+            wall_clock_utc=_str_or_none(_get("wall_clock_utc")),
+            attempt_index=_int_or_none(_get("attempt_index")),
         )
 
     async def wait_for_terminal(
@@ -1532,6 +1734,9 @@ __all__ = [
     "CGStatus",
     "DEFAULT_TASK_ROLES",
     "EXPERIMENT_PLAN_KEY_TEMPLATE",
+    "AgentStatusSnippet",
+    "EntityNotFoundError",
+    "EntityStatusSnapshot",
     "ExperimentsService",
     "HARNESS_CONTRACT_KEY_TEMPLATE",
     "PROPOSAL_TECHNIQUE_DESCRIPTION_KEY_TEMPLATE",
@@ -1550,6 +1755,8 @@ __all__ = [
     "SummaryCounts",
     "TECHNIQUE_CONTRACT_KEY_TEMPLATE",
     "TERMINAL_CG_STATES",
+    "TERMINAL_PAPER_STATES",
+    "TERMINAL_PROPOSAL_STATES",
     "VALIDATION_CONFIG_KEY_TEMPLATE",
     "WaitTimeoutError",
 ]

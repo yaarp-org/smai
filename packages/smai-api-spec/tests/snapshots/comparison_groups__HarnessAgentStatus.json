@@ -1,8 +1,44 @@
 {
   "additionalProperties": false,
-  "description": "Mirrors what the harness builder writes to ``harness/status.json``.\n\nThe full schema is owned by ``04-agents.md``; the contract surface\nhere is a narrow projection of the fields the SPA renders. Each\nfield is optional so partial / in-progress writes parse cleanly.\n\nPer ``11`` \u00a75.2.3 the joining + parsing happens server-side so the\nSPA gets one round-trip instead of fanning out to N artifact reads.",
+  "description": "Mirrors what an agent loop writes to its per-turn ``status.json``.\n\nThe schema is owned by ``04-agents.md`` /\n:func:`smai_agents.between_turn.write_status`; the field set here\nmatches the payload that function emits. Every field is optional so\npartial / in-progress / older writes parse cleanly.\n\nPer ``11`` \u00a75.2.3 the joining + parsing happens server-side so the\nSPA gets one round-trip instead of fanning out to N artifact reads.",
   "properties": {
-    "cost_usd": {
+    "attempt_index": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Attempt Index"
+    },
+    "last_tool_call": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Last Tool Call"
+    },
+    "last_tool_error": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Last Tool Error"
+    },
+    "monotonic_timestamp": {
       "anyOf": [
         {
           "type": "number"
@@ -12,9 +48,94 @@
         }
       ],
       "default": null,
-      "title": "Cost Usd"
+      "title": "Monotonic Timestamp"
     },
-    "last_message_at": {
+    "nudges_consumed": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Nudges Consumed"
+    },
+    "role": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Role"
+    },
+    "supervisor_aborted": {
+      "anyOf": [
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Supervisor Aborted"
+    },
+    "tool_errors_fired": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Tool Errors Fired"
+    },
+    "truncations_fired": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Truncations Fired"
+    },
+    "turn_count": {
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Turn Count"
+    },
+    "usage_total": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Usage Total"
+    },
+    "wall_clock_utc": {
       "anyOf": [
         {
           "format": "date-time",
@@ -25,31 +146,7 @@
         }
       ],
       "default": null,
-      "title": "Last Message At"
-    },
-    "state": {
-      "anyOf": [
-        {
-          "type": "string"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "title": "State"
-    },
-    "turn": {
-      "anyOf": [
-        {
-          "type": "integer"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "title": "Turn"
+      "title": "Wall Clock Utc"
     }
   },
   "title": "HarnessAgentStatus",

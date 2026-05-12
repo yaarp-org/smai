@@ -29,6 +29,7 @@ import logging
 import shutil
 import subprocess
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -181,9 +182,15 @@ async def write_status(session: AgentSession) -> None:
         "role": session.current_role,
         "turn_count": session.turn_count,
         "monotonic_timestamp": session.time_provider(),
+        "wall_clock_utc": datetime.now(UTC).isoformat(),
         "usage_total": session.usage_total.model_dump(),
         "nudges_consumed": session.nudges_consumed,
         "truncations_fired": session.truncations_fired,
+        "last_tool_call": session.last_tool_call,
+        "last_tool_error": session.last_tool_error,
+        "tool_errors_fired": session.tool_errors_fired,
+        "attempt_index": session.attempt_index,
+        "supervisor_aborted": session.supervisor_aborted,
     }
 
     # Always record in-memory for the supervisor (Task 3.G4) — bounded
@@ -195,11 +202,16 @@ async def write_status(session: AgentSession) -> None:
 
     store = session.artifact_store
     path = session.status_artifact_path
-    if store is None or path is None:
-        return
+    if store is not None and path is not None:
+        body = json.dumps(payload, sort_keys=True).encode("utf-8")
+        await store.put(path, body, content_type="application/json")
 
-    body = json.dumps(payload, sort_keys=True).encode("utf-8")
-    await store.put(path, body, content_type="application/json")
+    # Fire the persistence-agnostic progress callback on the same cadence
+    # as status writes. The closure is supplied by the orchestrator's
+    # dispatch handler (UPDATEs the ``agent_sessions`` row); the loop
+    # itself never references a MetadataStore type.
+    if session.progress_sink is not None:
+        await session.progress_sink(session)
 
 
 # === Supervisor between-turn check (§2.6 / §15 OQ2) =========================

@@ -160,9 +160,12 @@ async def get_cg_agent_status(
 ) -> AgentStatusResponse:
     """Composite agent-status read per ``11`` §5.2.3.
 
-    Pulls one ``harness/status.json`` and one per-entry ``status.json``
-    (under ``entries/{entry_id}/code/``), parses each, joins them. The
-    SPA gets one round-trip instead of fanning out to N artifact reads.
+    Pulls one ``comparison-groups/{cg_id}/harness/status.json`` and one
+    per-entry ``comparison-groups/{cg_id}/entries/{entry_id}/status.json``
+    (the technique implementer's per-turn payload — see
+    :data:`smai_agents.agents.technique_implementer.DEFAULT_STATUS_KEY_TEMPLATE`,
+    which has no ``code/`` segment), parses each, joins them. The SPA
+    gets one round-trip instead of fanning out to N artifact reads.
 
     A 404 from the underlying CG is allowed to bubble (the central
     handler renders ``CG_NOT_FOUND``); missing per-entry status.json
@@ -188,7 +191,7 @@ async def get_cg_agent_status(
     # Per-entry status.
     entries_status: dict[str, EntryAgentStatus] = {}
     for entry in entries:
-        entry_key = f"comparison-groups/{cg_id}/entries/{entry.id}/code/status.json"
+        entry_key = f"comparison-groups/{cg_id}/entries/{entry.id}/status.json"
         try:
             raw = await artifact_store.get(entry_key)
             parsed = _safe_json(raw)

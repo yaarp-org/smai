@@ -27,7 +27,7 @@ The loop owns sequencing only; domain logic lives in
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -203,6 +203,39 @@ class AgentSession(BaseModel):
     """Path under which :func:`smai_agents.between_turn.maybe_check_supervisor_nudge`
     looks for a supervisor nudge. Same provenance as
     :attr:`status_artifact_path`."""
+
+    last_tool_call: str | None = None
+    """Name of the most-recently-invoked tool (set in
+    :func:`_execute_tool_uses` for every ``tool_use`` block). Surfaced
+    in the per-turn status payload so observability consumers can see
+    "what is the agent doing right now"."""
+
+    last_tool_error: str | None = None
+    """Content string of the most-recent ``is_error=True`` tool result
+    (any of the four error branches in :func:`_execute_tool_uses`).
+    ``None`` until the first tool error. Lets the supervisor + status
+    readers see the last failure without the conversation trace."""
+
+    tool_errors_fired: int = 0
+    """Count of ``is_error=True`` tool results across the session.
+    Diagnostic counter alongside :attr:`truncations_fired` etc."""
+
+    attempt_index: int | None = None
+    """Which (re-)attempt this dispatched session is, for roles that
+    carry an attempt counter (technique implementer:
+    ``implementation_attempt``). ``None`` for roles with no attempt
+    notion (harness builder, planner). Set by the dispatch handler /
+    session constructor; surfaced in the status payload."""
+
+    progress_sink: Callable[[AgentSession], Awaitable[None]] | None = Field(
+        default=None, exclude=True
+    )
+    """Persistence-agnostic per-turn callback. Fired by
+    :func:`smai_agents.between_turn.write_status` on the same cadence as
+    status writes (every turn by default). The loop must NOT import any
+    :class:`MetadataStore` type; the orchestrator's dispatch handler
+    supplies a closure that UPDATEs the ``agent_sessions`` row. ``None``
+    in unit tests / Tier-B usage that doesn't track sessions."""
 
     turn_count: int = 0
     usage_total: TokenUsage = Field(
@@ -422,9 +455,12 @@ async def _execute_tool_uses(
         cap = session.config.supervisor_recent_tool_call_count
         if cap > 0 and len(session.recent_tool_call_names) > cap:
             del session.recent_tool_call_names[: len(session.recent_tool_call_names) - cap]
+        # Most-recent single-valued mirror for the status payload.
+        session.last_tool_call = block.name
 
         tool = session.tools.get(block.name)
         if tool is None:
+            _record_tool_error(session, f"unknown tool: {block.name!r}")
             results.append(
                 ToolResultContent(
                     tool_use_id=block.id,
@@ -441,10 +477,12 @@ async def _execute_tool_uses(
             # An input that fails schema validation surfaces back to
             # the agent as an is_error tool_result; the agent can react
             # on the next turn.
+            content = f"input validation failed for tool {block.name!r}: {exc}"
+            _record_tool_error(session, content)
             results.append(
                 ToolResultContent(
                     tool_use_id=block.id,
-                    content=(f"input validation failed for tool {block.name!r}: {exc}"),
+                    content=content,
                     is_error=True,
                 )
             )
@@ -453,10 +491,12 @@ async def _execute_tool_uses(
         try:
             result = await tool.handler(parsed, context)
         except Exception as exc:  # noqa: BLE001 — surface every error as tool_result
+            content = f"tool {block.name!r} raised {type(exc).__name__}: {exc}"
+            _record_tool_error(session, content)
             results.append(
                 ToolResultContent(
                     tool_use_id=block.id,
-                    content=f"tool {block.name!r} raised {type(exc).__name__}: {exc}",
+                    content=content,
                     is_error=True,
                 )
             )
@@ -468,6 +508,9 @@ async def _execute_tool_uses(
 
         for hook in tool.post_result_hooks:
             result = await hook(tool, parsed, result, context)
+
+        if result.is_error:
+            _record_tool_error(session, result.content)
 
         results.append(result)
 
@@ -482,6 +525,17 @@ async def _execute_tool_uses(
             }
 
     return finish_payload, results
+
+
+def _record_tool_error(session: AgentSession, content: str) -> None:
+    """Record the latest ``is_error`` tool-result content on the session.
+
+    Mirrors the four error branches in :func:`_execute_tool_uses`
+    (unknown tool, input-validation failure, handler raised, handler
+    returned ``is_error``) into the single-valued status fields.
+    """
+    session.last_tool_error = content
+    session.tool_errors_fired += 1
 
 
 def _safe_get_bool(model: BaseModel, field: str) -> bool | None:

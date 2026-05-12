@@ -50,6 +50,7 @@ from smai_orchestrator.engine.state_machine import (
     DriveOutcome,
     drive_entity_phase3,
     evaluate_outgoing_edges,
+    evaluate_outgoing_edges_with_outcome,
 )
 from smai_orchestrator.engine.types import (
     ConcurrencyPool,
@@ -94,6 +95,7 @@ __all__ = [
     "default_wall_clock",
     "drive_entity_phase3",
     "evaluate_outgoing_edges",
+    "evaluate_outgoing_edges_with_outcome",
     "phase1_step",
     "reset_orphan",
     "run_dispatch",

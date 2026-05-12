@@ -80,6 +80,11 @@ from smai_core.plugins import (
     ToolResultContent,
 )
 
+from smai_agents.agent_session_telemetry import (
+    close_agent_session,
+    make_progress_sink,
+    open_agent_session,
+)
 from smai_agents.loop import (
     AgentLoopConfig,
     AgentOutcome,
@@ -110,6 +115,21 @@ PlannerVariant = Literal["novel_technique", "paper_ingestion"]
 # ``papers/{arxiv_id}/``).
 DEFAULT_DESIGN_PLAN_KEY_TEMPLATE = "proposals/{proposal_id}/design_plan.json"
 DEFAULT_PAPER_PLAN_KEY_TEMPLATE = "papers/{arxiv_id}/planner_buffer.json"
+
+# Per-turn status / supervisor-nudge artifact key templates for the planner
+# (mirrors :data:`DEFAULT_DESIGN_PLAN_KEY_TEMPLATE`). Wiring the status
+# artifact gives observability consumers (``smai status`` / the API
+# ``/agent-status`` join) a payload to read while the planner is in
+# ``designing``; wiring the nudge artifact is required for a supervisor
+# ``intervene`` decision to actually be delivered (see
+# ``between_turn.maybe_run_supervisor_check`` — without
+# ``nudge_artifact_path`` the nudge is silently dropped).
+DEFAULT_PLANNER_STATUS_KEY_TEMPLATE = "proposals/{proposal_id}/planner_status.json"
+DEFAULT_PLANNER_NUDGE_KEY_TEMPLATE = "proposals/{proposal_id}/planner_nudge.txt"
+# Paper-ingestion equivalents (the paper-ingestion pipeline-spec wires
+# these; only the novel_technique path is wired by this module today).
+DEFAULT_PAPER_PLANNER_STATUS_KEY_TEMPLATE = "papers/{arxiv_id}/planner_status.json"
+DEFAULT_PAPER_PLANNER_NUDGE_KEY_TEMPLATE = "papers/{arxiv_id}/planner_nudge.txt"
 
 
 # === Buffer schema ==========================================================
@@ -1146,6 +1166,9 @@ async def run_planner_session(
     config: AgentLoopConfig | None = None,
     runner: SessionRunner | None = None,
     supervisor_llm: LlmProvider | None = None,
+    status_artifact_path: str | None = None,
+    nudge_artifact_path: str | None = None,
+    progress_sink: Callable[[Any], Awaitable[None]] | None = None,
 ) -> PlannerSessionResult:
     """Drive the planner agent loop in-process.
 
@@ -1225,8 +1248,9 @@ async def run_planner_session(
         workspace_path=workspace_path,
         artifact_store=artifact_store,
         compute=None,
-        status_artifact_path=None,
-        nudge_artifact_path=None,
+        status_artifact_path=status_artifact_path,
+        nudge_artifact_path=nudge_artifact_path,
+        progress_sink=progress_sink,
         config=config or AgentLoopConfig(),
     )
 
@@ -1397,6 +1421,22 @@ def make_dispatch_planner(
             supervisor_cadence = 0
         loop_config = AgentLoopConfig(supervisor_check_every_turns=supervisor_cadence)
 
+        status_key = DEFAULT_PLANNER_STATUS_KEY_TEMPLATE.format(proposal_id=proposal_id)
+        nudge_key = DEFAULT_PLANNER_NUDGE_KEY_TEMPLATE.format(proposal_id=proposal_id)
+
+        # Open the agent_sessions telemetry row (DEC-033 #2) so the run is
+        # inspectable while it executes — this is the friction the
+        # observability pass fixes (a planner sitting in ``designing`` for
+        # ~18 min with no inspectable signal).
+        session_id = await open_agent_session(
+            ctx.metadata_store,
+            parent_kind="proposal",
+            parent_id=proposal_id,
+            agent_role="planner",
+            llm=llm,
+        )
+        progress_sink = make_progress_sink(ctx.metadata_store, session_id)
+
         result = await run_planner_session(
             input=planner_input,
             llm=llm,
@@ -1406,7 +1446,11 @@ def make_dispatch_planner(
             runner=inline_runner,
             supervisor_llm=llm if supervisor_on else None,
             config=loop_config,
+            status_artifact_path=status_key,
+            nudge_artifact_path=nudge_key,
+            progress_sink=progress_sink,
         )
+        await close_agent_session(ctx.metadata_store, session_id, result.outcome)
 
         if not result.buffer.finalized:
             return DispatchOutcome(
@@ -1517,7 +1561,11 @@ def variant_for_submission_kind(submission_kind: str) -> PlannerVariant:
 
 __all__ = [
     "DEFAULT_DESIGN_PLAN_KEY_TEMPLATE",
+    "DEFAULT_PAPER_PLANNER_NUDGE_KEY_TEMPLATE",
+    "DEFAULT_PAPER_PLANNER_STATUS_KEY_TEMPLATE",
     "DEFAULT_PAPER_PLAN_KEY_TEMPLATE",
+    "DEFAULT_PLANNER_NUDGE_KEY_TEMPLATE",
+    "DEFAULT_PLANNER_STATUS_KEY_TEMPLATE",
     "AddFollowUpInput",
     "DraftAssertionInput",
     "DraftComparisonGroup",

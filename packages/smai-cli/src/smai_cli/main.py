@@ -48,7 +48,7 @@ from smai_cli.config import (
     load_runtime_config,
 )
 from smai_cli.runtime import (
-    CGNotFoundError,
+    EntityNotFoundError,
     PaperNotFoundError,
     PaperStateError,
     ProposalNotFoundError,
@@ -311,14 +311,20 @@ def smai_run(
 
 @app.command("status")
 def smai_status(
-    cg_id: Annotated[str, typer.Argument(help="CG identifier.")],
+    entity_id: Annotated[
+        str,
+        typer.Argument(help="A CG, proposal, or paper identifier."),
+    ],
     config: Annotated[
         Path | None,
         typer.Option("--config", "-c", help="Path to a smai.yaml."),
     ] = None,
     watch: Annotated[
         bool,
-        typer.Option("--watch", help="Poll until the CG reaches a terminal state."),
+        typer.Option(
+            "--watch",
+            help="Poll until terminal (CG ids only; ignored for proposals/papers).",
+        ),
     ] = False,
     poll_interval: Annotated[
         float,
@@ -336,10 +342,13 @@ def smai_status(
         ),
     ] = "text",
 ) -> None:
-    """Read CG state from MetadataStore (`09` §7).
+    """Read pipeline-tracking state from MetadataStore (`09` §7).
 
-    Read-only. ``--watch`` polls every ``--poll-interval`` seconds
-    until terminal. JSON format for machine consumption.
+    Accepts a CG, proposal, or paper id (probed in that order). For an
+    entity in an in-progress agent state, also surfaces the per-turn
+    ``status.json`` (turn count, last tool call, last error). Read-only.
+    ``--watch`` polls every ``--poll-interval`` seconds until terminal —
+    CG ids only; for proposals / papers it is ignored.
     """
     overrides: dict[str, Any] = _apply_dev_filesystem_defaults({})
     try:
@@ -354,24 +363,36 @@ def smai_status(
     async def _run() -> None:
         async with Runtime.start_in_band(runtime_config, run_worker=False) as runtime:
             try:
-                snap = await runtime.status.get(cg_id)
-            except CGNotFoundError as exc:
+                snap = await runtime.status.resolve_status(entity_id)
+            except EntityNotFoundError as exc:
                 _err(str(exc), exit_code=2)
                 return
             _emit_status(snap, output_format)
-            if watch and not snap.is_terminal:
+            if watch and snap.kind == "cg" and not snap.is_terminal:
                 try:
-                    final = await runtime.status.wait_for_terminal(
-                        cg_id,
+                    await runtime.status.wait_for_terminal(
+                        entity_id,
                         timeout=None,
                         poll_interval_seconds=poll_interval,
                     )
                 except WaitTimeoutError as exc:
                     _err(str(exc), exit_code=3)
                     return
+                final = await runtime.status.resolve_status(entity_id)
                 _emit_status(final, output_format)
 
     asyncio.run(_run())
+
+
+def _humanize_elapsed(seconds: float) -> str:
+    s = int(seconds)
+    if s < 60:
+        return f"{s}s ago"
+    if s < 3600:
+        return f"{s // 60}m ago"
+    if s < 86400:
+        return f"{s // 3600}h ago"
+    return f"{s // 86400}d ago"
 
 
 def _emit_status(snap: Any, output_format: str) -> None:
@@ -379,16 +400,47 @@ def _emit_status(snap: Any, output_format: str) -> None:
         typer.echo(
             json.dumps(
                 {
-                    "cg_id": snap.cg_id,
+                    "kind": snap.kind,
+                    "id": snap.entity_id,
                     "state": snap.state,
-                    "updated_at": snap.updated_at.isoformat(),
                     "is_terminal": snap.is_terminal,
+                    "updated_at": snap.updated_at.isoformat(),
+                    "seconds_since_updated": snap.seconds_since_updated,
+                    "last_error": snap.last_error,
+                    "attempts": snap.attempts,
+                    "agent_status": [
+                        {
+                            "label": a.label,
+                            "role": a.role,
+                            "turn_count": a.turn_count,
+                            "last_tool_call": a.last_tool_call,
+                            "last_tool_error": a.last_tool_error,
+                            "wall_clock_utc": a.wall_clock_utc,
+                            "attempt_index": a.attempt_index,
+                        }
+                        for a in snap.agent_status
+                    ],
                 }
             )
         )
-    else:
-        terminal_marker = " (terminal)" if snap.is_terminal else ""
-        typer.echo(f"{snap.cg_id}: {snap.state}{terminal_marker}")
+        return
+
+    terminal_marker = " (terminal)" if snap.is_terminal else ""
+    typer.echo(f"{snap.entity_id} [{snap.kind}]: {snap.state}{terminal_marker}")
+    typer.echo(f"  updated {_humanize_elapsed(snap.seconds_since_updated)}")
+    nonzero_attempts = {k: v for k, v in snap.attempts.items() if v}
+    if nonzero_attempts:
+        attempts_str = ", ".join(f"{k}={v}" for k, v in sorted(nonzero_attempts.items()))
+        typer.echo(f"  attempts: {attempts_str}")
+    if snap.last_error:
+        typer.echo(f"  last_error: {snap.last_error}")
+    for a in snap.agent_status:
+        action = f"last action {a.last_tool_call}" if a.last_tool_call else "no recorded action"
+        err = f", last error: {a.last_tool_error}" if a.last_tool_error else ", no error"
+        turn = f"turn ~{a.turn_count}" if a.turn_count is not None else "turn ?"
+        when = f", updated {a.wall_clock_utc}" if a.wall_clock_utc else ""
+        role = a.role or a.label
+        typer.echo(f"  {role}: {turn}, {action}{err}{when}")
 
 
 # === Verb 4: compile =========================================================

@@ -205,6 +205,9 @@ async def transition_state(  # noqa: PLR0913
     *,
     event_channel: EventChannel | None = None,
     from_state: str | None = None,
+    edge_name: str | None = None,
+    worker_id: str | None = None,
+    gate_outcome_reason: str | None = None,
 ) -> StateDrivenRecord:
     """CAS-transition an entity to ``target_state``, dispatching per kind.
 
@@ -260,6 +263,17 @@ async def transition_state(  # noqa: PLR0913
         assert from_state is not None
         async with await store.transaction() as txn:
             record = await _txn_transition(txn, kind, entity_id, expected_version, state, fields)
+            # Audit row in the SAME transaction as the CAS UPDATE so a
+            # ROLLBACK suppresses both the wire signal and the log row.
+            await txn.append_transition_log(
+                entity_kind=kind,
+                entity_id=entity_id,
+                from_state=from_state,
+                to_state=target_state,
+                edge_name=edge_name or "(unknown)",
+                worker_id=worker_id,
+                gate_outcome_reason=gate_outcome_reason,
+            )
             await event_channel.fire_transition(
                 kind=event_kind_for(kind),
                 id=entity_id,
@@ -278,23 +292,45 @@ async def transition_state(  # noqa: PLR0913
 
     # K2 / K3-no-fire path: bare CAS, then post-commit fire if applicable.
     record = await _bare_transition(store, kind, entity_id, expected_version, state, fields)
-    if event_channel is not None and is_transition:
+    if is_transition:
         assert from_state is not None
+        # Audit row, post-commit, best-effort — a failed audit write
+        # must not break the engine (the state transition already
+        # committed). Mirrors the fire-on-transition error handling.
         try:
-            await event_channel.fire_transition(
-                kind=event_kind_for(kind),
-                id=entity_id,
+            await store.append_transition_log(
+                entity_kind=kind,
+                entity_id=entity_id,
                 from_state=from_state,
                 to_state=target_state,
+                edge_name=edge_name or "(unknown)",
+                worker_id=worker_id,
+                gate_outcome_reason=gate_outcome_reason,
             )
-        except Exception:  # noqa: BLE001 — event channel must not break the engine
+        except Exception:  # noqa: BLE001 — audit write must not break the engine
             _log.exception(
-                "event_channel.fire_transition raised for %s/%s %s→%s; ignoring",
+                "append_transition_log raised for %s/%s %s→%s; ignoring",
                 kind,
                 entity_id,
                 from_state,
                 target_state,
             )
+        if event_channel is not None:
+            try:
+                await event_channel.fire_transition(
+                    kind=event_kind_for(kind),
+                    id=entity_id,
+                    from_state=from_state,
+                    to_state=target_state,
+                )
+            except Exception:  # noqa: BLE001 — event channel must not break the engine
+                _log.exception(
+                    "event_channel.fire_transition raised for %s/%s %s→%s; ignoring",
+                    kind,
+                    entity_id,
+                    from_state,
+                    target_state,
+                )
 
     return record
 

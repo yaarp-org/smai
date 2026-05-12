@@ -556,12 +556,20 @@ def test_agent_status_response_roundtrip() -> None:
     _roundtrip(
         AgentStatusResponse(
             harness=HarnessAgentStatus(
-                state="complete", turn=4, cost_usd=0.42, last_message_at=NOW
+                role="harness_builder",
+                turn_count=4,
+                monotonic_timestamp=12.5,
+                wall_clock_utc=NOW,
+                usage_total={"input_tokens": 10, "output_tokens": 2},
+                last_tool_call="write_file",
+                tool_errors_fired=0,
+                attempt_index=None,
+                supervisor_aborted=False,
             ),
             entries={
                 "entry_001": EntryAgentStatus(
                     technique_id="tech_xyz",
-                    status={"state": "complete", "turn": 6},
+                    status={"role": "technique_implementer", "turn_count": 6},
                 )
             },
         )

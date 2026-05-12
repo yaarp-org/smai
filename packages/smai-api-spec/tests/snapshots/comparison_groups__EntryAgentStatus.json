@@ -1,6 +1,6 @@
 {
   "additionalProperties": false,
-  "description": "Per-entry agent-status projection.\n\n``status`` is the parsed contents of\n``entries/{id}/code/status.json`` (a free-form JSON object whose\nschema is owned by ``04-agents.md``); ``None`` if the agent has not\nyet written it.",
+  "description": "Per-entry agent-status projection.\n\n``status`` is the parsed contents of ``entries/{id}/status.json``\n(the technique implementer's per-turn status payload \u2014 same shape as\n:class:`HarnessAgentStatus`, kept as a free-form object here so the\nSPA can render whatever keys are present); ``None`` if the agent has\nnot yet written it.",
   "properties": {
     "status": {
       "anyOf": [

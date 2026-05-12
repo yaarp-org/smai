@@ -22,6 +22,7 @@ side state-machine driver, the Literal definitions move there and
 record modules import them.
 """
 
+from smai_orchestrator.entities.tracking.agent_session import AgentSessionRecord
 from smai_orchestrator.entities.tracking.comparison_group import (
     CGState,
     ComparisonGroupRecord,
@@ -33,6 +34,7 @@ from smai_orchestrator.entities.tracking.proposal import ProposalRecord, Proposa
 from smai_orchestrator.entities.tracking.run import RunRecord, RunState
 
 __all__ = [
+    "AgentSessionRecord",
     "CGState",
     "ComparisonGroupRecord",
     "EntryRecord",

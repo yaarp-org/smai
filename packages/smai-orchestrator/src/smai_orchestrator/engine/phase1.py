@@ -211,10 +211,12 @@ async def phase1_step(  # noqa: PLR0913
     )
 
     fired: EdgeDef | None = None
+    fired_reason: str | None = None
     for edge in spec.edges_from(entity_state, fires_on=fires_on):
         outcome = await edge.gate_rule(gate_context)
         if outcome.advance:
             fired = edge
+            fired_reason = outcome.reason
             break
 
     if fired is None:
@@ -234,6 +236,8 @@ async def phase1_step(  # noqa: PLR0913
             fields={action.handle_field: None},
             event_channel=config.event_channel,
             from_state=entity_state,
+            edge_name=fired.name,
+            gate_outcome_reason=fired_reason,
         )
     except ConflictError:
         return Phase1Outcome(status="conflict", fired_edge=fired, job_status=job_status)

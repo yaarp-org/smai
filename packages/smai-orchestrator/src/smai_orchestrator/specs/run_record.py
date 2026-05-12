@@ -87,6 +87,7 @@ from smai_core.artifacts import HarnessContract
 from smai_core.plugins import (
     ArtifactNotFound,
     ArtifactStore,
+    ConflictError,
     JobHandle,
 )
 
@@ -345,6 +346,24 @@ def _make_dispatch_run_compute_submit(
         run = await ctx.metadata_store.get_run(ctx.entity_id)
         if run is None:
             return DispatchOutcome(error=f"RunRecord {ctx.entity_id!r} not found")
+
+        # Bump ``run_attempt`` on each (re-)entry into the run dispatch
+        # so the ``max_run_attempts`` retry-budget gate sees a real
+        # count rather than 0. v1 has no run-level retry edge yet, but a
+        # run that is forward-rolled-back to ``pending`` and re-dispatched
+        # ticks this up. Field-only ``transition_*_state`` preserving the
+        # current state; best-effort on CAS conflict — mirrors
+        # ``cg_execution.py``. The engine re-reads before its handle
+        # write, so this field-only bump doesn't poison the dispatch.
+        try:
+            await ctx.metadata_store.transition_run_state(
+                run.id,
+                run.version,
+                run.state,  # pyright: ignore[reportArgumentType] — field-only update
+                run_attempt=run.run_attempt + 1,
+            )
+        except ConflictError:
+            pass
 
         gpu = await _load_compute_requirements_gpu(ctx.artifact_store, run.cg_id)
         image = gpu_image if gpu else cpu_image

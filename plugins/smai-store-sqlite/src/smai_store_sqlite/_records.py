@@ -103,53 +103,18 @@ class TransitionLogEntry(BaseModel):
     occurred_at: datetime
 
 
-class AgentSessionRecord(BaseModel):
-    """Per-session agent-loop cost record (DEC-033 #2).
-
-    One row per agent invocation; the agent loop writes this on session
-    end with the realized token totals plus the rates recorded **at
-    session time** (per the v1 principle "pricing is unstable; store
-    the factual data" — `token_metering.md` §1). Aggregate-on-query via
-    ``SELECT SUM(input_tokens * input_token_rate_usd + ...) FROM
-    agent_sessions WHERE parent_kind = ... AND parent_id = ...``.
-
-    Rates are stored as USD-per-1M-tokens (the unit Bedrock /
-    Anthropic / OpenAI all surface) — keep multiplicands together to
-    avoid floating-point loss on a per-token rate. Cached input tokens
-    are tracked separately because their rate is typically 0.1× the
-    base input rate (per `prompt_caching.md`) and aggregation queries
-    want the breakdown.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    id: str
-    parent_kind: AgentSessionParentKind
-    parent_id: str
-
-    # Role + provider + model — informational, also indexable for
-    # per-role / per-model aggregations (the `dao_design.md` §2 GSI3 /
-    # GSI4 carry-forward).
-    agent_role: str
-    llm_provider: str | None = None
-    model_id: str | None = None
-
-    # Realized token totals.
-    input_tokens: int = 0
-    cached_input_tokens: int = 0
-    output_tokens: int = 0
-    turn_count: int = 0
-
-    # Rates at session time (USD per 1M tokens). Nullable for
-    # provider-internal sessions where rate metadata is unavailable
-    # (the aggregate query treats ``NULL`` as "no cost contribution",
-    # which matches v1's defensive behavior).
-    input_token_rate_usd_per_million: float | None = None
-    cached_input_token_rate_usd_per_million: float | None = None
-    output_token_rate_usd_per_million: float | None = None
-
-    started_at: datetime
-    ended_at: datetime | None = None
+# ``AgentSessionRecord`` has graduated to
+# :mod:`smai_orchestrator.entities.tracking.agent_session` — the
+# observability-hardening pass added the ``create_agent_session`` /
+# ``update_agent_session`` / ``get_agent_session`` ``MetadataStore``
+# CRUD methods, so the public Pydantic shape now lives in the
+# orchestrator package (per this module's graduation plan above) and
+# both store plugins import it from there. The three
+# ``*_rate_usd_per_million`` rate columns are *not* on the graduated
+# record yet (cost tracking — ``run_costs``, the rate table — is
+# backlogged); they stay ``NULL`` on the ``agent_sessions`` table.
+# ``AgentSessionParentKind`` stays here as the documented candidate
+# enumeration for the polymorphic ``parent_kind`` discriminator.
 
 
 class RunCostRecord(BaseModel):
@@ -186,7 +151,6 @@ class RunCostRecord(BaseModel):
 
 __all__ = [
     "AgentSessionParentKind",
-    "AgentSessionRecord",
     "RunCostRecord",
     "TransitionLogEntry",
 ]

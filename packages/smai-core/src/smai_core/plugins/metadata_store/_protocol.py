@@ -37,6 +37,8 @@ from smai_core.plugins._common import CursorPage, EntityKind, LeaseToken
 from smai_core.plugins.metadata_store._capabilities import MetadataStoreCapabilities
 
 if TYPE_CHECKING:
+    from datetime import datetime
+
     # ``TechniqueRef`` is a methodology entity (smai-core internal); imported
     # under TYPE_CHECKING to avoid a runtime import cycle through
     # ``smai_core.entities``. Used by the technique-registry lookups in §5.3.
@@ -47,6 +49,7 @@ if TYPE_CHECKING:
     # ``tools/check_deps.py`` exempts these TYPE_CHECKING imports from
     # rule 2 — see the lint module for details.
     from smai_orchestrator.entities.tracking import (
+        AgentSessionRecord,
         CGState,
         ComparisonGroupRecord,
         EntryRecord,
@@ -139,6 +142,26 @@ class Transaction(Protocol):
         **fields: object,
     ) -> PaperRecord: ...
 
+    async def append_transition_log(
+        self,
+        *,
+        entity_kind: str,
+        entity_id: str,
+        from_state: str,
+        to_state: str,
+        edge_name: str,
+        worker_id: str | None,
+        gate_outcome_reason: str | None = None,
+    ) -> None:
+        """Append one row to the ``transition_log`` audit table (DEC-033 #1).
+
+        Mirrored on the parent :class:`MetadataStore`; the transactional
+        variant writes the audit row in the *same* transaction as the
+        CAS ``UPDATE`` (so the Pg-``NOTIFY`` / K3 path stays atomic).
+        ``occurred_at`` is set by the implementation to "now".
+        """
+        ...
+
 
 @runtime_checkable
 class MetadataStore(Protocol):
@@ -224,6 +247,73 @@ class MetadataStore(Protocol):
 
     # Updates, deletes, and full enumeration deferred to Session C
     # (``01-data-model.md`` §5).
+
+    # === Observability tables — agent sessions + transition log (DEC-033) ===
+
+    async def create_agent_session(
+        self,
+        *,
+        parent_kind: str,
+        parent_id: str,
+        agent_role: str,
+        llm_provider: str,
+        model_id: str,
+    ) -> str:
+        """Insert an ``agent_sessions`` row at dispatch start; return its id.
+
+        The new row carries ``started_at = now()``, ``ended_at = None``,
+        the per-token USD rate columns ``NULL`` (cost-rate work is
+        backlogged), and the token / turn counters at ``0``. The
+        returned id is a ULID-shaped string matching the id convention
+        used elsewhere.
+        """
+        ...
+
+    async def update_agent_session(
+        self,
+        session_id: str,
+        *,
+        turn_count: int,
+        input_tokens: int,
+        cached_input_tokens: int,
+        output_tokens: int,
+        ended_at: datetime | None = None,
+    ) -> None:
+        """UPDATE the running token / turn counts on an agent-session row.
+
+        The agent loop's per-turn ``progress_sink`` calls this with the
+        latest running totals; the dispatch handler calls it once more on
+        loop exit with ``ended_at`` set. A no-op (silently) when no row
+        with ``session_id`` exists is acceptable — callers don't depend
+        on a "not found" signal here.
+        """
+        ...
+
+    async def get_agent_session(self, session_id: str) -> AgentSessionRecord | None:
+        """Read back one agent-session row by id (``None`` if absent)."""
+        ...
+
+    async def append_transition_log(
+        self,
+        *,
+        entity_kind: str,
+        entity_id: str,
+        from_state: str,
+        to_state: str,
+        edge_name: str,
+        worker_id: str | None,
+        gate_outcome_reason: str | None = None,
+    ) -> None:
+        """Append one row to the ``transition_log`` audit table (DEC-033 #1).
+
+        Called by the engine's transition driver after a successful CAS
+        that actually changed state. ``occurred_at`` is set by the
+        implementation. Same-state handle-only writes do NOT call this.
+        The transactional variant (on :class:`Transaction`) writes the
+        row in the CAS transaction; this non-transactional variant is
+        used on the post-commit / best-effort path.
+        """
+        ...
 
     # === Methodology-touching lookups (§5.3) ===
 

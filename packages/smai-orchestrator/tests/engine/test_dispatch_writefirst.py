@@ -22,6 +22,8 @@ from _helpers import (
 )
 from smai_orchestrator.engine import (
     DispatchAction,
+    DispatchContext,
+    DispatchOutcome,
     EdgeDef,
     EngineConfig,
     EngineSpec,
@@ -313,3 +315,102 @@ async def test_terminal_target_advances_in_one_cas(
     assert final is not None
     assert final.state == "complete"
     assert final.version == 1
+
+
+# === Step-3 re-read: handler's own field-only write must not poison the
+# === handle CAS, but a real peer *state* change still surfaces as conflict
+# === (observability follow-up, item 2(b)).
+
+
+def _make_handler_that_does_field_only_write(handle):  # type: ignore[no-untyped-def]
+    """A dispatch handler that, before returning, performs a
+    state-preserving field-only ``transition_cg_state`` write (the
+    ``cg_execution.py`` / ``proposal.py`` retry-counter-bump pattern):
+    bumps ``code_review_attempt`` with the state held at ``implementing``,
+    so the CG's version advances under ``run_dispatch``'s feet between
+    step 1 and step 3."""
+
+    async def _handler(ctx: DispatchContext) -> DispatchOutcome:
+        cg = await ctx.metadata_store.get_cg(ctx.entity_id)
+        assert cg is not None
+        await ctx.metadata_store.transition_cg_state(
+            cg.id,
+            cg.version,
+            cg.state,  # pyright: ignore[reportArgumentType] — field-only update
+            code_review_attempt=cg.code_review_attempt + 1,
+        )
+        return DispatchOutcome(submitted_handles=[handle])
+
+    return _handler
+
+
+def _make_handler_that_changes_state(handle):  # type: ignore[no-untyped-def]
+    """A dispatch handler simulating a peer that moves the entity OUT of
+    the in-progress state mid-dispatch (e.g. an orphan reclaim / forced
+    reset) — the step-3 handle write must then surface as ``conflict``."""
+
+    async def _handler(ctx: DispatchContext) -> DispatchOutcome:
+        cg = await ctx.metadata_store.get_cg(ctx.entity_id)
+        assert cg is not None
+        await ctx.metadata_store.transition_cg_state(cg.id, cg.version, "implemented")
+        return DispatchOutcome(submitted_handles=[handle])
+
+    return _handler
+
+
+async def test_handler_field_only_write_does_not_poison_handle_cas(
+    sqlite_store, fake_compute: FakeCompute, fake_artifact_store: FakeArtifactStore
+) -> None:
+    """The handler bumps a counter (field-only, state held) → ``run_dispatch``
+    re-reads before step 3 and uses the bumped version, so the handle CAS
+    succeeds rather than spuriously conflicting."""
+    cg = await _seed_cg(sqlite_store)
+    handle = make_job_handle("h-fieldonly")
+    spec = _spec_with_external_dispatch(handler=_make_handler_that_does_field_only_write(handle))
+
+    outcome = await drive_entity_phase3(
+        spec=spec,
+        metadata_store=sqlite_store,
+        artifact_store=fake_artifact_store,
+        compute=fake_compute,
+        llm=None,
+        config=EngineConfig(),
+        record=cg,
+    )
+
+    assert outcome.status == "advanced", f"expected advanced, got {outcome.status}/{outcome.error}"
+    final = await sqlite_store.get_cg("cg_writefirst")
+    assert final is not None
+    assert final.state == "implementing"
+    assert final.harness_job_handle == handle
+    assert final.code_review_attempt == 1
+    # 0 → 1 (step-1 transition) → 2 (handler's field-only bump) → 3 (step-3 handle).
+    assert final.version == 3
+
+
+async def test_peer_state_change_mid_dispatch_surfaces_as_conflict(
+    sqlite_store, fake_compute: FakeCompute, fake_artifact_store: FakeArtifactStore
+) -> None:
+    """If a peer transitions the entity out of the in-progress state
+    between step 1 and step 3, the step-3 handle CAS fails — the re-read
+    only forgives same-state version drift, not a real state change."""
+    cg = await _seed_cg(sqlite_store)
+    handle = make_job_handle("h-peerchange")
+    spec = _spec_with_external_dispatch(handler=_make_handler_that_changes_state(handle))
+
+    outcome = await drive_entity_phase3(
+        spec=spec,
+        metadata_store=sqlite_store,
+        artifact_store=fake_artifact_store,
+        compute=fake_compute,
+        llm=None,
+        config=EngineConfig(),
+        record=cg,
+    )
+
+    assert outcome.status == "conflict"
+    final = await sqlite_store.get_cg("cg_writefirst")
+    assert final is not None
+    # The peer's write stuck; the handle was NOT recorded.
+    assert final.state == "implemented"
+    assert final.harness_job_handle is None

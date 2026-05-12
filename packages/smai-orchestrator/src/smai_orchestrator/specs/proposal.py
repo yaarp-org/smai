@@ -104,6 +104,7 @@ from smai_core.entities.technique import (
 from smai_core.plugins import (
     ArtifactNotFound,
     ArtifactStore,
+    ConflictError,
     LlmProvider,
 )
 
@@ -362,6 +363,25 @@ def _make_dispatch_planner(
             make_dispatch_planner,
         )
 
+        # Bump ``design_attempt`` on the (re-)entry into the design
+        # dispatch so the ``design_failed_terminal`` gate
+        # (``max_design_attempts``) sees a real count rather than 0.
+        # Matches the ``cg_execution.py`` counter-bump pattern: a
+        # field-only ``transition_*_state`` preserving the current
+        # state. Best-effort on CAS conflict (a peer already moved the
+        # proposal) — the planner run still proceeds.
+        proposal = await ctx.metadata_store.get_proposal(ctx.entity_id)
+        if proposal is not None:
+            try:
+                await ctx.metadata_store.transition_proposal_state(
+                    proposal.id,
+                    proposal.version,
+                    proposal.state,  # pyright: ignore[reportArgumentType] — field-only update
+                    design_attempt=proposal.design_attempt + 1,
+                )
+            except ConflictError:
+                pass
+
         # Override ctx.llm with the per-role planner provider.
         # DispatchContext is a Pydantic model; copy with the override.
         planner_ctx = ctx.model_copy(update={"llm": llm_for_planner})
@@ -412,6 +432,23 @@ def _make_dispatch_registered(
     async def _dispatch(ctx: DispatchContext) -> DispatchOutcome:
         proposal_id = ctx.entity_id
         plan_key = design_plan_artifact_key_for(proposal_id)
+
+        # Bump ``registration_attempt`` on the (re-)entry into the
+        # registration dispatch so the ``registration_exhausted`` gate
+        # (``max_registration_attempts``) sees a real count rather than
+        # 0. Field-only ``transition_*_state`` preserving the current
+        # state, best-effort on CAS conflict — mirrors ``cg_execution.py``.
+        reg_proposal = await ctx.metadata_store.get_proposal(proposal_id)
+        if reg_proposal is not None:
+            try:
+                await ctx.metadata_store.transition_proposal_state(
+                    reg_proposal.id,
+                    reg_proposal.version,
+                    reg_proposal.state,  # pyright: ignore[reportArgumentType] — field-only update
+                    registration_attempt=reg_proposal.registration_attempt + 1,
+                )
+            except ConflictError:
+                pass
 
         # === Read the planner buffer ========================================
         try:

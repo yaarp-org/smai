@@ -194,6 +194,16 @@ of API processes.
 
 ## 5. Log handling
 
+> **No checkpoint persistence.** A killed or restarted worker re-runs the
+> in-flight agent loop from turn 0. The orchestrator ships only an
+> in-memory checkpointer backend, and no checkpointer is instantiated by
+> `smai dev` or `smai start`; there is no `checkpoints` table. The
+> recovery primitive is orphan-grace reset, which re-dispatches the whole
+> step rather than resuming it. Size `orphan_grace_seconds` (and
+> `lease_seconds`) with that in mind: a worker that dies mid-dispatch
+> burns whatever LLM / GPU spend the step had accrued, and the re-dispatch
+> starts over. A SQL-backed checkpointer is post-M5 backlog.
+
 `smai start` uses Python's standard `logging` module — no structured
 loggers (per `09` §8 — no log-format commitments in v1). Default log
 level is `WARNING`; for production, surface INFO via the

@@ -59,6 +59,11 @@ from smai_runtime import (
     write_template_files,
 )
 
+from smai_agents.agent_session_telemetry import (
+    close_agent_session,
+    make_progress_sink,
+    open_agent_session,
+)
 from smai_agents.agents.manifest_tool import make_emit_harness_manifest_tool
 from smai_agents.loop import (
     AgentLoopConfig,
@@ -128,6 +133,7 @@ async def run_harness_builder_session(
     config: AgentLoopConfig | None = None,
     runner: SessionRunner | None = None,
     supervisor_llm: LlmProvider | None = None,
+    progress_sink: Callable[[Any], Awaitable[None]] | None = None,
 ) -> AgentOutcome:
     """Drive the harness-builder agent loop in-process.
 
@@ -238,6 +244,8 @@ async def run_harness_builder_session(
         compute=compute,
         status_artifact_path=status_artifact_path,
         nudge_artifact_path=nudge_artifact_path,
+        progress_sink=progress_sink,
+        # Harness builder has no attempt counter — leave attempt_index None.
         config=config or AgentLoopConfig(),
     )
 
@@ -397,7 +405,14 @@ def make_dispatch_harness_build(
                 supervisor_on = False
                 supervisor_cadence = 0
             loop_config = AgentLoopConfig(supervisor_check_every_turns=supervisor_cadence)
-            await run_harness_builder_session(
+            session_id = await open_agent_session(
+                ctx.metadata_store,
+                parent_kind="cg",
+                parent_id=cg_id,
+                agent_role="harness_builder",
+                llm=llm,
+            )
+            outcome = await run_harness_builder_session(
                 workspace_path=workspace_path,
                 harness_contract=harness_contract,
                 cg_id=cg_id,
@@ -412,7 +427,9 @@ def make_dispatch_harness_build(
                 runner=inline_runner,
                 supervisor_llm=llm if supervisor_on else None,
                 config=loop_config,
+                progress_sink=make_progress_sink(ctx.metadata_store, session_id),
             )
+            await close_agent_session(ctx.metadata_store, session_id, outcome)
             return DispatchOutcome(
                 submitted_handles=[
                     JobHandle(plugin="inline", handle=f"inline-{cg_id}"),
@@ -431,6 +448,13 @@ def make_dispatch_harness_build(
         contract_path = workspace_path / WORKSPACE_HARNESS_CONTRACT_PATH
         contract_path.parent.mkdir(parents=True, exist_ok=True)
         contract_path.write_text(harness_contract.model_dump_json(indent=2))
+
+        # TODO(observability): agent_sessions for the container path — the
+        # container has no MetadataStore handle, so the row would have to
+        # be created here at submit-time and closed when the phase-1
+        # job-succeeded/failed handler observes the terminal job. That
+        # spans two code sites; left for a follow-up. The inline path
+        # (above) and the planner are fully covered.
 
         command = [
             "python",

@@ -49,6 +49,7 @@ from smai_core.plugins import (
     MetadataStoreCapabilities,
 )
 from smai_orchestrator.entities.tracking import (
+    AgentSessionRecord,
     CGState,
     ComparisonGroupRecord,
     EntryRecord,
@@ -272,6 +273,28 @@ class _Transaction:
             self._conn, "paper", arxiv_id, expected_version, target_state, PaperRecord, fields
         )
 
+    async def append_transition_log(
+        self,
+        *,
+        entity_kind: str,
+        entity_id: str,
+        from_state: str,
+        to_state: str,
+        edge_name: str,
+        worker_id: str | None,
+        gate_outcome_reason: str | None = None,
+    ) -> None:
+        await _do_append_transition_log(
+            self._conn,
+            entity_kind=entity_kind,
+            entity_id=entity_id,
+            from_state=from_state,
+            to_state=to_state,
+            edge_name=edge_name,
+            worker_id=worker_id,
+            gate_outcome_reason=gate_outcome_reason,
+        )
+
 
 class _TransactionContextManager(AbstractAsyncContextManager[_Transaction]):
     """Wrapper around ``engine.begin()`` exposing :class:`_Transaction`.
@@ -347,6 +370,116 @@ async def _do_create_paper(conn: AsyncConnection, paper: PaperRecord) -> PaperRe
     values = _serialize_for_row(paper)
     await conn.execute(insert(papers_table).values(**values))
     return paper
+
+
+# === Observability tables — agent_sessions + transition_log (DEC-033) ========
+
+
+async def _do_create_agent_session(
+    conn: AsyncConnection,
+    *,
+    session_id: str,
+    parent_kind: str,
+    parent_id: str,
+    agent_role: str,
+    llm_provider: str,
+    model_id: str,
+) -> None:
+    now = datetime.now(UTC)
+    await conn.execute(
+        insert(agent_sessions_table).values(
+            id=session_id,
+            parent_kind=parent_kind,
+            parent_id=parent_id,
+            agent_role=agent_role,
+            llm_provider=llm_provider,
+            model_id=model_id,
+            input_tokens=0,
+            cached_input_tokens=0,
+            output_tokens=0,
+            turn_count=0,
+            input_token_rate_usd_per_million=None,
+            cached_input_token_rate_usd_per_million=None,
+            output_token_rate_usd_per_million=None,
+            started_at=now,
+            ended_at=None,
+        )
+    )
+
+
+async def _do_update_agent_session(
+    conn: AsyncConnection,
+    session_id: str,
+    *,
+    turn_count: int,
+    input_tokens: int,
+    cached_input_tokens: int,
+    output_tokens: int,
+    ended_at: datetime | None,
+) -> None:
+    set_values: dict[str, Any] = {
+        "turn_count": turn_count,
+        "input_tokens": input_tokens,
+        "cached_input_tokens": cached_input_tokens,
+        "output_tokens": output_tokens,
+    }
+    if ended_at is not None:
+        set_values["ended_at"] = ended_at
+    await conn.execute(
+        update(agent_sessions_table)
+        .where(agent_sessions_table.c.id == session_id)
+        .values(**set_values)
+    )
+
+
+async def _do_get_agent_session(
+    conn: AsyncConnection, session_id: str
+) -> AgentSessionRecord | None:
+    result = await conn.execute(
+        select(agent_sessions_table).where(agent_sessions_table.c.id == session_id)
+    )
+    row = result.mappings().first()
+    if row is None:
+        return None
+    return AgentSessionRecord(
+        id=row["id"],
+        parent_kind=row["parent_kind"],
+        parent_id=row["parent_id"],
+        agent_role=row["agent_role"],
+        llm_provider=row["llm_provider"],
+        model_id=row["model_id"],
+        input_tokens=int(row["input_tokens"] or 0),
+        cached_input_tokens=int(row["cached_input_tokens"] or 0),
+        output_tokens=int(row["output_tokens"] or 0),
+        turn_count=int(row["turn_count"] or 0),
+        started_at=_parse_dt(row["started_at"]),
+        ended_at=_parse_dt(row["ended_at"]) if row["ended_at"] is not None else None,
+    )
+
+
+async def _do_append_transition_log(
+    conn: AsyncConnection,
+    *,
+    entity_kind: str,
+    entity_id: str,
+    from_state: str,
+    to_state: str,
+    edge_name: str,
+    worker_id: str | None,
+    gate_outcome_reason: str | None,
+) -> None:
+    await conn.execute(
+        insert(transition_log_table).values(
+            entity_kind=entity_kind,
+            entity_id=entity_id,
+            from_state=from_state,
+            to_state=to_state,
+            edge_name=edge_name,
+            gate_outcome_reason=gate_outcome_reason,
+            worker_id=worker_id,
+            occurred_at=datetime.now(UTC),
+        )
+    )
 
 
 _RECORD_BY_KIND: dict[str, type[Any]] = {
@@ -823,6 +956,78 @@ class SqliteStore:
         async with self._engine.begin() as conn:
             return await _do_create_paper(conn, paper)
 
+    # === Observability tables — agent_sessions + transition_log (DEC-033) ===
+
+    async def create_agent_session(
+        self,
+        *,
+        parent_kind: str,
+        parent_id: str,
+        agent_role: str,
+        llm_provider: str,
+        model_id: str,
+    ) -> str:
+        session_id = f"as-{uuid4().hex}"
+        async with self._engine.begin() as conn:
+            await _do_create_agent_session(
+                conn,
+                session_id=session_id,
+                parent_kind=parent_kind,
+                parent_id=parent_id,
+                agent_role=agent_role,
+                llm_provider=llm_provider,
+                model_id=model_id,
+            )
+        return session_id
+
+    async def update_agent_session(
+        self,
+        session_id: str,
+        *,
+        turn_count: int,
+        input_tokens: int,
+        cached_input_tokens: int,
+        output_tokens: int,
+        ended_at: datetime | None = None,
+    ) -> None:
+        async with self._engine.begin() as conn:
+            await _do_update_agent_session(
+                conn,
+                session_id,
+                turn_count=turn_count,
+                input_tokens=input_tokens,
+                cached_input_tokens=cached_input_tokens,
+                output_tokens=output_tokens,
+                ended_at=ended_at,
+            )
+
+    async def get_agent_session(self, session_id: str) -> AgentSessionRecord | None:
+        async with self._engine.connect() as conn:
+            return await _do_get_agent_session(conn, session_id)
+
+    async def append_transition_log(
+        self,
+        *,
+        entity_kind: str,
+        entity_id: str,
+        from_state: str,
+        to_state: str,
+        edge_name: str,
+        worker_id: str | None,
+        gate_outcome_reason: str | None = None,
+    ) -> None:
+        async with self._engine.begin() as conn:
+            await _do_append_transition_log(
+                conn,
+                entity_kind=entity_kind,
+                entity_id=entity_id,
+                from_state=from_state,
+                to_state=to_state,
+                edge_name=edge_name,
+                worker_id=worker_id,
+                gate_outcome_reason=gate_outcome_reason,
+            )
+
     # === Methodology-touching lookups (§5.3) ================================
 
     async def get_technique(self, technique_id: str) -> TechniqueRef | None:
@@ -1291,9 +1496,7 @@ _ = (
     Column,
     delete,
     factor_models_table,
-    agent_sessions_table,
     run_costs_table,
-    transition_log_table,
     cast,
 )
 

@@ -61,6 +61,11 @@ from smai_runtime import (
     write_template_files,
 )
 
+from smai_agents.agent_session_telemetry import (
+    close_agent_session,
+    make_progress_sink,
+    open_agent_session,
+)
 from smai_agents.agents.harness_builder import SessionRunner
 from smai_agents.loop import (
     AgentLoopConfig,
@@ -137,6 +142,7 @@ async def run_technique_implementer_session(
     config: AgentLoopConfig | None = None,
     runner: SessionRunner | None = None,
     supervisor_llm: LlmProvider | None = None,
+    progress_sink: Callable[[Any], Awaitable[None]] | None = None,
 ) -> AgentOutcome:
     """Drive the technique-implementer agent loop in-process.
 
@@ -290,6 +296,11 @@ async def run_technique_implementer_session(
         compute=compute,
         status_artifact_path=status_artifact_path,
         nudge_artifact_path=nudge_artifact_path,
+        progress_sink=progress_sink,
+        # The technique implementer threads ``implementation_attempt``
+        # into its prompt; mirror it onto the session so the status
+        # payload + the supervisor see "which retry is this".
+        attempt_index=implementation_attempt,
         config=config or AgentLoopConfig(),
     )
 
@@ -427,6 +438,12 @@ def make_dispatch_technique_implementation(
             # handler stays light here — it submits the job and returns
             # the handle. The container's entrypoint module is configured
             # by the deployment.
+            # TODO(observability): agent_sessions for the container path —
+            # the container has no MetadataStore handle, so the row would
+            # have to be created here at submit-time and closed when the
+            # phase-1 job-succeeded/failed handler observes the terminal
+            # job. That spans two code sites; left for a follow-up. The
+            # inline path (below) and the planner are fully covered.
             command = [
                 "python",
                 "-m",
@@ -509,7 +526,14 @@ def make_dispatch_technique_implementation(
             supervisor_on = False
             supervisor_cadence = 0
         loop_config = AgentLoopConfig(supervisor_check_every_turns=supervisor_cadence)
-        await run_technique_implementer_session(
+        session_id = await open_agent_session(
+            ctx.metadata_store,
+            parent_kind="entry",
+            parent_id=entry_id,
+            agent_role="technique_implementer",
+            llm=llm,
+        )
+        outcome = await run_technique_implementer_session(
             workspace_path=workspace_path,
             cg_id=cg_id,
             entry_id=entry_id,
@@ -536,7 +560,9 @@ def make_dispatch_technique_implementation(
             runner=inline_runner,
             supervisor_llm=llm if supervisor_on else None,
             config=loop_config,
+            progress_sink=make_progress_sink(ctx.metadata_store, session_id),
         )
+        await close_agent_session(ctx.metadata_store, session_id, outcome)
         return DispatchOutcome(
             submitted_handles=[
                 JobHandle(plugin="inline", handle=f"inline-{entry_id}"),

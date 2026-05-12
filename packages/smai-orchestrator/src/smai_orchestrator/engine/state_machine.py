@@ -34,6 +34,7 @@ from smai_orchestrator.engine.types import (
     EdgeDef,
     EngineSpec,
     GateContext,
+    GateOutcome,
     PhaseTrigger,
 )
 
@@ -78,6 +79,30 @@ class DriveOutcome:
     error: str | None = None
 
 
+async def evaluate_outgoing_edges_with_outcome(
+    *,
+    spec: EngineSpec,
+    entity_state: str,
+    phase: PhaseTrigger,
+    gate_context: GateContext,
+) -> tuple[EdgeDef, GateOutcome] | None:
+    """Like :func:`evaluate_outgoing_edges`, but also returns the
+    advancing edge's :class:`GateOutcome` so the caller can thread
+    :attr:`GateOutcome.reason` into the ``transition_log`` audit row.
+
+    Gates are evaluated in declaration order and the first to return
+    ``advance=True`` wins (it short-circuits, so gates with side
+    effects past the winner do not run — same contract as
+    :func:`evaluate_outgoing_edges`).
+    """
+    edges = spec.edges_from(entity_state, fires_on=phase)
+    for edge in edges:
+        outcome = await edge.gate_rule(gate_context)
+        if outcome.advance:
+            return edge, outcome
+    return None
+
+
 async def evaluate_outgoing_edges(
     *,
     spec: EngineSpec,
@@ -95,12 +120,13 @@ async def evaluate_outgoing_edges(
     ``"job_failed"`` (which one depends on the observed
     :class:`JobStatus`).
     """
-    edges = spec.edges_from(entity_state, fires_on=phase)
-    for edge in edges:
-        outcome = await edge.gate_rule(gate_context)
-        if outcome.advance:
-            return edge
-    return None
+    result = await evaluate_outgoing_edges_with_outcome(
+        spec=spec,
+        entity_state=entity_state,
+        phase=phase,
+        gate_context=gate_context,
+    )
+    return result[0] if result is not None else None
 
 
 async def drive_entity_phase3(  # noqa: PLR0913
@@ -167,14 +193,15 @@ async def drive_entity_phase3(  # noqa: PLR0913
         job_outcome=None,
     )
 
-    edge = await evaluate_outgoing_edges(
+    evaluated = await evaluate_outgoing_edges_with_outcome(
         spec=spec,
         entity_state=entity_state,
         phase="dispatch_time",
         gate_context=gate_context,
     )
-    if edge is None:
+    if evaluated is None:
         return DriveOutcome(status="no_match")
+    edge, gate_outcome = evaluated
 
     target_def = spec.state_def(edge.target_state)
     resolved_worker_id = worker_id if worker_id is not None else f"worker-{uuid4().hex[:8]}"
@@ -190,6 +217,7 @@ async def drive_entity_phase3(  # noqa: PLR0913
         entity_id=entity_id,
         expected_version=entity_version,
         worker_id=resolved_worker_id,
+        gate_outcome_reason=gate_outcome.reason,
     )
 
 
@@ -197,4 +225,5 @@ __all__ = [
     "DriveOutcome",
     "drive_entity_phase3",
     "evaluate_outgoing_edges",
+    "evaluate_outgoing_edges_with_outcome",
 ]

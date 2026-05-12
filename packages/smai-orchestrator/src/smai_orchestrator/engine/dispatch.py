@@ -46,6 +46,7 @@ from smai_core.plugins.metadata_store import ConflictError, LeaseLostError
 
 from smai_orchestrator.engine._metadata_ops import (
     StateDrivenRecord,
+    get_entity,
     transition_state,
 )
 from smai_orchestrator.engine.config import EngineConfig
@@ -102,12 +103,20 @@ async def run_dispatch(  # noqa: PLR0913
     target_state: StateDef,
     entity_id: str,
     expected_version: int,
+    worker_id: str | None = None,
+    gate_outcome_reason: str | None = None,
 ) -> DriveOutcome:
     """Execute one full write-first dispatch sequence (`05` §1.4).
 
     Returns :class:`DriveOutcome`-shaped status the caller (the
     :func:`drive_entity_phase3` driver in :mod:`state_machine`) wraps
     into the consolidated phase-3 result.
+
+    ``worker_id`` is threaded into the ``transition_log`` audit row so
+    multi-worker contention is coherent in audit queries; ``None`` is
+    the test default. ``gate_outcome_reason`` is the
+    :attr:`GateOutcome.reason` of the edge that fired (when the caller
+    has it), recorded on the step-1 audit row.
     """
     # Lazy import to break the import cycle with :mod:`state_machine`,
     # which imports :func:`run_dispatch` at module-import time.
@@ -124,6 +133,9 @@ async def run_dispatch(  # noqa: PLR0913
             fields={},
             event_channel=config.event_channel,
             from_state=edge.from_state,
+            edge_name=edge.name,
+            worker_id=worker_id,
+            gate_outcome_reason=gate_outcome_reason,
         )
     except ConflictError:
         return DriveOutcome(status="conflict", fired_edge=edge)
@@ -175,6 +187,7 @@ async def run_dispatch(  # noqa: PLR0913
             edge=edge,
             entity_id=entity_id,
             current_version=post_transition_record.version,
+            worker_id=worker_id,
         )
         return DriveOutcome(
             status=rollback_status,
@@ -206,6 +219,7 @@ async def run_dispatch(  # noqa: PLR0913
             edge=edge,
             entity_id=entity_id,
             current_version=post_transition_record.version,
+            worker_id=worker_id,
         )
         return DriveOutcome(
             status=rollback_status,
@@ -218,12 +232,23 @@ async def run_dispatch(  # noqa: PLR0913
 
     handle = handler_outcome.submitted_handles[0]
     assert action.handle_field is not None  # narrowing for pyright; checked above
+    # Re-read before the step-3 handle write so that any field-only
+    # writes the handler itself performed (e.g. bumping a retry counter
+    # via ``transition_*_state`` with the state preserved — the
+    # ``cg_execution.py`` / ``proposal.py`` / ``run_record.py`` pattern)
+    # don't make step 3's CAS spuriously conflict. A *state* change by a
+    # peer between here and the re-read still surfaces as ``conflict``
+    # (the state guard on ``transition_state`` catches it).
+    handle_expected_version = post_transition_record.version
+    refreshed = await get_entity(metadata_store, spec.entity_kind, entity_id)
+    if refreshed is not None and refreshed.state == target_state.name:
+        handle_expected_version = refreshed.version
     try:
         post_handle_record = await transition_state(
             metadata_store,
             spec.entity_kind,
             entity_id,
-            post_transition_record.version,
+            handle_expected_version,
             target_state.name,
             fields={action.handle_field: handle.model_dump(mode="python")},
         )
@@ -260,6 +285,7 @@ async def _forward_rollback(
     edge: EdgeDef,
     entity_id: str,
     current_version: int,
+    worker_id: str | None = None,
 ) -> Literal["dispatch_failed_rolled_back", "conflict"]:
     """Forward-roll-back the entity's state to ``edge.from_state`` (`05` §1.4).
 
@@ -282,6 +308,8 @@ async def _forward_rollback(
             fields={},
             event_channel=config.event_channel,
             from_state=edge.target_state,
+            edge_name=f"{edge.name}:rollback",
+            worker_id=worker_id,
         )
     except ConflictError:
         return "conflict"
@@ -297,6 +325,7 @@ async def reset_orphan(  # noqa: PLR0913
     entity_id: str,
     current_version: int,
     in_progress_state: str,
+    worker_id: str | None = None,
 ) -> StateDrivenRecord | None:
     """Reset an orphaned in-progress entity to ``edge_from_state``.
 
@@ -321,6 +350,8 @@ async def reset_orphan(  # noqa: PLR0913
             fields={},
             event_channel=config.event_channel,
             from_state=in_progress_state,
+            edge_name="(orphan-reset)",
+            worker_id=worker_id,
         )
     except ConflictError:
         return None
@@ -368,6 +399,7 @@ async def run_dispatch_with_lease(  # noqa: PLR0913
     entity_id: str,
     expected_version: int,
     worker_id: str,
+    gate_outcome_reason: str | None = None,
 ) -> DriveOutcome:
     """Lease-wrapped phase-3 dispatch (`05` §3.5 / DEC-035 #2).
 
@@ -444,6 +476,8 @@ async def run_dispatch_with_lease(  # noqa: PLR0913
             target_state=target_state,
             entity_id=entity_id,
             expected_version=expected_version,
+            worker_id=worker_id,
+            gate_outcome_reason=gate_outcome_reason,
         )
     )
 

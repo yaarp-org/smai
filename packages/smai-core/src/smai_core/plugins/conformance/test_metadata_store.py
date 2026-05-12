@@ -283,6 +283,126 @@ class MetadataStoreConformance:
         fetched = await store.get_cg("cg_tx_rollback")
         assert fetched is None
 
+    # ---- Observability tables — agent_sessions + transition_log -------------
+
+    async def test_agent_session_crud_round_trip(self, store: MetadataStore) -> None:
+        """``create_agent_session`` returns an id; ``get_agent_session``
+        reflects a subsequent ``update_agent_session`` (turn_count /
+        tokens); a final update with ``ended_at`` is reflected."""
+        session_id = await store.create_agent_session(
+            parent_kind="proposal",
+            parent_id="proposal_obs_round_trip",
+            agent_role="planner",
+            llm_provider="fake-provider",
+            model_id="fake-model",
+        )
+        assert isinstance(session_id, str)
+        assert session_id
+
+        initial = await store.get_agent_session(session_id)
+        assert initial is not None
+        assert getattr(initial, "parent_kind", None) == "proposal"
+        assert getattr(initial, "parent_id", None) == "proposal_obs_round_trip"
+        assert getattr(initial, "agent_role", None) == "planner"
+        assert getattr(initial, "turn_count", 0) == 0
+        assert getattr(initial, "ended_at", "x") is None
+
+        await store.update_agent_session(
+            session_id,
+            turn_count=7,
+            input_tokens=1234,
+            cached_input_tokens=200,
+            output_tokens=456,
+        )
+        updated = await store.get_agent_session(session_id)
+        assert updated is not None
+        assert getattr(updated, "turn_count", 0) == 7
+        assert getattr(updated, "input_tokens", 0) == 1234
+        assert getattr(updated, "cached_input_tokens", 0) == 200
+        assert getattr(updated, "output_tokens", 0) == 456
+        assert getattr(updated, "ended_at", "x") is None
+
+        from datetime import UTC, datetime  # noqa: PLC0415
+
+        await store.update_agent_session(
+            session_id,
+            turn_count=9,
+            input_tokens=2000,
+            cached_input_tokens=300,
+            output_tokens=500,
+            ended_at=datetime.now(UTC),
+        )
+        closed = await store.get_agent_session(session_id)
+        assert closed is not None
+        assert getattr(closed, "turn_count", 0) == 9
+        assert getattr(closed, "ended_at", None) is not None
+
+    async def test_get_agent_session_missing_returns_none(self, store: MetadataStore) -> None:
+        assert await store.get_agent_session("no-such-session-id") is None
+
+    async def test_append_transition_log_persists(self, store: MetadataStore) -> None:
+        """``append_transition_log`` writes a row that a raw select sees."""
+        await store.append_transition_log(
+            entity_kind="proposal",
+            entity_id="proposal_obs_translog",
+            from_state="proposal_submitted",
+            to_state="designing",
+            edge_name="proposal.proposal_submitted → designing",
+            worker_id="worker-test",
+            gate_outcome_reason="always-fire",
+        )
+        # Read back via a raw select on the underlying connection — the
+        # Protocol doesn't (yet) expose a list method for the audit table.
+        from typing import Any as _Any  # noqa: PLC0415
+
+        from sqlalchemy import text  # noqa: PLC0415
+
+        async with await store.transaction() as tx:
+            conn: _Any = tx.connection
+            result = await conn.execute(
+                text(
+                    "SELECT from_state, to_state, edge_name, worker_id, gate_outcome_reason "
+                    "FROM transition_log WHERE entity_kind = :k AND entity_id = :i"
+                ),
+                {"k": "proposal", "i": "proposal_obs_translog"},
+            )
+            rows = result.mappings().all()
+        assert len(rows) == 1
+        assert rows[0]["from_state"] == "proposal_submitted"
+        assert rows[0]["to_state"] == "designing"
+        assert rows[0]["worker_id"] == "worker-test"
+        assert rows[0]["gate_outcome_reason"] == "always-fire"
+
+    async def test_append_transition_log_transactional(self, store: MetadataStore) -> None:
+        """The ``Transaction``-mirrored ``append_transition_log`` participates
+        in the transaction (rollback discards the row)."""
+        from typing import Any as _Any  # noqa: PLC0415
+
+        from sqlalchemy import text  # noqa: PLC0415
+
+        class _Sentinel(Exception):
+            pass
+
+        with pytest.raises(_Sentinel):
+            async with await store.transaction() as tx:
+                await tx.append_transition_log(
+                    entity_kind="cg",
+                    entity_id="cg_obs_translog_rollback",
+                    from_state="draft",
+                    to_state="implementing",
+                    edge_name="cg.draft → implementing",
+                    worker_id=None,
+                )
+                raise _Sentinel
+
+        async with await store.transaction() as tx:
+            conn: _Any = tx.connection
+            result = await conn.execute(
+                text("SELECT 1 FROM transition_log WHERE entity_id = :i"),
+                {"i": "cg_obs_translog_rollback"},
+            )
+            assert result.first() is None
+
     # ---- Scheduling queries (parameterized over the 19 methods) ------------
 
     @pytest.mark.parametrize("method_name", SCHEDULING_QUERY_METHODS)
