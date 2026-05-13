@@ -44,6 +44,12 @@ class ComparisonGroupRecord(LeaseableRecord):
     id: str
     proposal_id: str
     factor_model_id: str | None = None
+    # Human-readable label preserved from the planner buffer's draft CG id.
+    # Round-9: the primary ``id`` is now a fresh ULID-shaped string (so a
+    # long planner-side symbolic id can't blow past the 64-char id-format
+    # cap); this slot keeps the readable name for CLI / SPA listings and
+    # ``smai status`` rendering.
+    symbolic_id: str | None = None
 
     # === Methodology references ===
     experiment_definition_id: str

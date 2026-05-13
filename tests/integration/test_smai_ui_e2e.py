@@ -165,6 +165,13 @@ async def test_full_user_journey(tmp_path: Path) -> None:
         workspace_root=tmp_path / "workspaces",
         plugin_overrides=overrides,
         run_worker=True,
+        # Round-9 added a test-only knob to pin deterministic CG ids.
+        # Production generates ULID-shaped ids by default; the N3
+        # fixture pre-stages artifacts at ``comparison-groups/<shape.cg_id>``
+        # paths before submission, so the registration handler MUST land
+        # the CG at exactly ``shape.cg_id`` for the harness/runs gates to
+        # find the pre-staged outputs.
+        proposal_cg_id_for=lambda proposal_id, draft_cg_id: f"{proposal_id}--{draft_cg_id}",
     ) as runtime:
         app = make_api_app(runtime)
         async with AsyncClient(
@@ -223,8 +230,13 @@ async def test_full_user_journey(tmp_path: Path) -> None:
                 # designed → registered on the next worker cycle, and
                 # the registration handler creates the CG records in
                 # ``draft`` from the planner buffer. The CG's id is
-                # deterministic per the planner buffer + the default
-                # cg_id_for resolver: ``f"{proposal_id}--{draft_cg_id}"``.
+                # pinned by the ``proposal_cg_id_for`` resolver wired
+                # into ``Runtime.start_in_band`` above (round-9): the
+                # test resolver returns ``f"{proposal_id}--{draft_cg_id}"``
+                # so the pre-staged artifact paths line up. Production's
+                # default resolver instead generates a fresh ULID-shaped
+                # id per CG (so a long symbolic name no longer blows past
+                # the 64-char id-format cap).
 
                 # === Step 4: wait for CG complete ============================
                 # Skip the explicit proposal=registered wait — the

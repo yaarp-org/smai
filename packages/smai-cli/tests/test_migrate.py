@@ -92,7 +92,10 @@ def test_migrate_upgrades_empty_db_to_head(smai_home: Path) -> None:
     result = runner.invoke(app, ["migrate", "-c", str(smai_yaml)])
     assert result.exit_code == 0, result.output
     assert "schema upgraded to head" in result.output
-    assert "0001_initial_schema" in result.output
+    # The exact head revision id moves as the default chain grows; assert
+    # a default-branch revision id appears (the tenant_aware branch's
+    # revision id has ``tenant_aware`` in it, which we rule out below).
+    assert "0003_cg_symbolic_id" in result.output
     # File now exists and is non-empty.
     assert sqlite_path.exists()
     assert sqlite_path.stat().st_size > 0
@@ -237,7 +240,10 @@ def test_migrate_default_does_not_apply_tenant_aware(smai_home: Path) -> None:
     runner = CliRunner()
     result = runner.invoke(app, ["migrate", "-c", str(smai_yaml)])
     assert result.exit_code == 0, result.output
-    assert "0001_initial_schema" in result.output
+    # Default-branch head (round-9 grew the chain to 0003); the
+    # tenant_aware branch revision id sits on the side branch and is
+    # NOT picked up by a no-flag ``smai migrate``.
+    assert "0003_cg_symbolic_id" in result.output
     assert "tenant_aware" not in result.output
 
     async def _check() -> bool:

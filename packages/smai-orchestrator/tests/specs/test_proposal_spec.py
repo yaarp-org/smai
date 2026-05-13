@@ -223,6 +223,12 @@ async def test_proposal_round_trip_proposal_submitted_to_registered(  # type: ig
     cg = cgs.items[0]
     assert cg.proposal_id == "prop-rt-1"
     assert cg.state == "draft"
+    # Round-9: primary id is a fresh ULID-shaped string; planner's draft
+    # id is preserved on ``symbolic_id``.
+    assert cg.id.startswith("cg-")
+    assert len(cg.id) <= 64
+    assert cg.symbolic_id == "cg-1"
+    assert cg.experiment_definition_id == cg.id
 
     # Contract artifacts persisted to the well-known paths.
     cg_id = cg.id
@@ -294,8 +300,16 @@ async def test_proposal_one_to_many_cg_creation(  # type: ignore[no-untyped-def]
 
     cgs = await sqlite_store.list_cgs_for_proposal("prop-multi")
     assert len(cgs.items) == 2
-    cg_ids = sorted(c.id for c in cgs.items)
-    assert cg_ids == sorted(["prop-multi--cg-a", "prop-multi--cg-b"]), f"got {cg_ids}"
+    # Round-9: CG primary ids are fresh ULID-shaped strings; the planner-
+    # supplied draft ids live on ``symbolic_id`` instead. The 1:N
+    # parentage is still verifiable via ``proposal_id`` + the symbolic
+    # label.
+    symbolic_ids = sorted(c.symbolic_id for c in cgs.items if c.symbolic_id is not None)
+    assert symbolic_ids == ["cg-a", "cg-b"], f"got {symbolic_ids}"
+    for cg in cgs.items:
+        assert cg.id.startswith("cg-"), f"expected ULID-shaped id, got {cg.id!r}"
+        assert len(cg.id) <= 64
+        assert cg.experiment_definition_id == cg.id
 
 
 @pytest.mark.asyncio
@@ -731,6 +745,142 @@ async def test_proposal_quiesces_after_registration_failure_terminal(  # type: i
     assert post.state == "failed"
     assert post.version == pre_version
     assert post.registration_attempt == pre_attempt
+
+
+# === Round-9 fix A: ULID-shaped CG ids + symbolic_id label =================
+
+
+@pytest.mark.asyncio
+async def test_proposal_registers_with_long_symbolic_id(  # type: ignore[no-untyped-def]
+    sqlite_store,
+    localfs: LocalFsStore,
+    tmp_path: Path,
+) -> None:
+    """Round-9 keystone: a planner-emitted long symbolic CG id no longer
+    crashes the registration handler's :class:`ComparisonGroupRecord`
+    construction.
+
+    Pre-round-9, ``make_default_cg_id`` returned
+    ``f"{proposal_id}--{draft_cg_id}"`` (~80 chars when both halves were
+    realistic), which busted past the 64-char id-format cap and crashed
+    Pydantic validation at registration time — wedging the proposal in
+    ``designed`` until the round-8 registration retry-exhausted gate
+    fired with no CG ever materializing.
+
+    The fix: generate a fresh ULID-shaped CG id and preserve the planner's
+    symbolic id on :attr:`ComparisonGroupRecord.symbolic_id`. This test
+    drives the same long-symbolic-id case that crashed in production and
+    asserts the proposal reaches ``registered`` with a materialized CG.
+    """
+    long_symbolic = "cg-batchnorm-vs-dropout-mlp-fashionmnist"
+    proposal_id = "proposal-1778660622026-b56b8d1a"
+    planner_responses = make_planner_responses_for_finalize(
+        proposal_id=proposal_id,
+        cg_drafts=[
+            {
+                "id": long_symbolic,
+                "factor_dimension": "regularization",
+                "factor_type": "substitutive",
+            }
+        ],
+    )
+    planner_llm = StubLlmProvider(planner_responses)
+
+    spec = build_proposal_pipeline_spec(
+        workspace_root=tmp_path / "ws",
+        llm_for_planner=planner_llm,  # type: ignore[arg-type]
+        require_human_approval=False,
+    )
+    config = EngineConfig(supervisor_enabled=False)
+    await sqlite_store.create_proposal(
+        make_proposal_record(proposal_id=proposal_id, state="proposal_submitted")
+    )
+
+    final_state: str | None = None
+    for _ in range(8):
+        await run_worker_cycle(
+            spec=spec.engine_spec(),
+            metadata_store=sqlite_store,
+            artifact_store=localfs,  # type: ignore[arg-type]
+            compute=_NoComputeStub(),  # type: ignore[arg-type]
+            llm_providers=None,
+            config=config,
+        )
+        rec = await sqlite_store.get_proposal(proposal_id)
+        if rec is not None and rec.state in {"registered", "rejected", "failed"}:
+            final_state = rec.state
+            break
+    assert final_state == "registered", f"expected registered; got {final_state}"
+
+    cgs = await sqlite_store.list_cgs_for_proposal(proposal_id)
+    assert len(cgs.items) == 1
+    cg = cgs.items[0]
+    # The primary id is a fresh ULID-shaped string under the 64-char cap.
+    assert cg.id.startswith("cg-")
+    assert len(cg.id) <= 64
+    # The long symbolic id is preserved on the label field — even though
+    # ``f"{proposal_id}--{long_symbolic}"`` would exceed 64 chars.
+    assert cg.symbolic_id == long_symbolic
+    assert len(f"{proposal_id}--{long_symbolic}") > 64, (
+        "fixture invariant: composite shape would have exceeded the id cap"
+    )
+    # ``experiment_definition_id`` matches the ULID-shaped primary id.
+    assert cg.experiment_definition_id == cg.id
+
+
+@pytest.mark.asyncio
+async def test_proposal_registers_with_explicit_cg_id_for_resolver(  # type: ignore[no-untyped-def]
+    sqlite_store,
+    localfs: LocalFsStore,
+    tmp_path: Path,
+) -> None:
+    """The ``cg_id_for`` extension point still lets callers pin a
+    deterministic id shape (used by integration tests that pre-stage
+    artifacts at known CG paths)."""
+
+    def deterministic(proposal_id: str, draft_cg_id: str) -> str:
+        return f"{proposal_id}::{draft_cg_id}"
+
+    proposal_id = "prop-pin"
+    planner_responses = make_planner_responses_for_finalize(
+        proposal_id=proposal_id,
+        cg_drafts=[
+            {
+                "id": "cg-fixed",
+                "factor_dimension": "augmentation",
+                "factor_type": "additive",
+            }
+        ],
+    )
+    planner_llm = StubLlmProvider(planner_responses)
+    spec = build_proposal_pipeline_spec(
+        workspace_root=tmp_path / "ws",
+        llm_for_planner=planner_llm,  # type: ignore[arg-type]
+        require_human_approval=False,
+        cg_id_for=deterministic,
+    )
+    config = EngineConfig(supervisor_enabled=False)
+    await sqlite_store.create_proposal(
+        make_proposal_record(proposal_id=proposal_id, state="proposal_submitted")
+    )
+
+    for _ in range(8):
+        await run_worker_cycle(
+            spec=spec.engine_spec(),
+            metadata_store=sqlite_store,
+            artifact_store=localfs,  # type: ignore[arg-type]
+            compute=_NoComputeStub(),  # type: ignore[arg-type]
+            llm_providers=None,
+            config=config,
+        )
+        rec = await sqlite_store.get_proposal(proposal_id)
+        if rec is not None and rec.state == "registered":
+            break
+
+    cgs = await sqlite_store.list_cgs_for_proposal(proposal_id)
+    assert len(cgs.items) == 1
+    assert cgs.items[0].id == "prop-pin::cg-fixed"
+    assert cgs.items[0].symbolic_id == "cg-fixed"
 
 
 # === Compute stub ===========================================================

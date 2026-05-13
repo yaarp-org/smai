@@ -1077,18 +1077,45 @@ def _run_projection_check(buffer: PlannerBuffer) -> list[str]:
     :func:`smai_core.project_buffer_to_documents` so the planner and the
     proposal pipeline-spec's registration handler share one source of truth.
 
+    Two layers run in sequence:
+
+    1. **Methodology layer** — :func:`smai_core.project_buffer_to_documents`
+       validates the buffer projects to a typed
+       :class:`smai_core.dsl.document.ExperimentDocument` (e.g.
+       ``controlled_conditions.dataset`` is a dict, not a bare string).
+    2. **Orchestrator-layer record shape** — round-9 fix B —
+       :func:`smai_orchestrator.specs._record_dry_run.dry_run_record_construction`
+       runs each projected document through the SAME
+       :class:`ComparisonGroupRecord` / :class:`EntryRecord` constructors
+       the real registration handler uses, so id-format / content-hash /
+       state-literal validators surface here too. The orchestrator helper
+       is lazy-imported to keep the planner module loadable without
+       smai-orchestrator (the agent loop's methodology-layer entry path).
+
     The planner needs a ``proposal_id`` for the projection (it shapes the
     default :class:`ProposalFidelityAnchor`); we use the buffer's own
     ``proposal_id`` or a stable placeholder when the buffer is mid-draft
-    without one set. The fidelity-anchor defaults are not what we're
-    validating here — the bug class is field-type errors on the CG body
-    (e.g. ``controlled_conditions.dataset`` as a bare string) — so the
-    placeholder is fine.
+    without one set.
     """
     proposal_id = buffer.proposal_id or "buffer-projection-check"
     payload = buffer.model_dump(mode="python")
-    _, _, errors = project_buffer_to_documents(buffer=payload, proposal_id=proposal_id)
-    return errors
+    _docs, _refs, errors = project_buffer_to_documents(buffer=payload, proposal_id=proposal_id)
+    if errors:
+        # Don't run the record-shape dry-run when the methodology layer
+        # already rejected — the planner needs to fix the methodology
+        # errors first; piling on record-layer errors would be noisy.
+        return errors
+
+    from smai_orchestrator.specs._record_dry_run import (  # noqa: PLC0415
+        dry_run_record_construction,
+    )
+    from smai_orchestrator.specs.proposal import make_default_cg_id  # noqa: PLC0415
+
+    return dry_run_record_construction(
+        buffer=payload,
+        proposal_id=proposal_id,
+        cg_id_for=make_default_cg_id,
+    )
 
 
 def _structural_check_paper_ingestion(buffer: PlannerBuffer) -> list[str]:

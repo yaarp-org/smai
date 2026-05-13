@@ -94,10 +94,39 @@ def test_smai_ui_logs_in_process_worker_on_sqlite_config(
     auto-detect branch + startup log, then short-circuits the actual
     serve loop.
     """
+    # ``smai ui``'s dev-filesystem defaults push the resolved sqlite URI
+    # at ``$SMAI_HOME/state.db`` (overriding the ``:memory:`` URI in
+    # the test smai.yaml, since the dev-filesystem hook is layered as
+    # ``flag_overrides`` — highest precedence). Pin SMAI_HOME at a tmp
+    # path so the strict ``_check_schema_at_head`` pre-flight runs
+    # against a fresh database that needs no migration (state.db doesn't
+    # exist, so ``get_current_revision`` returns ``None`` — but here we
+    # need ``current==head`` for the verb to pass). Stamp the empty
+    # database to head before invoking so the pre-flight passes.
+    smai_home = tmp_path / "smai_home"
+    monkeypatch.setenv("SMAI_HOME", str(smai_home))
+
     cfg_path = tmp_path / "smai.yaml"
     cfg_path.write_text(build_dev_smai_yaml(), encoding="utf-8")
 
     _patch_short_circuit(monkeypatch)
+
+    # Run the migration so the dev-filesystem-defaulted state.db lands
+    # at head; otherwise the strict ``--with-worker`` pre-flight fails.
+    import asyncio  # noqa: PLC0415
+
+    from smai_orchestrator.migrations import upgrade_to_head  # noqa: PLC0415
+    from sqlalchemy.ext.asyncio import create_async_engine  # noqa: PLC0415
+
+    async def _migrate() -> None:
+        smai_home.mkdir(parents=True, exist_ok=True)
+        engine = create_async_engine(f"sqlite+aiosqlite:///{smai_home / 'state.db'}")
+        try:
+            await upgrade_to_head(engine)
+        finally:
+            await engine.dispose()
+
+    asyncio.run(_migrate())
 
     from smai_cli.main import app
 

@@ -852,6 +852,105 @@ async def test_finalize_plan_accepts_well_shaped_controlled_conditions(
     assert result.artifact_key in artifact_store._data
 
 
+# === Round-9 fix B: finalize_plan runs the orchestrator-level record check =
+
+
+def _draft_comparison_call_with_entries(entries: list[dict]) -> tuple[str, str, dict]:
+    """Variant of :func:`_draft_comparison_call` with overridable entries.
+
+    Used to inject a record-level Pydantic failure (e.g. an entry id with
+    whitespace) that the methodology projection accepts but
+    :class:`EntryRecord`'s id-format validator rejects.
+    """
+    base = _draft_comparison_call()
+    payload = dict(base[2])
+    payload["entries"] = entries
+    return (base[0], base[1], payload)
+
+
+@pytest.mark.asyncio
+async def test_finalize_plan_rejects_entry_id_with_whitespace(tmp_path: Path) -> None:
+    """Round-9 fix B: an entry id with embedded whitespace passes the
+    methodology layer's ``Entry.id: str`` (no format constraint) but fails
+    :class:`smai_orchestrator.entities.tracking.EntryRecord`'s
+    ``validate_id_format``. The planner's ``finalize_plan`` runs the
+    orchestrator-level dry-run record check after the methodology
+    projection succeeds, so this failure surfaces in-loop with the field
+    path."""
+    artifact_store = StubArtifactStore()
+    bad_entries = [
+        {
+            "id": "entry baseline with space",  # WRONG — whitespace rejected
+            "is_baseline": True,
+            "level": {
+                "factor": "augmentation",
+                "name": "absent",
+                "technique_symbolic_name": None,
+            },
+        },
+        {
+            "id": "entry-cutout",
+            "is_baseline": False,
+            "level": {
+                "factor": "augmentation",
+                "name": "cutout",
+                "technique_symbolic_name": "tech-cutout",
+            },
+        },
+    ]
+    responses = [
+        model_response(tool_uses=[_set_classification_call()], stop_reason="tool_use"),
+        model_response(
+            tool_uses=[_draft_create_technique_call(symbolic_name="tech-cutout")],
+            stop_reason="tool_use",
+        ),
+        model_response(
+            tool_uses=[_draft_comparison_call_with_entries(bad_entries)],
+            stop_reason="tool_use",
+        ),
+        model_response(tool_uses=[_set_conditions_call()], stop_reason="tool_use"),
+        model_response(tool_uses=[_draft_assertion_call()], stop_reason="tool_use"),
+        model_response(tool_uses=[_finalize_plan_call()], stop_reason="tool_use"),
+        model_response(tool_uses=[_finish_call(False)], stop_reason="tool_use"),
+    ]
+    llm = StubLlmProvider(responses)
+    planner_input = PlannerInput(
+        variant="novel_technique",
+        proposal_id="prop-bad-entry",
+        submission_kind="novel_technique",
+        technique_description="t",
+        pool_summary="",
+    )
+    result = await run_planner_session(
+        input=planner_input,
+        llm=llm,  # type: ignore[arg-type]
+        workspace_path=tmp_path / "ws",
+        artifact_store=artifact_store,  # type: ignore[arg-type]
+        config=AgentLoopConfig(max_turns=10),
+        max_finalize_reprompts=0,
+    )
+    assert result.buffer.finalized is False
+    assert result.artifact_key not in artifact_store._data
+    # The finalize_plan tool result mentions the offending entry id +
+    # the entries.<id> path so the agent can correct on its next turn.
+    second_call_msgs = llm.calls[6]["messages"]
+    tool_result_text = ""
+    for msg in second_call_msgs:  # type: ignore[union-attr]
+        for block in msg["content"]:  # type: ignore[index]
+            if block.get("type") == "tool_result" and block.get("is_error") is True:  # type: ignore[union-attr]
+                content = block.get("content")  # type: ignore[union-attr]
+                if isinstance(content, str):
+                    tool_result_text += content
+                elif isinstance(content, list):
+                    for sub in content:  # type: ignore[var-annotated]
+                        if isinstance(sub, dict) and "text" in sub:
+                            tool_result_text += sub["text"]  # type: ignore[arg-type]
+    assert "entry baseline with space" in tool_result_text
+    # Field path mentions "entries" — the dry-run helper includes it in
+    # its loc string.
+    assert "entries" in tool_result_text
+
+
 @pytest.mark.asyncio
 async def test_finalize_plan_reprompts_self_correct_after_bad_dataset(
     tmp_path: Path,

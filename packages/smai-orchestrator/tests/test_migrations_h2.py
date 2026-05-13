@@ -61,9 +61,15 @@ def _load_initial_revision_module() -> ModuleType:
     return module
 
 
-def test_head_revision_is_initial_schema() -> None:
-    """The shipped head matches the initial revision's id."""
-    assert get_head_revision() == "0001_initial_schema"
+def test_head_revision_is_latest_default_revision() -> None:
+    """The shipped default-branch head walks to the latest revision.
+
+    Round-9 added ``0003_cg_symbolic_id`` downstream of
+    ``0001_initial_schema`` to add the CG record's ``symbolic_id`` column.
+    The tenant_aware branch (``0002``) sits on a separate root and does
+    not affect the default head.
+    """
+    assert get_head_revision() == "0003_cg_symbolic_id"
 
 
 async def test_upgrade_to_head_creates_every_table() -> None:

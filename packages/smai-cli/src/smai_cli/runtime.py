@@ -1375,6 +1375,7 @@ class Runtime:
         run_worker: bool = True,
         paper_fetcher: PaperFetcher | None = None,
         worker_id: str | None = None,
+        proposal_cg_id_for: Callable[[str, str], str] | None = None,
     ) -> AsyncGenerator[Runtime, None]:
         """Boot the in-band Runtime; yield a configured instance.
 
@@ -1501,6 +1502,12 @@ class Runtime:
                 # (the laptop deployment shape); production overrides
                 # via the same flag.
                 require_human_approval=True,
+                # Test-only seam: integration tests pre-stage artifacts
+                # at known CG paths and need to pin a deterministic id.
+                # Production (``proposal_cg_id_for=None``) falls back to
+                # :func:`make_default_cg_id` which generates a fresh
+                # ULID-shaped id (round-9).
+                cg_id_for=proposal_cg_id_for,
             )
             # Register the paper-ingestion pipeline-spec (per Task 3.E2
             # / DEC-032 — the supporting utility per the

@@ -82,6 +82,11 @@ cgs_table: Table = Table(
     Column("id", String(64), primary_key=True),
     Column("proposal_id", String(64), nullable=False, index=True),
     Column("factor_model_id", String(64), nullable=True),
+    # Human-readable label from the planner buffer's draft CG id (round-9).
+    # Nullable for backfill compatibility; new registrations always populate
+    # this. Length 128 to allow long planner-side symbolic names that would
+    # blow past the 64-char id format constraint.
+    Column("symbolic_id", String(128), nullable=True),
     # Methodology references
     Column("experiment_definition_id", String(64), nullable=False),
     Column("experiment_plan_hash", String(64), nullable=True),

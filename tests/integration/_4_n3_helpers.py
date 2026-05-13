@@ -303,8 +303,12 @@ class N3ProposalShape:
     field by name (``shape.cg_id``, ``shape.treatment_entry_id``)
     without mistyping.
 
-    The final CG id follows the proposal-spec's default
-    ``cg_id_for`` resolver: ``f"{proposal_id}--{draft_cg_id}"``.
+    The final CG id is pinned by the test's
+    ``Runtime.start_in_band(proposal_cg_id_for=...)`` test-seam (round-9):
+    the resolver returns ``f"{proposal_id}--{draft_cg_id}"`` so the
+    pre-staged artifact paths under ``comparison-groups/<cg_id>/`` line
+    up with what the harness / runs gates read. Production's default
+    resolver instead generates a fresh ULID-shaped id per CG.
     """
 
     proposal_id: str

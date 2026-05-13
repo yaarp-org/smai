@@ -86,6 +86,8 @@ disagrees):
 from __future__ import annotations
 
 import json
+import secrets
+import time
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -158,13 +160,36 @@ VALIDATION_CONFIG_KEY_TEMPLATE = "comparison-groups/{cg_id}/validation_config.js
 # === Helpers ================================================================
 
 
-def _make_default_cg_id(proposal_id: str, draft_cg_id: str) -> str:
-    """Default CG-id template: ``"<proposal_id>--<draft_cg_id>"``.
+def _generate_cg_id() -> str:
+    """Generate a ULID-shaped CG id: ``cg-<unix_ms>-<rand8>`` (~24 chars).
 
-    Two dashes to keep the proposal-id boundary visible when the
-    draft id contains a single dash (e.g. ``"cg-baseline"``).
+    Mirrors :func:`smai_cli.main._generate_proposal_id`. The id-format
+    validator in
+    :mod:`smai_orchestrator.entities.tracking._common` accepts any
+    non-whitespace ASCII ≤ 64 chars per ``01-data-model.md`` §5.2.2; this
+    shape comfortably fits and stays unique by construction even when
+    many CGs are registered from a single proposal in quick succession.
     """
-    return f"{proposal_id}--{draft_cg_id}"
+    return f"cg-{int(time.time() * 1000)}-{secrets.token_hex(4)}"
+
+
+def make_default_cg_id(proposal_id: str, draft_cg_id: str) -> str:
+    """Default CG-id resolver — fresh ULID-shaped id per CG (round-9).
+
+    Pre-round-9 this returned ``f"{proposal_id}--{draft_cg_id}"``, which
+    blew past the 64-char id-format cap whenever the planner emitted a
+    long symbolic draft id (e.g. ``"cg-batchnorm-vs-dropout-mlp-fashionmnist"``)
+    and crashed :class:`ComparisonGroupRecord` Pydantic validation at
+    registration time. The fix: generate a fresh ULID-shaped id and
+    preserve the planner's symbolic ``draft_cg_id`` on the new
+    :attr:`ComparisonGroupRecord.symbolic_id` field for listings.
+
+    Test callers that need deterministic ids (integration fixtures
+    pre-staging artifacts at known CG paths) override this resolver
+    via the ``cg_id_for`` knob on :func:`build_proposal_pipeline_spec`.
+    """
+    del proposal_id, draft_cg_id
+    return _generate_cg_id()
 
 
 # === Gate-rule callable factories ===========================================
@@ -589,6 +614,7 @@ async def _register_buffer(
             id=cg_id,
             proposal_id=proposal_id,
             factor_model_id=definition.factor_model_id,
+            symbolic_id=draft_cg_id,
             experiment_definition_id=cg_id,
             experiment_plan_hash=artifact_set.experiment_plan.envelope.content_hash,
             harness_contract_hash=artifact_set.harness_contract.envelope.content_hash,
@@ -737,7 +763,7 @@ def build_proposal_pipeline_spec(
             planner's prompt context.
         cg_id_for: Callable resolving
             ``(proposal_id, draft_cg_id) → CG id``. Defaults to
-            :func:`_make_default_cg_id`.
+            :func:`make_default_cg_id`.
         registries_factory: Callable producing a :class:`Registries`
             instance for the methodology compiler. Defaults to
             :func:`smai_core.load_default_registries`.
@@ -756,7 +782,7 @@ def build_proposal_pipeline_spec(
         :func:`register_proposal_pipeline` for the convenience
         wrapper).
     """
-    cg_id_resolver = cg_id_for or _make_default_cg_id
+    cg_id_resolver = cg_id_for or make_default_cg_id
     registries_factory = registries_factory or load_default_registries
 
     def _default_design_plan_key(proposal_id: str) -> str:
