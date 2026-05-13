@@ -31,6 +31,11 @@ Edges + gate rules per ``03`` §4.2:
   ``proposal.user_rejected``) — human gate.
 * ``designed → failed`` (``dispatch_time``,
   ``proposal.registration_exhausted``) — registration retry exhausted.
+  Declaration order puts this BEFORE ``user_approved`` and
+  ``user_rejected`` so the terminal gate wins once
+  ``registration_attempt >= max_registration_attempts`` — otherwise
+  ``user_approved`` would re-fire indefinitely on an approved proposal
+  whose registration handler keeps erroring (round-8 fix B).
 
 Per DEC-034 #4 the pool is ``proposal_pipeline`` (limit 2, priority
 30). Both the planner dispatch and the registration handler run
@@ -84,23 +89,18 @@ import json
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, cast
 
 from smai_core import (
     ContractArtifactSet,
-    DslDocumentAdapter,
     ExperimentDefinition,
-    ExperimentDocument,
     Registries,
     compile_experiment,
+    draft_cg_to_experiment_document,
+    draft_technique_to_ref,
     load_default_registries,
 )
-from smai_core.entities.technique import (
-    FidelityAnchorAdapter,
-    PaperFidelityAnchor,
-    ProposalFidelityAnchor,
-    TechniqueRef,
-)
+from smai_core.entities.technique import TechniqueRef
 from smai_core.plugins import (
     ArtifactNotFound,
     ArtifactStore,
@@ -320,7 +320,19 @@ def _make_gate_registration_exhausted(
     *,
     max_registration_attempts: int,
 ) -> Callable[[GateContext], Awaitable[GateOutcome]]:
-    """``designed → failed`` (dispatch_time, registration_exhausted)."""
+    """``designed → failed`` (dispatch_time, registration retry exhausted).
+
+    Same predicate shape as :func:`_make_gate_design_failed_terminal`:
+    fires when the registration retry budget on
+    :attr:`ProposalRecord.registration_attempt` is exhausted. The handler
+    bumps the attempt counter on the (re-)entry into ``registered`` so
+    the budget converges across retries (mirrors the ``designing → failed``
+    retry-exhausted gate's design_attempt bump).
+
+    Declaration-ordered ahead of the ``user_approved`` / ``user_rejected``
+    edges in :func:`build_proposal_pipeline_spec` so the terminal gate
+    wins once the budget is exhausted (round-8 fix B).
+    """
 
     async def _gate(ctx: GateContext) -> GateOutcome:
         proposal = await ctx.metadata_store.get_proposal(ctx.entity_id)
@@ -329,7 +341,7 @@ def _make_gate_registration_exhausted(
         if proposal.registration_attempt >= max_registration_attempts:
             return GateOutcome(
                 advance=True,
-                reason="registration retry budget exhausted",
+                reason="registration retry budget exhausted; terminal",
             )
         return GateOutcome(advance=False, reason="registration retry budget remaining")
 
@@ -518,13 +530,19 @@ async def _register_buffer(
 
     techniques_raw = cast(dict[str, dict[str, Any]], buffer.get("techniques") or {})
     technique_refs_by_symbol: dict[str, TechniqueRef] = {}
+    paper_arxiv_id = cast(str | None, buffer.get("paper_arxiv_id"))
     for symbolic_name, raw in techniques_raw.items():
-        technique_refs_by_symbol[symbolic_name] = _draft_technique_to_ref(
-            symbolic_name=symbolic_name,
-            raw=raw,
-            proposal_id=proposal_id,
-            paper_arxiv_id=cast(str | None, buffer.get("paper_arxiv_id")),
-        )
+        try:
+            technique_refs_by_symbol[symbolic_name] = draft_technique_to_ref(
+                symbolic_name=symbolic_name,
+                raw=raw,
+                proposal_id=proposal_id,
+                paper_arxiv_id=paper_arxiv_id,
+            )
+        except (ValueError, TypeError) as exc:
+            raise _RegistrationError(
+                f"buffer technique {symbolic_name!r} could not be projected to TechniqueRef: {exc}"
+            ) from exc
 
     # Extend the registries' technique map with the buffer's novel
     # techniques so the compiler's verification step finds them.
@@ -545,7 +563,7 @@ async def _register_buffer(
         draft_cg_id = cast(str, draft.get("id") or "draft-cg")
         cg_id = cg_id_for(proposal_id, draft_cg_id)
         try:
-            document = _draft_cg_to_experiment_document(
+            document = draft_cg_to_experiment_document(
                 draft=draft,
                 cg_id=cg_id,
                 technique_refs_by_symbol=technique_refs_by_symbol,
@@ -675,201 +693,10 @@ async def _persist_contract_artifacts(
     )
 
 
-# === Buffer → methodology entity projection =================================
-
-
-def _draft_technique_to_ref(
-    *,
-    symbolic_name: str,
-    raw: dict[str, Any],
-    proposal_id: str,
-    paper_arxiv_id: str | None,
-) -> TechniqueRef:
-    """Project a :class:`DraftTechnique` (raw dict from buffer JSON)
-    into a :class:`smai_core.entities.TechniqueRef`.
-
-    The buffer's symbolic name becomes the ``id``. The ``fidelity_anchor``
-    is adapted via :data:`FidelityAnchorAdapter` (discriminated union
-    over paper / proposal / reviewer_attested). When ``standard=False``
-    and no anchor is set, defaults to a :class:`ProposalFidelityAnchor`
-    pointing at this proposal id (per DEC-032 — novel non-standard
-    techniques use the proposal as their anchor). When a paper_arxiv_id
-    is set on the buffer (paper-ingestion variant), the anchor defaults
-    to a :class:`PaperFidelityAnchor`.
-    """
-    standard = bool(raw.get("standard", False))
-    anchor_raw = cast(dict[str, Any] | None, raw.get("fidelity_anchor"))
-    anchor: PaperFidelityAnchor | ProposalFidelityAnchor | None = None
-    if anchor_raw is not None:
-        anchor_obj = FidelityAnchorAdapter.validate_python(anchor_raw)
-        # Discriminated union, may be any of the three kinds.
-        anchor = cast(
-            PaperFidelityAnchor | ProposalFidelityAnchor | None,
-            anchor_obj if anchor_obj.kind != "reviewer_attested" else anchor_obj,
-        )
-    if anchor is None and not standard:
-        if paper_arxiv_id is not None:
-            anchor = PaperFidelityAnchor(arxiv_id=paper_arxiv_id, doi=f"arxiv:{paper_arxiv_id}")
-        else:
-            anchor = ProposalFidelityAnchor(proposal_id=proposal_id)
-
-    compatible_factor_types_raw = cast(
-        list[str], raw.get("compatible_factor_types") or ["additive"]
-    )
-    return TechniqueRef(
-        id=symbolic_name,
-        name=cast(str, raw.get("name", symbolic_name)),
-        description=cast(str, raw.get("description", "")),
-        category=cast(str, raw.get("category", "uncategorized")),
-        compatible_factor_types=[_validate_factor_type(t) for t in compatible_factor_types_raw],
-        standard=standard,
-        fidelity_anchor=anchor,
-        affects_extension_points=cast(list[str], raw.get("affects_extension_points") or []),
-        implies_controlled=cast(list[str], raw.get("implies_controlled") or []),
-        parameter_schema=cast(dict[str, Any] | None, raw.get("parameter_schema")),
-    )
-
-
-def _validate_factor_type(value: str) -> Literal["additive", "substitutive"]:
-    if value == "additive":
-        return "additive"
-    if value == "substitutive":
-        return "substitutive"
-    raise ValueError(f"unknown factor_type {value!r}")
-
-
-def _draft_cg_to_experiment_document(
-    *,
-    draft: dict[str, Any],
-    cg_id: str,
-    technique_refs_by_symbol: dict[str, TechniqueRef],
-) -> ExperimentDocument:
-    """Project a :class:`DraftComparisonGroup` (raw dict) into a
-    :class:`ExperimentDocument`.
-
-    Builds the document-shaped raw dict and runs it through
-    :data:`DslDocumentAdapter` with ``context={"smai_mode": "dsl"}``
-    so the inner :class:`ComparisonRule` accepts a null
-    ``baseline_entry_id`` (the compiler fills it from
-    ``Entry.is_baseline=True`` per ``02-dsl-and-contracts.md`` §2.5).
-
-    The returned document is the input shape :func:`compile_experiment`
-    expects.
-
-    Raises :class:`KeyError` / :class:`ValueError` on malformed input;
-    the caller wraps in :class:`_RegistrationError`.
-    """
-    factor_dim = cast(str, draft["factor_dimension"])
-    factor_type = cast(str, draft["factor_type"])
-    factor_description = cast(str, draft.get("factor_description", ""))
-    if factor_type not in {"additive", "substitutive"}:
-        raise ValueError(f"factor_type {factor_type!r} is not additive/substitutive")
-
-    raw_entries = cast(list[dict[str, Any]], draft.get("entries") or [])
-    entry_dicts: list[dict[str, Any]] = []
-    for raw_entry in raw_entries:
-        raw_level = cast(dict[str, Any], raw_entry["level"])
-        symbolic = cast(str | None, raw_level.get("technique_symbolic_name"))
-        technique_id: str | None = None
-        if symbolic is not None:
-            ref = technique_refs_by_symbol.get(symbolic)
-            # Allow direct ID references too — symbolic_name is
-            # interpreted as a stable ID when not in the buffer.
-            technique_id = ref.id if ref is not None else symbolic
-        level_dict: dict[str, Any] = {
-            "factor": factor_dim,
-            "name": cast(str, raw_level.get("name", "level")),
-        }
-        if raw_level.get("description") is not None:
-            level_dict["description"] = raw_level["description"]
-        if technique_id is not None:
-            level_dict["technique_id"] = technique_id
-        if raw_level.get("technique_params") is not None:
-            level_dict["technique_params"] = raw_level["technique_params"]
-        entry_dicts.append(
-            {
-                "id": cast(str, raw_entry["id"]),
-                "is_baseline": bool(raw_entry["is_baseline"]),
-                "level": level_dict,
-            }
-        )
-
-    raw_validation = cast(dict[str, Any] | None, draft.get("validation"))
-    if raw_validation is None:
-        raise ValueError(f"CG {cg_id!r} draft has no validation")
-    metric_raw = cast(dict[str, Any], raw_validation["metric"])
-    if "ref" not in metric_raw:
-        raise ValueError("validation.metric missing 'ref' key")
-
-    # Build metric dict for the discriminated union (MetricRef per
-    # `01-data-model.md` §3.1.2). Atomic metric uses ``ref``;
-    # parametric uses ``family + parameters``.
-    if metric_raw.get("kind", "atomic") == "parametric":
-        metric_dict: dict[str, Any] = {
-            "kind": "parametric",
-            "family": cast(str, metric_raw["ref"]),
-            "parameters": cast(dict[str, str | int | float], metric_raw.get("parameters", {})),
-        }
-    else:
-        metric_dict = {"kind": "atomic", "ref": cast(str, metric_raw["ref"])}
-
-    comparison_rule_value = cast(str, raw_validation.get("comparison_rule", "compare_to_baseline"))
-    if comparison_rule_value not in {"compare_to_baseline", "compare_to_target"}:
-        raise ValueError(f"unknown comparison_rule {comparison_rule_value!r}")
-    direction_value = cast(str, raw_validation.get("direction", "higher_is_better"))
-    if direction_value not in {"higher_is_better", "lower_is_better"}:
-        raise ValueError(f"unknown direction {direction_value!r}")
-    aggregation_method_value = cast(str, raw_validation.get("aggregation_method", "mean"))
-    if aggregation_method_value not in {"mean", "median"}:
-        raise ValueError(f"unknown aggregation_method {aggregation_method_value!r}")
-
-    comparison_dict: dict[str, Any] = {
-        "rule": comparison_rule_value,
-        "threshold": float(raw_validation.get("threshold", 0.0)),
-    }
-    if raw_validation.get("target_value") is not None:
-        comparison_dict["target_value"] = raw_validation["target_value"]
-    # baseline_entry_id is intentionally NOT set — the DSL gate per
-    # `02-dsl-and-contracts.md` §2.5 requires the user to identify the
-    # baseline via Entry.is_baseline=True; the compiler fills the
-    # id at artifact-emission time.
-
-    validation_dict: dict[str, Any] = {
-        "metric": metric_dict,
-        "direction": direction_value,
-        "aggregation": {"method": aggregation_method_value},
-        "comparison": comparison_dict,
-        "seed_count_required": int(raw_validation.get("seed_count_required", 1)),
-    }
-    if raw_validation.get("rationale") is not None:
-        validation_dict["rationale"] = raw_validation["rationale"]
-
-    document_dict: dict[str, Any] = {
-        "kind": "experiment",
-        "experiment": {
-            "id": cg_id,
-            "hypothesis": cast(str, draft.get("hypothesis", "")),
-            "factors": [
-                {
-                    "name": factor_dim,
-                    "type": factor_type,
-                    "description": factor_description,
-                }
-            ],
-            "controlled_conditions": cast(dict[str, Any], draft.get("controlled_conditions") or {}),
-            "entries": entry_dicts,
-            "validation": validation_dict,
-        },
-    }
-
-    document = DslDocumentAdapter.validate_python(document_dict, context={"smai_mode": "dsl"})
-    if not isinstance(document, ExperimentDocument):
-        raise ValueError(
-            f"buffer CG {cg_id!r} projected to {type(document).__name__}, "
-            "expected ExperimentDocument"
-        )
-    return document
-
+# Buffer → methodology entity projection lives in
+# ``smai_core.dsl.buffer_projection`` (lifted in round 8 so the planner's
+# ``finalize_plan`` tool can call the same projection at draft time and
+# surface errors to the agent for in-loop self-correction).
 
 # === Spec factory ===========================================================
 
@@ -1006,14 +833,22 @@ def build_proposal_pipeline_spec(
             ),
             fires_on="dispatch_time",
         ),
-        # Human-gate edges off ``designed`` — declaration-ordered: success,
-        # rejection, retry-exhausted-terminal.
+        # Edges off ``designed`` — declaration-ordered: retry-exhausted
+        # terminal FIRST so a registration retry budget exhaustion (e.g.
+        # the handler repeatedly returns an error because the buffer
+        # cannot be projected) wins over the user-approved gate; if the
+        # approval gate fired first we would loop the proposal back to
+        # ``registered`` forever, never reaching the ``failed`` terminal
+        # (round-8 fix B; mirrors the ``designing → failed`` retry-
+        # exhausted gate's declaration order). Rejection sits between the
+        # two — a user rejection short-circuits a still-budgeted
+        # registration retry.
         EdgeDef(
-            name="proposal.designed → registered (user approved)",
+            name="proposal.designed → failed (registration retry exhausted)",
             from_state="designed",
-            target_state="registered",
-            gate_rule=_make_gate_user_approved(
-                require_human_approval=require_human_approval,
+            target_state="failed",
+            gate_rule=_make_gate_registration_exhausted(
+                max_registration_attempts=max_registration_attempts,
             ),
             fires_on="dispatch_time",
         ),
@@ -1025,11 +860,11 @@ def build_proposal_pipeline_spec(
             fires_on="dispatch_time",
         ),
         EdgeDef(
-            name="proposal.designed → failed (registration exhausted)",
+            name="proposal.designed → registered (user approved)",
             from_state="designed",
-            target_state="failed",
-            gate_rule=_make_gate_registration_exhausted(
-                max_registration_attempts=max_registration_attempts,
+            target_state="registered",
+            gate_rule=_make_gate_user_approved(
+                require_human_approval=require_human_approval,
             ),
             fires_on="dispatch_time",
         ),

@@ -41,7 +41,10 @@ from smai_core.dsl import (
     DslDocumentAdapter,
     ExperimentDocument,
     FactorModelDocument,
+    draft_cg_to_experiment_document,
+    draft_technique_to_ref,
     load_dsl_document_from_json,
+    project_buffer_to_documents,
 )
 from smai_core.entities import (
     AggregationRule,
@@ -325,6 +328,8 @@ __all__ = [
     "artifact_hash",
     "canonical_json",
     "compile_experiment",
+    "draft_cg_to_experiment_document",
+    "draft_technique_to_ref",
     "emit_artifacts",
     "emit_factor_model_artifacts",
     "evaluate",
@@ -336,6 +341,7 @@ __all__ = [
     "load_dsl_document_from_json",
     "load_metric_registry",
     "metric_ref_to_runtime_key",
+    "project_buffer_to_documents",
     "raw_metrics_canonical_form",
     "raw_metrics_canonical_hash",
     "verify",

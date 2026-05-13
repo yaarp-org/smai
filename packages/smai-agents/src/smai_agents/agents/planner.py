@@ -71,6 +71,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+from smai_core import project_buffer_to_documents
 from smai_core.plugins import (
     ArtifactStore,
     JobHandle,
@@ -768,6 +769,27 @@ def _make_finalize_plan_tool(
                 content="finalize_plan failed:\n- " + "\n- ".join(errors),
                 is_error=True,
             )
+        # Round-8 friction A: structural rules check field *presence*; this
+        # second pass runs the same Pydantic projection the registration
+        # handler uses so type/shape errors (e.g. dataset="MNIST" instead
+        # of {"name": "MNIST", ...}) surface here instead of wedging the
+        # proposal after human approval. Failures are returned as a tool
+        # error and the re-prompt machinery lets the agent self-correct.
+        projection_errors = _run_projection_check(buffer)
+        if projection_errors:
+            return ToolResultContent(
+                tool_use_id="",
+                content=(
+                    "finalize_plan failed: buffer cannot be registered as written. "
+                    "Fix the field(s) below and call finalize_plan again. "
+                    "controlled_conditions.dataset must be a dict like "
+                    "{'name': 'MNIST', 'split': 'train'}, controlled_conditions."
+                    "optimization a dict like {'optimizer': 'sgd', 'lr': 0.1}, "
+                    "and controlled_conditions.seeds a list of ints.\n- "
+                    + "\n- ".join(projection_errors)
+                ),
+                is_error=True,
+            )
         buffer.finalized = True
         if artifact_store is not None:
             await artifact_store.put(
@@ -1044,6 +1066,28 @@ def _structural_check_novel_technique(buffer: PlannerBuffer) -> list[str]:
                 f"(non-standard techniques require one per DEC-032)"
             )
 
+    return errors
+
+
+def _run_projection_check(buffer: PlannerBuffer) -> list[str]:
+    """Project the buffer through the registration-time Pydantic compiler.
+
+    Returns the list of projection errors (empty when the buffer projects
+    cleanly). The actual projection logic lives in
+    :func:`smai_core.project_buffer_to_documents` so the planner and the
+    proposal pipeline-spec's registration handler share one source of truth.
+
+    The planner needs a ``proposal_id`` for the projection (it shapes the
+    default :class:`ProposalFidelityAnchor`); we use the buffer's own
+    ``proposal_id`` or a stable placeholder when the buffer is mid-draft
+    without one set. The fidelity-anchor defaults are not what we're
+    validating here — the bug class is field-type errors on the CG body
+    (e.g. ``controlled_conditions.dataset`` as a bare string) — so the
+    placeholder is fine.
+    """
+    proposal_id = buffer.proposal_id or "buffer-projection-check"
+    payload = buffer.model_dump(mode="python")
+    _, _, errors = project_buffer_to_documents(buffer=payload, proposal_id=proposal_id)
     return errors
 
 

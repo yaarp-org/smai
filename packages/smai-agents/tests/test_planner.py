@@ -660,3 +660,254 @@ async def test_planner_persists_conversation_trace(tmp_path: Path) -> None:
     parsed = json.loads(artifact_store._data[key])
     assert isinstance(parsed, list) and parsed
     assert parsed[0]["role"] == "user"
+
+
+# === Round-8 friction A: finalize_plan projects the buffer ==================
+#
+# Pre-round-8 ``_structural_check_novel_technique`` only verified field
+# *presence* on controlled_conditions — a buffer with ``dataset="MNIST"``
+# (bare string) sailed past finalize_plan and wedged the proposal at
+# registration time. round-8 wires the same Pydantic projection the
+# registration handler uses so type/shape errors surface in-loop and the
+# re-prompt machinery lets the agent self-correct.
+
+
+def _set_conditions_call_with(conditions: dict) -> tuple[str, str, dict]:
+    """Variant of :func:`_set_conditions_call` with custom conditions."""
+    return (
+        "tu-set-conditions",
+        "set_conditions",
+        {"cg_id": "cg-1", "conditions": conditions},
+    )
+
+
+@pytest.mark.asyncio
+async def test_finalize_plan_rejects_dataset_as_bare_string(tmp_path: Path) -> None:
+    """The reproduced bug: ``controlled_conditions.dataset = "MNIST"`` (a
+    bare string instead of the typed dict) fails projection — finalize_plan
+    must return is_error mentioning the field path so the agent can fix it."""
+    artifact_store = StubArtifactStore()
+    bad_conditions = {
+        "dataset": "MNIST",  # WRONG — must be {"name": "MNIST", ...}
+        "optimization": {"optimizer": "sgd", "lr": 0.1},
+        "seeds": [0, 1],
+    }
+    responses = [
+        model_response(tool_uses=[_set_classification_call()], stop_reason="tool_use"),
+        model_response(
+            tool_uses=[_draft_create_technique_call(symbolic_name="tech-cutout")],
+            stop_reason="tool_use",
+        ),
+        model_response(tool_uses=[_draft_comparison_call()], stop_reason="tool_use"),
+        model_response(
+            tool_uses=[_set_conditions_call_with(bad_conditions)], stop_reason="tool_use"
+        ),
+        model_response(tool_uses=[_draft_assertion_call()], stop_reason="tool_use"),
+        model_response(tool_uses=[_finalize_plan_call()], stop_reason="tool_use"),
+        model_response(tool_uses=[_finish_call(False)], stop_reason="tool_use"),
+    ]
+    llm = StubLlmProvider(responses)
+    planner_input = PlannerInput(
+        variant="novel_technique",
+        proposal_id="prop-bad-ds",
+        submission_kind="novel_technique",
+        technique_description="t",
+        pool_summary="",
+    )
+    result = await run_planner_session(
+        input=planner_input,
+        llm=llm,  # type: ignore[arg-type]
+        workspace_path=tmp_path / "ws",
+        artifact_store=artifact_store,  # type: ignore[arg-type]
+        config=AgentLoopConfig(max_turns=10),
+        max_finalize_reprompts=0,
+    )
+    # The buffer was NOT finalized — projection rejected it.
+    assert result.buffer.finalized is False
+    assert result.artifact_key not in artifact_store._data
+    # The finalize_plan tool result mentions the field path so the agent
+    # can correct on its next turn (a tool_result with is_error=True is
+    # what the re-prompt machinery / live agent actually sees).
+    second_call_msgs = llm.calls[6]["messages"]  # 7th LLM call sees finalize_plan's tool_result
+    tool_result_text = ""
+    for msg in second_call_msgs:  # type: ignore[union-attr]
+        for block in msg["content"]:  # type: ignore[index]
+            if block.get("type") == "tool_result":  # type: ignore[union-attr]
+                if block.get("is_error") is not True:  # type: ignore[union-attr]
+                    continue
+                content = block.get("content")  # type: ignore[union-attr]
+                if isinstance(content, str):
+                    tool_result_text += content
+                elif isinstance(content, list):
+                    for sub in content:  # type: ignore[var-annotated]
+                        if isinstance(sub, dict) and "text" in sub:
+                            tool_result_text += sub["text"]  # type: ignore[arg-type]
+    assert "controlled_conditions.dataset" in tool_result_text
+    # A hint for what the agent should put in the dataset slot.
+    assert "dict" in tool_result_text.lower() or "{" in tool_result_text
+
+
+@pytest.mark.asyncio
+async def test_finalize_plan_rejects_optimization_not_a_dict(tmp_path: Path) -> None:
+    """A second projection failure shape — ``optimization`` as a list
+    instead of a dict — must also be surfaced via the tool result with the
+    field path. Confirms the projection check catches multiple error
+    shapes, not just the dataset-string one."""
+    artifact_store = StubArtifactStore()
+    bad_conditions = {
+        "dataset": {"name": "MNIST", "split": "train"},
+        "optimization": ["sgd", 0.1],  # WRONG — must be a dict
+        "seeds": [0, 1],
+    }
+    responses = [
+        model_response(tool_uses=[_set_classification_call()], stop_reason="tool_use"),
+        model_response(
+            tool_uses=[_draft_create_technique_call(symbolic_name="tech-cutout")],
+            stop_reason="tool_use",
+        ),
+        model_response(tool_uses=[_draft_comparison_call()], stop_reason="tool_use"),
+        model_response(
+            tool_uses=[_set_conditions_call_with(bad_conditions)], stop_reason="tool_use"
+        ),
+        model_response(tool_uses=[_draft_assertion_call()], stop_reason="tool_use"),
+        model_response(tool_uses=[_finalize_plan_call()], stop_reason="tool_use"),
+        model_response(tool_uses=[_finish_call(False)], stop_reason="tool_use"),
+    ]
+    llm = StubLlmProvider(responses)
+    planner_input = PlannerInput(
+        variant="novel_technique",
+        proposal_id="prop-bad-opt",
+        submission_kind="novel_technique",
+        technique_description="t",
+        pool_summary="",
+    )
+    result = await run_planner_session(
+        input=planner_input,
+        llm=llm,  # type: ignore[arg-type]
+        workspace_path=tmp_path / "ws",
+        artifact_store=artifact_store,  # type: ignore[arg-type]
+        config=AgentLoopConfig(max_turns=10),
+        max_finalize_reprompts=0,
+    )
+    assert result.buffer.finalized is False
+    second_call_msgs = llm.calls[6]["messages"]  # 7th LLM call sees finalize_plan's tool_result
+    tool_result_text = ""
+    for msg in second_call_msgs:  # type: ignore[union-attr]
+        for block in msg["content"]:  # type: ignore[index]
+            if block.get("type") == "tool_result" and block.get("is_error") is True:  # type: ignore[union-attr]
+                content = block.get("content")  # type: ignore[union-attr]
+                if isinstance(content, str):
+                    tool_result_text += content
+                elif isinstance(content, list):
+                    for sub in content:  # type: ignore[var-annotated]
+                        if isinstance(sub, dict) and "text" in sub:
+                            tool_result_text += sub["text"]  # type: ignore[arg-type]
+    assert "controlled_conditions.optimization" in tool_result_text
+
+
+@pytest.mark.asyncio
+async def test_finalize_plan_accepts_well_shaped_controlled_conditions(
+    tmp_path: Path,
+) -> None:
+    """A buffer with the typed-dict controlled_conditions shape projects
+    cleanly and ``finalize_plan`` succeeds — confirms the round-8
+    projection check doesn't reject the happy-path shape that
+    ``test_novel_technique_variant_finalizes_plan`` already establishes."""
+    artifact_store = StubArtifactStore()
+    good_conditions = {
+        "dataset": {"name": "MNIST", "split": "standard"},
+        "optimization": {"optimizer": "sgd", "lr": 0.1},
+        "seeds": [0, 1],
+    }
+    responses = [
+        model_response(tool_uses=[_set_classification_call()], stop_reason="tool_use"),
+        model_response(
+            tool_uses=[_draft_create_technique_call(symbolic_name="tech-cutout")],
+            stop_reason="tool_use",
+        ),
+        model_response(tool_uses=[_draft_comparison_call()], stop_reason="tool_use"),
+        model_response(
+            tool_uses=[_set_conditions_call_with(good_conditions)], stop_reason="tool_use"
+        ),
+        model_response(tool_uses=[_draft_assertion_call()], stop_reason="tool_use"),
+        model_response(tool_uses=[_finalize_plan_call()], stop_reason="tool_use"),
+        model_response(tool_uses=[_finish_call(True)], stop_reason="tool_use"),
+    ]
+    llm = StubLlmProvider(responses)
+    planner_input = PlannerInput(
+        variant="novel_technique",
+        proposal_id="prop-ok",
+        submission_kind="novel_technique",
+        technique_description="t",
+        pool_summary="",
+    )
+    result = await run_planner_session(
+        input=planner_input,
+        llm=llm,  # type: ignore[arg-type]
+        workspace_path=tmp_path / "ws",
+        artifact_store=artifact_store,  # type: ignore[arg-type]
+        config=AgentLoopConfig(max_turns=10),
+    )
+    assert result.buffer.finalized is True
+    assert result.artifact_key in artifact_store._data
+
+
+@pytest.mark.asyncio
+async def test_finalize_plan_reprompts_self_correct_after_bad_dataset(
+    tmp_path: Path,
+) -> None:
+    """The end-to-end self-correct path: first call ships a bad dataset →
+    projection rejects → re-prompt fires → agent re-issues set_conditions
+    with the typed-dict shape → finalize_plan succeeds. The bug under fix
+    was that the planner had no in-loop signal to correct on; this test
+    confirms the signal is delivered AND the re-prompt machinery can pick
+    up the corrected buffer to a successful finalize."""
+    artifact_store = StubArtifactStore()
+    bad = {
+        "dataset": "MNIST",
+        "optimization": {"optimizer": "sgd", "lr": 0.1},
+        "seeds": [0, 1],
+    }
+    good = {
+        "dataset": {"name": "MNIST", "split": "standard"},
+        "optimization": {"optimizer": "sgd", "lr": 0.1},
+        "seeds": [0, 1],
+    }
+    responses = [
+        # First loop run: classification → technique → CG → BAD conditions
+        # → assertion → finalize (rejected by projection) → finish(False).
+        model_response(tool_uses=[_set_classification_call()], stop_reason="tool_use"),
+        model_response(
+            tool_uses=[_draft_create_technique_call(symbolic_name="tech-cutout")],
+            stop_reason="tool_use",
+        ),
+        model_response(tool_uses=[_draft_comparison_call()], stop_reason="tool_use"),
+        model_response(tool_uses=[_set_conditions_call_with(bad)], stop_reason="tool_use"),
+        model_response(tool_uses=[_draft_assertion_call()], stop_reason="tool_use"),
+        model_response(tool_uses=[_finalize_plan_call()], stop_reason="tool_use"),
+        model_response(tool_uses=[_finish_call(False)], stop_reason="tool_use"),
+        # Round-6 re-prompt fires; second loop run corrects conditions
+        # then re-finalizes.
+        model_response(tool_uses=[_set_conditions_call_with(good)], stop_reason="tool_use"),
+        model_response(tool_uses=[_finalize_plan_call()], stop_reason="tool_use"),
+        model_response(tool_uses=[_finish_call(True)], stop_reason="tool_use"),
+    ]
+    llm = StubLlmProvider(responses)
+    planner_input = PlannerInput(
+        variant="novel_technique",
+        proposal_id="prop-self-correct",
+        submission_kind="novel_technique",
+        technique_description="t",
+        pool_summary="",
+    )
+    result = await run_planner_session(
+        input=planner_input,
+        llm=llm,  # type: ignore[arg-type]
+        workspace_path=tmp_path / "ws",
+        artifact_store=artifact_store,  # type: ignore[arg-type]
+        config=AgentLoopConfig(max_turns=20),
+        max_finalize_reprompts=3,
+    )
+    assert result.buffer.finalized is True
+    assert result.finalize_reprompts == 1
+    assert result.artifact_key in artifact_store._data

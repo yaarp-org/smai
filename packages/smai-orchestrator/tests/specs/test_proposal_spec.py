@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 from _e1_fakes import (  # type: ignore[import-not-found]
@@ -507,6 +508,229 @@ async def test_design_finalized_gate_blocks_on_unfinalized_buffer(  # type: igno
     rec = await sqlite_store.get_proposal("prop-block")
     assert rec is not None
     assert rec.state == "designing", f"gate should block; got {rec.state}"
+
+
+# === Round-8 fix B: registration retry exhaustion → failed terminal =========
+
+
+def test_proposal_designed_edges_order_per_round8_fix_b(  # type: ignore[no-untyped-def]
+    proposal_spec,
+) -> None:
+    """``designed → failed (registration retry exhausted)`` must be declared
+    BEFORE ``designed → registered (user approved)`` so the terminal gate
+    wins once the budget is exhausted.
+
+    Pre-round-8 the approval edge came first; with ``user_decision="approved"``
+    a registration handler returning errors would re-fire indefinitely
+    instead of terminating.
+    """
+    designed_edges = [e for e in proposal_spec.edges if e.from_state == "designed"]
+    by_name = [e.name for e in designed_edges]
+    failed_idx = next(i for i, n in enumerate(by_name) if "registration retry exhausted" in n)
+    approved_idx = next(i for i, n in enumerate(by_name) if "user approved" in n)
+    assert failed_idx < approved_idx, (
+        f"registration-exhausted edge must come before user-approved "
+        f"so the terminal gate wins; got order {by_name}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_proposal_registration_retry_exhaustion_lands_in_failed(  # type: ignore[no-untyped-def]
+    sqlite_store,
+    localfs: LocalFsStore,
+    tmp_path: Path,
+) -> None:
+    """Repeated registration failures advance the proposal to ``failed``
+    (not another retry) once ``registration_attempt >= max_registration_attempts``.
+
+    The reproduced bug: a buffer that passes ``finalize_plan`` (rules
+    1..10 checked field presence) but cannot be projected to
+    ``ExperimentDocument`` (e.g. ``controlled_conditions.dataset`` as a
+    bare string instead of a dict) wedged the proposal in ``designed``
+    forever: ``user_decision="approved"`` kept firing the approval gate,
+    the registration handler kept erroring, and the registration-
+    exhausted terminal gate was declaration-ordered *after* approval so
+    it never fired. round-8 fix B reorders the edges; this test confirms
+    the terminal is reached and ``last_error`` reflects the projection
+    failure.
+    """
+    planner_llm = StubLlmProvider([])  # no planner runs — we pre-stage everything
+    spec = build_proposal_pipeline_spec(
+        workspace_root=tmp_path / "ws",
+        llm_for_planner=planner_llm,  # type: ignore[arg-type]
+        require_human_approval=True,
+        max_registration_attempts=2,
+    )
+    config = EngineConfig(supervisor_enabled=False)
+
+    # Pre-stage a finalized but un-projectable buffer.
+    proposal_id = "prop-reg-fail"
+    plan_key = DESIGN_PLAN_KEY_TEMPLATE.format(proposal_id=proposal_id)
+    payload = build_finalized_buffer_payload(
+        proposal_id=proposal_id,
+        cg_drafts=[
+            {
+                "id": "cg-1",
+                "factor_dimension": "augmentation",
+                "factor_type": "additive",
+                "controlled_conditions": {
+                    "dataset": "MNIST",  # WRONG — bare string instead of dict
+                    "optimization": {"optimizer": "sgd", "lr": 0.1},
+                    "seeds": [0, 1],
+                },
+            }
+        ],
+        finalized=True,
+    )
+    await localfs.put(plan_key, json.dumps(payload).encode("utf-8"))
+
+    # Seed the proposal already in ``designed`` with the user-decision
+    # set to "approved" so the registration-time gates fire.
+    from datetime import UTC, datetime  # noqa: PLC0415
+
+    proposal = make_proposal_record(proposal_id=proposal_id, state="designed")
+    proposal = proposal.model_copy(
+        update={
+            "user_decision": "approved",
+            "user_decided_at": datetime.now(UTC),
+        }
+    )
+    await sqlite_store.create_proposal(proposal)
+
+    # Drive cycles until terminal.
+    final_state: str | None = None
+    for _ in range(10):
+        await run_worker_cycle(
+            spec=spec.engine_spec(),
+            metadata_store=sqlite_store,
+            artifact_store=localfs,  # type: ignore[arg-type]
+            compute=_NoComputeStub(),  # type: ignore[arg-type]
+            llm_providers=None,
+            config=config,
+        )
+        rec = await sqlite_store.get_proposal(proposal_id)
+        assert rec is not None
+        if rec.state in {"registered", "rejected", "failed"}:
+            final_state = rec.state
+            break
+
+    assert final_state == "failed", f"expected failed; got {final_state}"
+    final = await sqlite_store.get_proposal(proposal_id)
+    assert final is not None
+    # The terminal gate fired AFTER registration_attempt reached the cap.
+    assert final.registration_attempt >= 2
+    # ``last_error`` reflects the registration failure (set by the
+    # dispatch-failure rollback before the terminal gate fired; the
+    # terminal gate's CAS preserves it).
+    assert final.last_error is not None
+    assert "register" in final.last_error.lower() or "project" in final.last_error.lower()
+
+    # No CGs were created (registration kept failing).
+    cgs = await sqlite_store.list_cgs_for_proposal(proposal_id)
+    assert len(cgs.items) == 0
+
+    # The terminal transition is recorded in ``transition_log`` with the
+    # right edge name + gate-outcome reason.
+    from sqlalchemy import text  # noqa: PLC0415
+
+    async with await sqlite_store.transaction() as tx:
+        conn: Any = tx.connection
+        result = await conn.execute(
+            text(
+                "SELECT from_state, to_state, edge_name, gate_outcome_reason "
+                "FROM transition_log WHERE entity_kind = :k AND entity_id = :i "
+                "ORDER BY id"
+            ),
+            {"k": "proposal", "i": proposal_id},
+        )
+        rows = [dict(r) for r in result.mappings().all()]
+    terminal_rows = [r for r in rows if (r["from_state"], r["to_state"]) == ("designed", "failed")]
+    assert len(terminal_rows) == 1, f"expected one designed→failed row; got {rows}"
+    assert "registration retry exhausted" in terminal_rows[0]["edge_name"]
+    assert "registration retry budget exhausted" in (terminal_rows[0]["gate_outcome_reason"] or "")
+
+
+@pytest.mark.asyncio
+async def test_proposal_quiesces_after_registration_failure_terminal(  # type: ignore[no-untyped-def]
+    sqlite_store,
+    localfs: LocalFsStore,
+    tmp_path: Path,
+) -> None:
+    """Once the proposal lands in ``failed`` via the registration-exhausted
+    gate, further worker cycles produce no new transitions — the terminal
+    is sticky."""
+    planner_llm = StubLlmProvider([])
+    spec = build_proposal_pipeline_spec(
+        workspace_root=tmp_path / "ws",
+        llm_for_planner=planner_llm,  # type: ignore[arg-type]
+        require_human_approval=True,
+        max_registration_attempts=2,
+    )
+    config = EngineConfig(supervisor_enabled=False)
+
+    proposal_id = "prop-reg-fail-quiesce"
+    plan_key = DESIGN_PLAN_KEY_TEMPLATE.format(proposal_id=proposal_id)
+    payload = build_finalized_buffer_payload(
+        proposal_id=proposal_id,
+        cg_drafts=[
+            {
+                "id": "cg-1",
+                "factor_dimension": "augmentation",
+                "factor_type": "additive",
+                "controlled_conditions": {
+                    "dataset": "MNIST",  # bare-string projection failure
+                    "optimization": {"optimizer": "sgd", "lr": 0.1},
+                    "seeds": [0, 1],
+                },
+            }
+        ],
+        finalized=True,
+    )
+    await localfs.put(plan_key, json.dumps(payload).encode("utf-8"))
+    from datetime import UTC, datetime  # noqa: PLC0415
+
+    proposal = make_proposal_record(proposal_id=proposal_id, state="designed").model_copy(
+        update={
+            "user_decision": "approved",
+            "user_decided_at": datetime.now(UTC),
+        }
+    )
+    await sqlite_store.create_proposal(proposal)
+
+    # Drive to terminal.
+    for _ in range(10):
+        await run_worker_cycle(
+            spec=spec.engine_spec(),
+            metadata_store=sqlite_store,
+            artifact_store=localfs,  # type: ignore[arg-type]
+            compute=_NoComputeStub(),  # type: ignore[arg-type]
+            llm_providers=None,
+            config=config,
+        )
+        rec = await sqlite_store.get_proposal(proposal_id)
+        if rec is not None and rec.state == "failed":
+            break
+    pre_quiesce = await sqlite_store.get_proposal(proposal_id)
+    assert pre_quiesce is not None
+    assert pre_quiesce.state == "failed"
+    pre_version = pre_quiesce.version
+    pre_attempt = pre_quiesce.registration_attempt
+
+    # Drive more cycles; nothing should change.
+    for _ in range(3):
+        await run_worker_cycle(
+            spec=spec.engine_spec(),
+            metadata_store=sqlite_store,
+            artifact_store=localfs,  # type: ignore[arg-type]
+            compute=_NoComputeStub(),  # type: ignore[arg-type]
+            llm_providers=None,
+            config=config,
+        )
+    post = await sqlite_store.get_proposal(proposal_id)
+    assert post is not None
+    assert post.state == "failed"
+    assert post.version == pre_version
+    assert post.registration_attempt == pre_attempt
 
 
 # === Compute stub ===========================================================

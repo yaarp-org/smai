@@ -1044,8 +1044,8 @@ def _draft_technique_to_paper_ref(
     to a :class:`TechniqueRef` with a :class:`PaperFidelityAnchor`
     pointing at this paper.
 
-    Mirrors :func:`smai_orchestrator.specs.proposal._draft_technique_to_ref`
-    but always anchors at the paper (paper-ingestion variant produces
+    Mirrors :func:`smai_core.draft_technique_to_ref` but always anchors
+    at the paper (paper-ingestion variant produces
     ``TechniqueRef``s only — no proposal anchor path). Standard
     techniques carry no anchor per DEC-015.
     """
