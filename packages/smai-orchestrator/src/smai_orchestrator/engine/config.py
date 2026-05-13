@@ -172,6 +172,28 @@ class EngineConfig(BaseModel):
     :class:`EngineConfig`. Ignored when :attr:`supervisor_enabled` is
     ``False``."""
 
+    # ---- Per-role agent models (round-7) --------------------------------
+
+    role_models: dict[str, str] = Field(default_factory=dict)
+    """Per-role agent-model override map (round-7). Keyed by
+    :data:`smai_agents.model_selection.TaskRole` name (``planner`` /
+    ``harness_builder`` / ``technique_implementer`` / ``code_reviewer`` /
+    ``contextual_evaluator`` / ``supervisor`` / ``screener`` /
+    ``enricher``); each value is a bare model id understood by the
+    configured :attr:`PluginSelection.llm_provider` (cross-provider
+    per-role routing is out of scope — use ``SMAI_MODEL_<ROLE>`` for
+    that). Roles absent from this map fall back to
+    :data:`smai_agents.model_selection.TASK_DEFAULTS`.
+
+    Precedence (per ``09-cli.md`` §2, round-7): the ``SMAI_MODEL_<ROLE>``
+    env var (equivalently the nested ``SMAI_ENGINE__ROLE_MODELS__<ROLE>``
+    form) wins over this map, which in turn wins over ``TASK_DEFAULTS``.
+    Layered through :func:`smai_cli.config.load_runtime_config` like every
+    other ``EngineConfig`` field; the CLI folds the configured provider
+    name in and hands the resulting map to
+    :func:`smai_agents.model_selection.get_model_for_task` via the
+    per-role :class:`LlmProvider` builder."""
+
     # ---- Runtime container images (round-4 friction A) -------------------
 
     runtime_image: str = "smai-runtime:dev"

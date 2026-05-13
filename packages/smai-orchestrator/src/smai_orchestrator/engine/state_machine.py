@@ -56,6 +56,14 @@ class DriveOutcome:
     * ``dispatch_failed_rolled_back`` — the dispatch handler returned
       :class:`DispatchOutcome` with ``error`` non-None (or raised);
       the engine rolled the entity back to the edge's ``from_state``.
+    * ``dispatch_failed_routed`` — the dispatch handler failed, but a
+      spec-declared ``dispatch_time`` error/retry-exhausted edge fired
+      (e.g. a ``*_failed`` terminal), so the entity advanced there with
+      ``last_error`` recorded rather than rolling back. A *failure*
+      outcome from the worker-stats point of view (tallied under
+      ``phase3_dispatch_failed``, not ``phase3_advanced``) — the
+      per-dispatch ``outcome=failed`` log line already covers the
+      transition's visibility.
     * ``lease_held`` — phase-3 dispatch lease (per `05` §3.5 / DEC-035
       #2) is currently held by another worker. The dispatch never
       fired; the entity stays in its current state for the next cycle.
@@ -72,6 +80,7 @@ class DriveOutcome:
         "advanced",
         "conflict",
         "dispatch_failed_rolled_back",
+        "dispatch_failed_routed",
         "lease_held",
     ]
     fired_edge: EdgeDef | None = None

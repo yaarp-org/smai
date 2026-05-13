@@ -14,18 +14,34 @@ a three-step write-first sequence:
    (``DispatchAction.handle_field``).
 
 If step 2 raises (or returns :class:`DispatchOutcome` with a non-None
-``error``), the engine forward-rolls-back the entity's state — a
-version-incrementing CAS write that resets the state field to the
-edge's ``from_state`` (preserving version monotonicity per `05` §1.4).
+``error``), or an external dispatch returns no :class:`JobHandle`, the
+engine routes through :func:`_handle_dispatch_failure` (round-6 fix for
+the "proposal wedged in ``designing`` forever" friction):
 
-If the worker crashes between steps 1 and 2, phase-1 orphan detection
-(:mod:`phase1`) finds the entity in an in-progress state with a null
-handle past ``orphan_grace_seconds`` and resets it.
+1. **Re-read the entity for a fresh version** — the handler may itself
+   have done field-only writes (e.g. a retry-counter bump via
+   ``transition_*_state`` with the state held) which moved the row's
+   ``version``; a rollback CAS keyed on the pre-handler version would
+   spuriously conflict and strand the entity in its dispatch state with
+   a null handle, invisible to the phase-1 re-discovery query.
+2. **Re-evaluate the dispatch state's ``dispatch_time`` edges** — if a
+   spec-declared error edge fires (e.g. a ``*_failed`` retry-exhausted
+   terminal whose gate reads the just-bumped counter), CAS-transition
+   there with ``last_error`` recorded.
+3. **Otherwise forward-roll-back to ``edge.from_state``** — a
+   version-incrementing CAS write (never a decrement, per `05` §1.4),
+   ``last_error`` recorded, so the entity is re-discovered and
+   re-dispatched and the retry budget converges toward step 2's edge.
+
+If the worker crashes between steps 1 and 2 of the write-first
+sequence, phase-1 orphan detection (:mod:`phase1`) finds the entity in
+an in-progress state with a null handle past ``orphan_grace_seconds``
+and resets it.
 
 For inline dispatches (``handle_field=None``) the same shape holds:
 step 1 transitions, step 2 runs the handler synchronously, step 3 is
-a no-op (no handle to record). Failures in step 2 still trigger the
-forward-rolled-back path.
+a no-op (no handle to record). Failures in step 2 still route through
+:func:`_handle_dispatch_failure`.
 """
 
 from __future__ import annotations
@@ -349,11 +365,12 @@ async def _handle_dispatch_failure(  # noqa: PLR0913
     both cases.
 
     Returns:
-        ``DriveOutcome`` with ``status="advanced"`` (a spec error-
-        handling edge fired), ``status="dispatch_failed_rolled_back"``
-        (rolled back to ``edge.from_state``), or ``status="conflict"``
-        (a peer moved the entity out from under us; the next cycle
-        reconciles).
+        ``DriveOutcome`` with ``status="dispatch_failed_routed"`` (a
+        spec error-handling edge fired — still a *failure* for stats
+        purposes), ``status="dispatch_failed_rolled_back"`` (rolled back
+        to ``edge.from_state``), or ``status="conflict"`` (a peer moved
+        the entity out from under us; the next cycle reconciles). Both
+        non-conflict outcomes record ``last_error``.
     """
     # Lazy import to break the dispatch ↔ state_machine import cycle.
     from smai_orchestrator.engine.state_machine import (  # noqa: PLC0415
@@ -404,7 +421,10 @@ async def _handle_dispatch_failure(  # noqa: PLR0913
             )
         except ConflictError:
             return DriveOutcome(status="conflict", fired_edge=edge, error=error)
-        return DriveOutcome(status="advanced", fired_edge=fail_edge, error=error)
+        # A *failure* that was routed to a spec error/retry-exhausted
+        # edge — not a clean advance. Worker stats tally this under
+        # ``phase3_dispatch_failed``, not ``phase3_advanced``.
+        return DriveOutcome(status="dispatch_failed_routed", fired_edge=fail_edge, error=error)
 
     # No spec-declared error-handling edge fired — forward-roll-back so
     # the entity is re-discovered and re-dispatched.

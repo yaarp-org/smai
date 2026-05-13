@@ -59,20 +59,32 @@ def test_task_defaults_bounded_roles_use_sonnet() -> None:
 # --- Resolution order ---------------------------------------------------------
 
 
-def test_overrides_take_precedence_over_env() -> None:
-    """SystemConfig override is the first rung of the resolution ladder."""
+def test_env_takes_precedence_over_config_override() -> None:
+    """Round-7: ``SMAI_MODEL_<ROLE>`` wins over the config override map."""
     overrides: dict[TaskRole, tuple[str, str]] = {
-        "planner": ("anthropic", "custom-model"),
+        "planner": ("bedrock", "config-model"),
     }
     env = {"SMAI_MODEL_PLANNER": "bedrock:env-model"}
     assert get_model_for_task("planner", overrides=overrides, env=env) == (
-        "anthropic",
-        "custom-model",
+        "bedrock",
+        "env-model",
+    )
+
+
+def test_config_override_takes_precedence_over_default() -> None:
+    """The config override map (``engine.role_models``) beats TASK_DEFAULTS
+    when no env var is set."""
+    overrides: dict[TaskRole, tuple[str, str]] = {
+        "planner": ("bedrock", "us.anthropic.claude-sonnet-4-6"),
+    }
+    assert get_model_for_task("planner", overrides=overrides, env={}) == (
+        "bedrock",
+        "us.anthropic.claude-sonnet-4-6",
     )
 
 
 def test_env_var_takes_precedence_over_default() -> None:
-    """SMAI_MODEL_<ROLE> overrides TASK_DEFAULTS when no SystemConfig override."""
+    """SMAI_MODEL_<ROLE> overrides TASK_DEFAULTS when no config override."""
     env = {"SMAI_MODEL_HARNESS_BUILDER": "bedrock:qwen.qwen3-coder-next"}
     assert get_model_for_task("harness_builder", env=env) == (
         "bedrock",

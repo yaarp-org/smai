@@ -231,8 +231,8 @@ def smai_dev(
             "--verbose",
             "-v",
             count=True,
-            help="-v → INFO worker/engine logging; -vv → DEBUG. Default WARNING. "
-            "Overridden by SMAI_LOG_LEVEL when neither is set.",
+            help="Increase log verbosity: -v = INFO, -vv = DEBUG. With no -v flag, "
+            "the SMAI_LOG_LEVEL env var is used (default WARNING).",
         ),
     ] = 0,
 ) -> None:
@@ -650,6 +650,20 @@ engine:
   poll_interval_seconds: 10
   worker_count: 1
   fair_scheduling: "off"
+  # Per-role agent-model overrides. Each value is a bare model id
+  # understood by the `llm_provider` selected below; roles you omit fall
+  # back to the built-in per-role defaults (Opus tier for planner /
+  # harness_builder / technique_implementer / code_reviewer, Sonnet tier
+  # for the bounded single-call roles). Precedence: the env var
+  # `SMAI_MODEL_<ROLE>` (e.g. `SMAI_MODEL_PLANNER=bedrock:<id>`, which
+  # also lets one role use a different provider) > this map >
+  # built-in defaults. The nested env form `SMAI_ENGINE__ROLE_MODELS__PLANNER`
+  # also works. (Roles: planner, harness_builder, technique_implementer,
+  # code_reviewer, contextual_evaluator, supervisor, screener, enricher.)
+  role_models: {}
+  #   role_models:
+  #     planner: us.anthropic.claude-opus-4-6-v1
+  #     code_reviewer: us.anthropic.claude-sonnet-4-6
 
 plugins:
   llm_provider: bedrock
@@ -1647,8 +1661,8 @@ def smai_start(
             "--verbose",
             "-v",
             count=True,
-            help="-v → INFO worker/engine logging; -vv → DEBUG. Default WARNING. "
-            "Overridden by SMAI_LOG_LEVEL when neither is set.",
+            help="Increase log verbosity: -v = INFO, -vv = DEBUG. With no -v flag, "
+            "the SMAI_LOG_LEVEL env var is used (default WARNING).",
         ),
     ] = 0,
 ) -> None:

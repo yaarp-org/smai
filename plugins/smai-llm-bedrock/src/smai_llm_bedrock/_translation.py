@@ -39,6 +39,7 @@ implementation (per DEC-020 carry-forward).
 
 from __future__ import annotations
 
+import logging
 from typing import Any, cast
 
 from smai_core.plugins import (
@@ -54,6 +55,14 @@ from smai_core.plugins import (
     ToolDefinition,
     ToolUseContent,
 )
+
+_log = logging.getLogger(__name__)
+
+# Bedrock Converse rejects a request carrying more than this many
+# ``cachePoint`` markers ("A maximum of 4 blocks with cache_control may be
+# provided."). Enforced plugin-side regardless of what ``CacheConfig`` asks
+# for, so a future config bump can't crash the agent loop.
+_MAX_CACHE_POINTS = 4
 
 
 def to_converse_messages(messages: list[NormalizedMessage]) -> list[dict[str, Any]]:
@@ -126,38 +135,64 @@ def apply_cache_points(
     ``capabilities.supports_caching`` is True; ignore it (silently)
     otherwise."
 
-    The placement matches v1's ``ConverseClient.applyCacheHints`` plus
-    the v2 expansion to also cache the system prompt under
-    ``cache_static_prefix`` (per the spec language in §4.3:
-    "tool definitions and system prompt"; v1 only cached tools).
+    Bedrock evaluates cache prefixes in ``tools -> system -> messages``
+    order, so a single checkpoint placed *after* the tool definitions
+    already covers (caches) the system prompt that follows. Hence
+    ``cache_static_prefix`` emits exactly ONE static marker: on
+    ``toolConfig.tools`` when tools are present, else on the ``system``
+    block (so a no-tools call still gets a static checkpoint). Never
+    both — that was the v2 bug that pushed the budget to 5 and made
+    Bedrock reject every multi-turn request.
+
+    Budget (v1 ``prompt_caching.md`` §2/§4): ``1 static + 1
+    initial-message + 2 rolling = 4`` — exactly Bedrock's 4-block
+    ceiling. A defensive clamp keeps the total at :data:`_MAX_CACHE_POINTS`
+    even if a future :class:`CacheConfig` raises ``rolling_cache_count``
+    above 2; the oldest rolling markers are dropped first (the rolling
+    tail's job is to cache the *most-recent* expensive tool results).
     """
     if not capabilities.supports_caching:
         return
 
+    static_budget = 0
     if cache_config.cache_static_prefix:
-        if tool_config is not None:
-            tools_list = tool_config.get("tools")
-            if isinstance(tools_list, list):
-                cast("list[Any]", tools_list).append({"cachePoint": {"type": "default"}})
-        if system_blocks:
+        tools_list = tool_config.get("tools") if tool_config is not None else None
+        if isinstance(tools_list, list):
+            cast("list[Any]", tools_list).append({"cachePoint": {"type": "default"}})
+            static_budget += 1
+        elif system_blocks:
             system_blocks.append({"cachePoint": {"type": "default"}})
+            static_budget += 1
 
-    if (
+    initial_message_marked = (
         cache_config.cache_initial_message
-        and converse_messages
+        and bool(converse_messages)
         and converse_messages[0].get("role") == "user"
-    ):
+    )
+    if initial_message_marked:
         first_content = converse_messages[0].get("content")
         if isinstance(first_content, list):
             cast("list[Any]", first_content).append({"cachePoint": {"type": "default"}})
+            static_budget += 1
 
     rolling = cache_config.rolling_cache_count
     if rolling > 0:
+        rolling_cap = max(0, _MAX_CACHE_POINTS - static_budget)
+        effective_rolling = min(rolling, rolling_cap)
+        if effective_rolling < rolling:
+            _log.warning(
+                "cache_control budget: clamped rolling_cache_count %d -> %d "
+                "(Bedrock allows at most %d cachePoint markers per request)",
+                rolling,
+                effective_rolling,
+                _MAX_CACHE_POINTS,
+            )
         placed = 0
         # Walk newest → oldest, skipping index 0 which is owned by
-        # cache_initial_message above.
+        # cache_initial_message above. Dropping the oldest rolling
+        # markers first falls out of newest-first iteration + the cap.
         for idx in range(len(converse_messages) - 1, 0, -1):
-            if placed >= rolling:
+            if placed >= effective_rolling:
                 break
             msg = converse_messages[idx]
             if msg.get("role") != "user":

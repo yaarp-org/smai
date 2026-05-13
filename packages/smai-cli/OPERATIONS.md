@@ -420,6 +420,18 @@ few that bite in practice:
   not available for this account` until the model is enabled in the
   Bedrock console for that region. `smai verify` surfaces this with a
   hint pointing at `aws bedrock list-inference-profiles --region <r>`.
+- **Per-role agent models live under `engine.role_models`, not
+  `llm_provider_config.model_id`.** `llm_provider_config.model_id` is
+  the provider's base model; the agent fleet runs per-role models (Opus
+  tier for `planner` / `harness_builder` / `technique_implementer` /
+  `code_reviewer`, Sonnet tier for the bounded single-call roles). To
+  pin a role to a specific model add it under `engine.role_models`
+  (value = a bare model id for the configured `llm_provider`); to route
+  one role to a *different* provider set `SMAI_MODEL_<ROLE>` to the
+  `provider:model_id` form. Precedence: `SMAI_MODEL_<ROLE>` (or the
+  nested `SMAI_ENGINE__ROLE_MODELS__<ROLE>` env form) > `engine.role_models`
+  > built-in defaults. Make sure every model you name is enabled in the
+  relevant region/account — a wrong id fails the agent dispatch, not boot.
 
 ---
 

@@ -188,13 +188,14 @@ async def test_repeated_failures_reach_failed_terminal_with_last_error(
     config = EngineConfig()
 
     final_state: str | None = None
+    last_outcome_status: str | None = None
     for _ in range(6):
         rec = await sqlite_store.get_proposal("prop_wedge_test")
         assert rec is not None
         if rec.state in {"failed", "registered", "rejected"}:
             final_state = rec.state
             break
-        await drive_entity_phase3(
+        outcome = await drive_entity_phase3(
             spec=spec,
             metadata_store=sqlite_store,
             artifact_store=fake_artifact_store,
@@ -203,8 +204,13 @@ async def test_repeated_failures_reach_failed_terminal_with_last_error(
             config=config,
             record=rec,
         )
+        last_outcome_status = outcome.status
 
     assert final_state == "failed", f"got {final_state}"
+    # The hop that routed the proposal to the ``failed`` terminal is
+    # reported as a *failure* (``dispatch_failed_routed``), not a clean
+    # ``advanced`` — so the worker tallies it under phase3_dispatch_failed.
+    assert last_outcome_status == "dispatch_failed_routed"
     final = await sqlite_store.get_proposal("prop_wedge_test")
     assert final is not None
     assert final.last_error == "planner did not finalize"

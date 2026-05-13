@@ -278,6 +278,7 @@ engine:
   # runtime_image / runtime_cpu_image: GPU vs CPU container images for
   # experiment seed runs (defaults: smai-runtime:dev / smai-runtime-cpu:dev).
   # The run-record dispatcher picks per the CG's compute.gpu flag.
+  role_models: {}                  # per-role agent-model overrides; see below
 
 plugins:
   llm_provider:   bedrock          # bedrock | anthropic | openai
@@ -317,6 +318,17 @@ api:
 | `runpod` | `api_base`, `default_gpu_type` (`NVIDIA RTX A4000`), `default_timeout_seconds` (`3600`), `max_timeout_seconds`, `default_container_disk_gb` (`10`) | `RUNPOD_API_KEY` |
 
 Per-submit knobs like a Compute job's `gpu_type` / `cpu` / `memory_mb` (Modal) or `workspace` (localgpu) are *job* options the engine passes per dispatch, not constructor keys, so they don't go in `compute_config`.
+
+**Per-role agent models.** `plugins.llm_provider_config.model_id` is the provider's *base* model, not what the agent fleet runs — each agent role has its own model (Opus tier for `planner` / `harness_builder` / `technique_implementer` / `code_reviewer`, Sonnet tier for `contextual_evaluator` / `supervisor` / `screener` / `enricher`). Override per role under `engine.role_models` — each value is a bare model id understood by the configured `llm_provider`:
+
+```yaml
+engine:
+  role_models:
+    planner: us.anthropic.claude-opus-4-6-v1
+    code_reviewer: us.anthropic.claude-sonnet-4-6
+```
+
+Precedence (highest first): the `SMAI_MODEL_<ROLE>` env var (e.g. `SMAI_MODEL_PLANNER=bedrock:us.anthropic.claude-opus-4-6-v1` — the `provider:model_id` form, the only way to route a single role to a *different* provider) — equivalently the nested `SMAI_ENGINE__ROLE_MODELS__PLANNER` form — then `engine.role_models`, then the built-in per-role defaults. Cross-provider routing for a role *via `engine.role_models`* is not supported (the value is just a model id); use the env var for that. Roles: `planner`, `harness_builder`, `technique_implementer`, `code_reviewer`, `contextual_evaluator`, `supervisor`, `screener`, `enricher`.
 
 The same file works for `smai dev` and `smai start`. Swapping
 `sqlite`→`postgres`, `localfs`→`s3`, `localgpu`→`modal`/`runpod` is the

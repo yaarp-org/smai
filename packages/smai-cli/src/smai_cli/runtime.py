@@ -1424,11 +1424,20 @@ class Runtime:
         # overridden by the caller.
         overrides = plugin_overrides or PluginOverrides()
         if overrides.llm_providers is None:
-            roles_overrides = (
-                _parse_per_role_overrides(per_role_overrides)
-                if per_role_overrides is not None
-                else None
+            # Config-supplied per-role overrides (``engine.role_models``):
+            # each value is a bare model id, paired with the configured
+            # ``llm_provider`` name. The explicit ``per_role_overrides``
+            # arg (``"<provider>:<model_id>"`` form) layers on top; the
+            # ``SMAI_MODEL_<ROLE>`` env var (read inside
+            # ``get_model_for_task``) wins over both.
+            roles_overrides: dict[TaskRole, tuple[str, str]] = _role_models_to_overrides(
+                config.engine.role_models, config.plugins.llm_provider
             )
+            if per_role_overrides is not None:
+                roles_overrides = {
+                    **roles_overrides,
+                    **_parse_per_role_overrides(per_role_overrides),
+                }
             try:
                 llm_providers = build_per_role_llm_providers(
                     config.plugins,
@@ -1652,6 +1661,28 @@ class Runtime:
             )
             stats_per_spec.append(stats)
         return stats_per_spec
+
+
+def _role_models_to_overrides(
+    role_models: Mapping[str, str], provider_name: str
+) -> dict[TaskRole, tuple[str, str]]:
+    """Pair each bare model id in ``engine.role_models`` with the
+    configured ``llm_provider`` name to form the
+    :func:`get_model_for_task` overrides shape.
+
+    Per-role cross-provider routing is intentionally not expressible
+    here (use ``SMAI_MODEL_<ROLE>`` for that, round-7 brief item B.4
+    backlog) — ``role_models`` values are bare model ids only.
+    """
+    from typing import cast as _cast  # noqa: PLC0415
+
+    out: dict[TaskRole, tuple[str, str]] = {}
+    for role, model_id in role_models.items():
+        model_id = model_id.strip()
+        if not model_id:
+            raise ValueError(f"engine.role_models[{role!r}] must be a non-empty model id")
+        out[_cast(TaskRole, role)] = (provider_name, model_id)
+    return out
 
 
 def _parse_per_role_overrides(

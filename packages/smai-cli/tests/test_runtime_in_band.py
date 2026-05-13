@@ -245,6 +245,81 @@ async def test_runtime_can_be_re_entered_after_exit(tmp_path: Path) -> None:
             del _runtime
 
 
+@pytest.mark.asyncio
+async def test_engine_role_models_selects_per_role_llm_model(tmp_path: Path) -> None:
+    """``engine.role_models`` flows into the per-role :class:`LlmProvider`
+    build — the planner instance resolves to the configured model id while
+    sibling roles stay on the :data:`TASK_DEFAULTS` model."""
+    config = RuntimeConfig(
+        engine=EngineConfig(
+            poll_interval_seconds=10,
+            role_models={"planner": "us.anthropic.claude-sonnet-4-6"},
+        ),
+        plugins=PluginSelection(
+            llm_provider="bedrock",
+            metadata_store="sqlite",
+            artifact_store="localfs",
+            compute="localgpu",
+            metadata_store_config={"uri": "sqlite+aiosqlite:///:memory:"},
+            llm_provider_config={"region": "us-east-1"},
+        ),
+        pipelines=["smai_cg_execution", "smai_cg_entries"],
+    )
+    # llm_providers left None -> the real per-role build path runs (it
+    # constructs BedrockProvider instances, no network at construction).
+    overrides = PluginOverrides(
+        artifact_store=LocalFsStore(tmp_path / "artifacts"),
+        compute=FakeCompute(),
+    )
+    async with Runtime.start_in_band(
+        config,
+        workspace_root=tmp_path / "workspaces",
+        plugin_overrides=overrides,
+        run_worker=False,
+        env={},
+    ) as runtime:
+        providers = runtime._state.plugins.llm_providers  # noqa: SLF001 — test introspection
+        assert getattr(providers["planner"], "model_id", None) == "us.anthropic.claude-sonnet-4-6"
+        # harness_builder is not in role_models -> still on the Opus default.
+        assert getattr(providers["harness_builder"], "model_id", None) == (
+            "us.anthropic.claude-opus-4-6-v1"
+        )
+
+
+@pytest.mark.asyncio
+async def test_smai_model_env_overrides_engine_role_models(tmp_path: Path) -> None:
+    """``SMAI_MODEL_<ROLE>`` wins over ``engine.role_models`` (round-7
+    precedence chain: env > config override > TASK_DEFAULTS)."""
+    config = RuntimeConfig(
+        engine=EngineConfig(
+            poll_interval_seconds=10,
+            role_models={"planner": "us.anthropic.claude-sonnet-4-6"},
+        ),
+        plugins=PluginSelection(
+            llm_provider="bedrock",
+            metadata_store="sqlite",
+            artifact_store="localfs",
+            compute="localgpu",
+            metadata_store_config={"uri": "sqlite+aiosqlite:///:memory:"},
+            llm_provider_config={"region": "us-east-1"},
+        ),
+        pipelines=["smai_cg_execution", "smai_cg_entries"],
+    )
+    overrides = PluginOverrides(
+        artifact_store=LocalFsStore(tmp_path / "artifacts"),
+        compute=FakeCompute(),
+    )
+    async with Runtime.start_in_band(
+        config,
+        workspace_root=tmp_path / "workspaces",
+        plugin_overrides=overrides,
+        run_worker=False,
+        env={"SMAI_MODEL_PLANNER": "bedrock:env-wins-model"},
+    ) as runtime:
+        providers = runtime._state.plugins.llm_providers  # noqa: SLF001 — test introspection
+        assert getattr(providers["planner"], "model_id", None) == "env-wins-model"
+
+
 def test_experiments_service_constructed_via_runtime_property() -> None:
     """Property access exposes the bound :class:`ExperimentsService`."""
     # Instance-level smoke check; full lifecycle in async tests above.

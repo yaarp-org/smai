@@ -60,6 +60,7 @@ Response shape::
 
 from __future__ import annotations
 
+import logging
 from typing import Any, cast
 
 from smai_core.plugins import (
@@ -77,6 +78,12 @@ from smai_core.plugins import (
 )
 
 _CACHE_CONTROL_EPHEMERAL: dict[str, Any] = {"type": "ephemeral"}
+
+_log = logging.getLogger(__name__)
+
+# The Anthropic API rejects a request carrying more than this many
+# ``cache_control`` blocks. Same ceiling as Bedrock; enforced plugin-side.
+_MAX_CACHE_CONTROL_BLOCKS = 4
 
 
 def to_anthropic_messages(messages: list[NormalizedMessage]) -> list[dict[str, Any]]:
@@ -142,27 +149,36 @@ def apply_cache_control(
     incoming ``system_blocks`` unchanged.
 
     Anthropic's cache-marker placement follows the docs' "mark the last
-    item of the prefix you want to cache" rule. The mapping from the
-    spec's :class:`CacheConfig` to Anthropic markers:
+    item of the prefix you want to cache" rule, and Anthropic — like
+    Bedrock — evaluates cache prefixes in ``tools -> system -> messages``
+    order, so a single marker on the last tool definition already caches
+    the system prompt that follows. The mapping from the spec's
+    :class:`CacheConfig` to Anthropic markers:
 
-    * ``cache_static_prefix`` — mark the last tool definition (if any)
-      AND the system prompt (promoted to a list of typed blocks if
-      currently a string).
+    * ``cache_static_prefix`` — mark the last tool definition if any
+      tools are present, else the last system block. Exactly one static
+      marker, never both (marking both burns a ``cache_control`` slot
+      and risks blowing the 4-block ceiling on multi-turn requests).
     * ``cache_initial_message`` — mark the last content block of the
       first user message.
     * ``rolling_cache_count`` — mark the last content block of the
       ``rolling_cache_count`` most-recent user messages, walking newest
       → oldest, skipping index 0 (owned by ``cache_initial_message``
-      above).
+      above). Clamped so the request never carries more than
+      :data:`_MAX_CACHE_CONTROL_BLOCKS` markers; the oldest rolling
+      markers are dropped first.
     """
     if not capabilities.supports_caching:
         return system_blocks
 
+    static_budget = 0
     if cache_config.cache_static_prefix:
         if tools:
             tools[-1]["cache_control"] = _CACHE_CONTROL_EPHEMERAL
-        if system_blocks:
+            static_budget += 1
+        elif system_blocks:
             system_blocks[-1]["cache_control"] = _CACHE_CONTROL_EPHEMERAL
+            static_budget += 1
 
     if (
         cache_config.cache_initial_message
@@ -173,12 +189,23 @@ def apply_cache_control(
         if isinstance(first_content, list) and first_content:
             last_block = cast("list[dict[str, Any]]", first_content)[-1]
             last_block["cache_control"] = _CACHE_CONTROL_EPHEMERAL
+            static_budget += 1
 
     rolling = cache_config.rolling_cache_count
     if rolling > 0:
+        rolling_cap = max(0, _MAX_CACHE_CONTROL_BLOCKS - static_budget)
+        effective_rolling = min(rolling, rolling_cap)
+        if effective_rolling < rolling:
+            _log.warning(
+                "cache_control budget: clamped rolling_cache_count %d -> %d "
+                "(Anthropic allows at most %d cache_control blocks per request)",
+                rolling,
+                effective_rolling,
+                _MAX_CACHE_CONTROL_BLOCKS,
+            )
         placed = 0
         for idx in range(len(anthropic_messages) - 1, 0, -1):
-            if placed >= rolling:
+            if placed >= effective_rolling:
                 break
             msg = anthropic_messages[idx]
             if msg.get("role") != "user":

@@ -57,19 +57,26 @@ def test_env_var_override_routes_one_role_to_a_distinct_instance() -> None:
     assert providers["planner"] is not providers["harness_builder"]
 
 
-def test_explicit_overrides_take_precedence_over_env() -> None:
-    """The ``overrides`` dict wins (per :func:`get_model_for_task`'s
-    resolution order)."""
+def test_env_takes_precedence_over_explicit_overrides() -> None:
+    """Round-7 reordering: ``SMAI_MODEL_<ROLE>`` wins over the config
+    override map (per :func:`get_model_for_task`'s resolution order)."""
     env = {"SMAI_MODEL_PLANNER": "bedrock:env-route"}
     overrides: dict[TaskRole, tuple[str, str]] = {
-        cast(TaskRole, "planner"): ("bedrock", "explicit-route"),
+        cast(TaskRole, "planner"): ("bedrock", "config-route"),
     }
     providers = build_per_role_llm_providers(_selection(), env=env, overrides=overrides)
-    # The explicit override is shared with any other role that
-    # resolves to the same tuple — but "explicit-route" is unique to
-    # planner here, so its instance is distinct.
-    planner_provider = providers["planner"]
-    assert getattr(planner_provider, "model_id", None) == "explicit-route"
+    assert getattr(providers["planner"], "model_id", None) == "env-route"
+
+
+def test_config_override_beats_default_when_no_env() -> None:
+    """With no env var, the config override map selects the model."""
+    overrides: dict[TaskRole, tuple[str, str]] = {
+        cast(TaskRole, "planner"): ("bedrock", "config-route"),
+    }
+    providers = build_per_role_llm_providers(_selection(), env={}, overrides=overrides)
+    assert getattr(providers["planner"], "model_id", None) == "config-route"
+    # Other roles are untouched -> still on the TASK_DEFAULTS model.
+    assert getattr(providers["harness_builder"], "model_id", None) != "config-route"
 
 
 def test_unsupported_provider_raises() -> None:

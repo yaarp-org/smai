@@ -110,6 +110,13 @@ class WorkerCycleStats:
     phase3_no_match: int = 0
     phase3_conflict: int = 0
     phase3_dispatch_failed: int = 0
+    """Per-cycle count of phase-3 dispatch failures, covering both the
+    ``dispatch_failed_rolled_back`` outcome (entity rolled back to
+    ``from_state`` for re-dispatch) and ``dispatch_failed_routed``
+    (entity advanced to a spec-declared error/retry-exhausted edge with
+    ``last_error`` recorded). A failed-and-routed dispatch is NOT
+    counted under :attr:`phase3_advanced` — it is a failure, just one
+    the spec had an error path for."""
     phase3_skipped_pool_full: int = 0
     phase3_lease_held: int = 0
     """Per-cycle count of phase-3 candidates skipped because another
@@ -318,7 +325,11 @@ async def _drive_phase3_for_records(  # noqa: PLR0913
                 stats.phase3_no_match += 1
             case "conflict":
                 stats.phase3_conflict += 1
-            case "dispatch_failed_rolled_back":
+            case "dispatch_failed_rolled_back" | "dispatch_failed_routed":
+                # Both are dispatch *failures*: one rolled the entity
+                # back to ``from_state`` to be re-dispatched, the other
+                # routed it to a spec-declared error/retry-exhausted edge.
+                # Neither is a clean ``phase3_advanced``.
                 stats.phase3_dispatch_failed += 1
             case "lease_held":
                 stats.phase3_lease_held += 1
