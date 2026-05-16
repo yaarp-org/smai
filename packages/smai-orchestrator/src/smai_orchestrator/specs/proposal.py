@@ -106,7 +106,6 @@ from smai_core.entities.technique import TechniqueRef
 from smai_core.plugins import (
     ArtifactNotFound,
     ArtifactStore,
-    ConflictError,
     LlmProvider,
 )
 
@@ -118,6 +117,7 @@ from smai_orchestrator.engine.types import (
     EdgeDef,
     GateContext,
     GateOutcome,
+    RetryPolicy,
     SchedulingQueryRef,
     StateDef,
 )
@@ -272,29 +272,6 @@ def _make_gate_design_finalized(
     return _gate
 
 
-def _make_gate_design_failed_terminal(
-    *,
-    max_design_attempts: int,
-) -> Callable[[GateContext], Awaitable[GateOutcome]]:
-    """``designing → failed`` (job_failed, design_failed_terminal).
-
-    Same predicate inverted — fires when retry budget is exhausted.
-    """
-
-    async def _gate(ctx: GateContext) -> GateOutcome:
-        proposal = await ctx.metadata_store.get_proposal(ctx.entity_id)
-        if proposal is None:
-            return GateOutcome(advance=False, reason="proposal not found")
-        if proposal.design_attempt >= max_design_attempts:
-            return GateOutcome(
-                advance=True,
-                reason="design retry budget exhausted; terminal",
-            )
-        return GateOutcome(advance=False, reason="design retry budget remaining")
-
-    return _gate
-
-
 def _make_gate_user_approved(
     *,
     require_human_approval: bool,
@@ -341,38 +318,6 @@ def _make_gate_user_rejected() -> Callable[[GateContext], Awaitable[GateOutcome]
     return _gate
 
 
-def _make_gate_registration_exhausted(
-    *,
-    max_registration_attempts: int,
-) -> Callable[[GateContext], Awaitable[GateOutcome]]:
-    """``designed → failed`` (dispatch_time, registration retry exhausted).
-
-    Same predicate shape as :func:`_make_gate_design_failed_terminal`:
-    fires when the registration retry budget on
-    :attr:`ProposalRecord.registration_attempt` is exhausted. The handler
-    bumps the attempt counter on the (re-)entry into ``registered`` so
-    the budget converges across retries (mirrors the ``designing → failed``
-    retry-exhausted gate's design_attempt bump).
-
-    Declaration-ordered ahead of the ``user_approved`` / ``user_rejected``
-    edges in :func:`build_proposal_pipeline_spec` so the terminal gate
-    wins once the budget is exhausted (round-8 fix B).
-    """
-
-    async def _gate(ctx: GateContext) -> GateOutcome:
-        proposal = await ctx.metadata_store.get_proposal(ctx.entity_id)
-        if proposal is None:
-            return GateOutcome(advance=False, reason="proposal not found")
-        if proposal.registration_attempt >= max_registration_attempts:
-            return GateOutcome(
-                advance=True,
-                reason="registration retry budget exhausted; terminal",
-            )
-        return GateOutcome(advance=False, reason="registration retry budget remaining")
-
-    return _gate
-
-
 # === Dispatch handlers ======================================================
 
 
@@ -400,24 +345,10 @@ def _make_dispatch_planner(
             make_dispatch_planner,
         )
 
-        # Bump ``design_attempt`` on the (re-)entry into the design
-        # dispatch so the ``design_failed_terminal`` gate
-        # (``max_design_attempts``) sees a real count rather than 0.
-        # Matches the ``cg_execution.py`` counter-bump pattern: a
-        # field-only ``transition_*_state`` preserving the current
-        # state. Best-effort on CAS conflict (a peer already moved the
-        # proposal) — the planner run still proceeds.
-        proposal = await ctx.metadata_store.get_proposal(ctx.entity_id)
-        if proposal is not None:
-            try:
-                await ctx.metadata_store.transition_proposal_state(
-                    proposal.id,
-                    proposal.version,
-                    proposal.state,  # pyright: ignore[reportArgumentType] — field-only update
-                    design_attempt=proposal.design_attempt + 1,
-                )
-            except ConflictError:
-                pass
+        # Round 10: ``design_attempt`` is bumped by the engine on
+        # step-1's CAS via the :class:`RetryPolicy` declared on the
+        # designing-state's dispatch action (see
+        # :func:`build_proposal_pipeline_spec`). No manual bump here.
 
         # Override ctx.llm with the per-role planner provider.
         # DispatchContext is a Pydantic model; copy with the override.
@@ -470,22 +401,9 @@ def _make_dispatch_registered(
         proposal_id = ctx.entity_id
         plan_key = design_plan_artifact_key_for(proposal_id)
 
-        # Bump ``registration_attempt`` on the (re-)entry into the
-        # registration dispatch so the ``registration_exhausted`` gate
-        # (``max_registration_attempts``) sees a real count rather than
-        # 0. Field-only ``transition_*_state`` preserving the current
-        # state, best-effort on CAS conflict — mirrors ``cg_execution.py``.
-        reg_proposal = await ctx.metadata_store.get_proposal(proposal_id)
-        if reg_proposal is not None:
-            try:
-                await ctx.metadata_store.transition_proposal_state(
-                    reg_proposal.id,
-                    reg_proposal.version,
-                    reg_proposal.state,  # pyright: ignore[reportArgumentType] — field-only update
-                    registration_attempt=reg_proposal.registration_attempt + 1,
-                )
-            except ConflictError:
-                pass
+        # Round 10: ``registration_attempt`` is bumped by the engine on
+        # step-1's CAS via the :class:`RetryPolicy` declared on the
+        # registered-state's dispatch action.
 
         # === Read the planner buffer ========================================
         try:
@@ -803,6 +721,12 @@ def build_proposal_pipeline_spec(
                 ),
                 pool=POOL_PROPOSAL_PIPELINE,
                 handle_field="planner_job_handle",
+                retry_policy=RetryPolicy(
+                    attempt_counter_field="design_attempt",
+                    max_attempts=max_design_attempts,
+                    on_exhaustion_target_state="failed",
+                    on_exhaustion_reason="design retry budget exhausted; terminal",
+                ),
             ),
         ),
         StateDef(name="designed"),
@@ -817,6 +741,12 @@ def build_proposal_pipeline_spec(
                     design_plan_artifact_key_for=design_plan_key_fn,
                 ),
                 pool=POOL_PROPOSAL_PIPELINE,
+                retry_policy=RetryPolicy(
+                    attempt_counter_field="registration_attempt",
+                    max_attempts=max_registration_attempts,
+                    on_exhaustion_target_state="failed",
+                    on_exhaustion_reason="registration retry budget exhausted; terminal",
+                ),
             ),
         ),
         StateDef(name="rejected", is_terminal=True),
@@ -850,34 +780,26 @@ def build_proposal_pipeline_spec(
             ),
             fires_on="dispatch_time",
         ),
-        EdgeDef(
-            name="proposal.designing → failed (retry exhausted)",
-            from_state="designing",
-            target_state="failed",
-            gate_rule=_make_gate_design_failed_terminal(
-                max_design_attempts=max_design_attempts,
-            ),
-            fires_on="dispatch_time",
-        ),
-        # Edges off ``designed`` — declaration-ordered: retry-exhausted
-        # terminal FIRST so a registration retry budget exhaustion (e.g.
-        # the handler repeatedly returns an error because the buffer
-        # cannot be projected) wins over the user-approved gate; if the
-        # approval gate fired first we would loop the proposal back to
-        # ``registered`` forever, never reaching the ``failed`` terminal
-        # (round-8 fix B; mirrors the ``designing → failed`` retry-
-        # exhausted gate's declaration order). Rejection sits between the
-        # two — a user rejection short-circuits a still-budgeted
-        # registration retry.
-        EdgeDef(
-            name="proposal.designed → failed (registration retry exhausted)",
-            from_state="designed",
-            target_state="failed",
-            gate_rule=_make_gate_registration_exhausted(
-                max_registration_attempts=max_registration_attempts,
-            ),
-            fires_on="dispatch_time",
-        ),
+        # ``designing → failed (retry exhausted)`` is engine-synthesized
+        # from the designing-state's :class:`RetryPolicy` (round 10).
+        # Pre-round-10 this was the manual
+        # ``_make_gate_design_failed_terminal`` factory + an explicit
+        # ``EdgeDef`` declared here.
+        #
+        # ``designed → failed (registration retry exhausted)`` is also
+        # engine-synthesized — but on the ``registered`` state's
+        # dispatch failure, not on a re-entry-into-``designed`` gate
+        # check. The behavioral shift: pre-round-10 a registration-handler
+        # error rolled the proposal back ``registered → designed``, and
+        # the manually-declared ``designed → failed (registration retry
+        # exhausted)`` gate fired on the *next* worker cycle's phase-3
+        # off ``designed``. Post-round-10 the synthesized terminal fires
+        # in :func:`_handle_dispatch_failure` directly off ``registered``
+        # the same cycle the handler errored — one fewer round-trip,
+        # but the same final state (``failed`` with ``last_error``).
+        # transition_log shows ``registered → failed`` instead of
+        # ``designed → failed``; ``gate_outcome_reason`` matches the
+        # pre-round-10 wording per :attr:`RetryPolicy.on_exhaustion_reason`.
         EdgeDef(
             name="proposal.designed → rejected (user rejected)",
             from_state="designed",

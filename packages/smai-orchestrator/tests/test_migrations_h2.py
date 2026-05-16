@@ -64,12 +64,15 @@ def _load_initial_revision_module() -> ModuleType:
 def test_head_revision_is_latest_default_revision() -> None:
     """The shipped default-branch head walks to the latest revision.
 
-    Round-9 added ``0003_cg_symbolic_id`` downstream of
-    ``0001_initial_schema`` to add the CG record's ``symbolic_id`` column.
+    Round 10 added ``0004_cg_implementation_phase_attempt`` downstream
+    of ``0003_cg_symbolic_id`` to add the CG record's
+    ``implementation_phase_attempt`` counter (the round-10 declarative
+    retry-bookkeeping primitive needs a per-CG counter for the
+    ``implementing`` dispatch action's :class:`RetryPolicy`).
     The tenant_aware branch (``0002``) sits on a separate root and does
     not affect the default head.
     """
-    assert get_head_revision() == "0003_cg_symbolic_id"
+    assert get_head_revision() == "0004_cg_impl_phase_attempt"
 
 
 async def test_upgrade_to_head_creates_every_table() -> None:

@@ -104,6 +104,8 @@ cgs_table: Table = Table(
     # Code-review state (DEC-016)
     Column("code_review_attempt", Integer, nullable=False, default=0),
     Column("code_review_result_hash", String(64), nullable=True),
+    # Implementation-phase retry counter (round 10).
+    Column("implementation_phase_attempt", Integer, nullable=False, default=0),
     # Common (BasePipelineRecord, §5.2.1 + §5.2.6)
     Column("version", Integer, nullable=False, default=0),
     Column("created_at", DateTime(timezone=True), nullable=False),

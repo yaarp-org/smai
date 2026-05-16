@@ -25,7 +25,7 @@ from smai_orchestrator.engine import (
     EngineSpec,
     GateContext,
     GateOutcome,
-    RetryPolicy,
+    RetryBackoffConfig,
     StateDef,
     default_time_provider,
     default_wall_clock,
@@ -86,8 +86,8 @@ def test_default_time_provider_is_monotonic() -> None:
     assert default_time_provider is time.monotonic
 
 
-def test_retry_policy_defaults() -> None:
-    p = RetryPolicy(max_attempts=3)
+def test_retry_backoff_config_defaults() -> None:
+    p = RetryBackoffConfig(max_attempts=3)
     assert p.backoff_seconds == 30
     assert p.backoff_multiplier == 2.0
 

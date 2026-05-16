@@ -188,6 +188,73 @@ class DispatchOutcome(BaseModel):
 DispatchHandler = Callable[[DispatchContext], Awaitable[DispatchOutcome]]
 
 
+class RetryPolicy(BaseModel):
+    """Declarative retry bookkeeping for a :class:`DispatchAction` (round 10).
+
+    Decentralized retry bookkeeping was the root cause of four rounds of
+    "the system has no terminal failure gate for state X's retry budget"
+    friction (rounds 5 / 6 / 8 / 10): each dispatched state had to manually
+    bump its retry counter from inside the handler AND register a
+    ``*_failed (retry exhausted)`` edge against itself. Forget either and
+    the dispatch infinite-loops on errors. ``RetryPolicy`` centralizes
+    both — the engine reads this declaration to:
+
+    1. **Bump the counter on step-1 CAS.** When :func:`run_dispatch` fires
+       the write-first transition into the dispatch state, the counter
+       field listed here is included in the same ``fields=`` payload so
+       the bump rides the state-transition CAS — no separate write, no
+       version-bump race against the handler's own writes.
+    2. **Synthesize a retry-exhausted terminal edge** in
+       :func:`_handle_dispatch_failure`. When the handler fails, the
+       engine prepends a synthesized edge to the dispatch state's
+       outgoing-edge evaluation: ``<dispatch_state> → <on_exhaustion_target_state>``
+       whose gate is "``record.<attempt_counter_field>`` >=
+       :attr:`max_attempts`". The synthesized edge fires before any
+       spec-declared manual edges, matching the round-8 declaration-
+       order ordering ("retry-exhausted terminal pre-empts retry-one-
+       more-time" — the gate that fires when the budget is exhausted
+       MUST win over the gate that would otherwise re-fire the dispatch).
+
+    Spec authors who want unbounded retries leave ``retry_policy=None``;
+    that is the explicit opt-out shape. Every dispatched state with an
+    ``*_attempt`` counter on its record SHOULD declare one — see
+    :file:`packages/smai-orchestrator/src/smai_orchestrator/specs/RETRY_POLICY.md`.
+
+    The companion CONTRIBUTING note: spec authors MUST NOT manually bump
+    these counters in dispatch handler bodies, and MUST NOT manually
+    declare ``*_failed (retry exhausted)`` edges — the engine does both
+    when the policy is set, and double-bumping or duplicate-edge
+    declarations are bugs.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    attempt_counter_field: str
+    """Name of the integer field on the entity record to bump on each
+    dispatch entry (e.g. ``"design_attempt"``). The field must exist on
+    every record kind this :class:`DispatchAction` can target."""
+
+    max_attempts: int
+    """The retry-budget cap. The synthesized terminal edge fires when
+    ``record.<attempt_counter_field>`` reaches this value — i.e. the
+    *N*-th attempt has completed. Mirrors the manual gate predicate the
+    round-5..8 friction installed:
+    ``record.<attempt_counter_field> >= max_attempts``."""
+
+    on_exhaustion_target_state: str
+    """State name the synthesized terminal edge transitions into when
+    the budget is exhausted (e.g. ``"failed"``,
+    ``"implementation_failed"``). The state must be declared on the spec;
+    the engine asserts this at spec construction."""
+
+    on_exhaustion_reason: str
+    """:class:`GateOutcome.reason` text recorded on the synthesized
+    edge's ``transition_log`` row. Use the same wording the manual
+    gates used pre-round-10 so audit queries (e.g.
+    ``WHERE gate_outcome_reason LIKE '%retry budget exhausted%'``)
+    keep matching."""
+
+
 class DispatchAction(BaseModel):
     """A typed handler attached to a state's on-entry slot (`05` §1.4).
 
@@ -204,6 +271,12 @@ class DispatchAction(BaseModel):
     an entry, ``compute_job_handle`` on a run). The engine stays
     entity-kind-agnostic by reading this name from the spec rather
     than hard-coding the mapping. ``None`` for inline dispatches.
+
+    ``retry_policy`` (round 10) makes per-state retry bookkeeping
+    declarative — the engine bumps the counter on step-1 CAS and
+    synthesizes a retry-exhausted terminal edge when the policy is set.
+    ``None`` (the default) means "no retry budget" — the dispatch can
+    fail indefinitely. See :class:`RetryPolicy`.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
@@ -212,6 +285,7 @@ class DispatchAction(BaseModel):
     handler: DispatchHandler
     pool: str
     handle_field: str | None = None
+    retry_policy: RetryPolicy | None = None
 
 
 class StateDef(BaseModel):
@@ -392,6 +466,7 @@ __all__ = [
     "GateOutcome",
     "GateRule",
     "PhaseTrigger",
+    "RetryPolicy",
     "SchedulingQueryRef",
     "StateDef",
 ]

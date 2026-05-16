@@ -1,21 +1,25 @@
-"""Retry-counter increments — observability follow-up, item 1.
+"""Retry-counter increments after the round-10 RetryPolicy refactor.
 
-Pass A wired three retry counters that the retry-budget gates read but
-that nothing incremented:
+Pre-round-10 these counters were bumped by hand inside each dispatch
+handler, and the budget gates lived as manual ``EdgeDef``s declared
+alongside the happy-path edges. Round 10 lifted both into a declarative
+:class:`RetryPolicy` declaration on :class:`DispatchAction`:
 
-* ``proposal.design_attempt`` — bumped on each (re-)entry into the
-  planner dispatch (``specs/proposal.py``); the ``designing → failed``
-  gate (``max_design_attempts``) reads it.
-* ``proposal.registration_attempt`` — bumped on each (re-)entry into the
-  registration dispatch (``specs/proposal.py``); the ``designed → failed``
-  gate (``max_registration_attempts``) reads it.
-* ``run.run_attempt`` — bumped on each (re-)entry into the run-compute
-  submit dispatch (``specs/run_record.py``).
+* The engine bumps the counter on step-1's CAS (riding the state-
+  transition write) — every spec that previously had a manual
+  ``transition_*_state(..., <counter>=record.<counter>+1)`` call inside
+  a dispatch handler now relies on this.
+* The engine synthesizes a retry-exhausted terminal edge in
+  :func:`_handle_dispatch_failure` whose gate predicate is
+  ``record.<counter> >= max_attempts`` — every spec that previously
+  registered a manual ``*_failed (retry exhausted)`` edge now relies on
+  this.
 
-These tests assert the counters actually move and that the proposal
-retry-budget gates fire once the count meets the cap. (There is no
-``max_run_attempts`` gate in v1 — ``specs/run_record.py`` only references
-a hypothetical future one — so for runs we assert the increment only.)
+These tests confirm the new behavior is byte-equivalent to the old
+manual machinery (counters still move, retry-budget terminals still
+fire at the same cap). The engine-level synthesis primitives have
+deeper-coverage tests in :mod:`tests.engine.test_retry_policy_synthesis`;
+this module covers the spec-level wiring.
 """
 
 from __future__ import annotations
@@ -23,7 +27,6 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
-import pytest
 from _e1_fakes import (  # type: ignore[import-not-found]
     make_planner_responses_for_finalize,
     make_proposal_record,
@@ -39,11 +42,9 @@ from _specs_fakes import (  # type: ignore[import-not-found]
 )
 from smai_artifacts_localfs import LocalFsStore
 from smai_orchestrator.engine.config import EngineConfig
-from smai_orchestrator.engine.types import DispatchContext, GateContext
+from smai_orchestrator.engine.types import DispatchContext
 from smai_orchestrator.entities.tracking import RunRecord
 from smai_orchestrator.specs.proposal import (
-    _make_gate_design_failed_terminal,
-    _make_gate_registration_exhausted,
     build_proposal_pipeline_spec,
 )
 from smai_orchestrator.specs.run_record import _make_dispatch_run_compute_submit
@@ -111,17 +112,19 @@ class _InlineComputeStub:
         del handle
 
 
-# === run_attempt: increment on each (re-)entry into the submit dispatch ===
+# === run_attempt: round-10 — engine bumps it on each step-1 CAS ============
 
 
-async def test_run_attempt_increments_on_each_redispatch(
+async def test_run_attempt_handler_does_not_bump_itself_post_round_10(
     sqlite_store: SqliteStore,
     localfs_store: LocalFsStore,
 ) -> None:
-    """``run.run_attempt`` goes 0 → 1 → 2 across two invocations of the
-    ``submitted`` on-entry dispatch handler (the engine re-enters this
-    handler when a run is forward-rolled-back to ``pending`` and
-    re-dispatched)."""
+    """Direct call to the dispatch handler: round-10 moved the
+    ``run_attempt`` bump out of the handler body and into the engine's
+    step-1 CAS. A direct invocation of the handler (bypassing the
+    engine) MUST NOT bump the counter on its own — that would
+    double-count once the engine bump goes through.
+    """
     cg_id = "cg-ra"
     await sqlite_store.create_cg(make_cg(cg_id=cg_id, state="running"))
     await sqlite_store.create_entry(
@@ -137,7 +140,7 @@ async def test_run_attempt_increments_on_each_redispatch(
 
     fake_compute = FakeCompute()
     fake_compute.enqueue_submit_handle(make_job_handle("ra-handle-1"))
-    ctx1 = DispatchContext(
+    ctx = DispatchContext(
         entity_kind="run",
         entity_id="run-ra",
         entity_state="submitted",
@@ -149,20 +152,13 @@ async def test_run_attempt_increments_on_each_redispatch(
         config=EngineConfig(),
         checkpointer=None,
     )
-    outcome1 = await handler(ctx1)
-    assert outcome1.error is None
-    after1 = await sqlite_store.get_run("run-ra")
-    assert after1 is not None
-    assert after1.run_attempt == 1
-
-    # Second (re-)dispatch — fresh ctx at the bumped version, fresh handle.
-    fake_compute.enqueue_submit_handle(make_job_handle("ra-handle-2"))
-    ctx2 = ctx1.model_copy(update={"entity_version": after1.version})
-    outcome2 = await handler(ctx2)
-    assert outcome2.error is None
-    after2 = await sqlite_store.get_run("run-ra")
-    assert after2 is not None
-    assert after2.run_attempt == 2
+    outcome = await handler(ctx)
+    assert outcome.error is None
+    # The handler MUST NOT have bumped ``run_attempt`` itself — the
+    # bump happens in the engine's step-1 CAS, which we bypassed here.
+    after = await sqlite_store.get_run("run-ra")
+    assert after is not None
+    assert after.run_attempt == 0
 
 
 # === design_attempt + registration_attempt: bump once per round trip ===
@@ -173,10 +169,12 @@ async def test_design_and_registration_attempts_bump_on_dispatch(
     localfs_store: LocalFsStore,
     tmp_path: Path,
 ) -> None:
-    """A clean proposal_submitted → registered round trip runs the
-    planner dispatch once and the registration dispatch once, so
-    ``design_attempt`` and ``registration_attempt`` each end at 1
-    (they started at 0)."""
+    """A clean proposal_submitted → registered round trip transitions
+    into ``designing`` once (engine bumps ``design_attempt`` to 1) and
+    into ``registered`` once (engine bumps ``registration_attempt`` to
+    1). The handler bodies themselves are no longer responsible for the
+    bump — the engine writes it on step-1's CAS.
+    """
     planner_responses = make_planner_responses_for_finalize(
         proposal_id="prop-counters",
         cg_drafts=[{"id": "cg-1", "factor_dimension": "augmentation", "factor_type": "additive"}],
@@ -217,60 +215,66 @@ async def test_design_and_registration_attempts_bump_on_dispatch(
     assert final.registration_attempt == 1
 
 
-# === retry-budget gates fire once the counter meets the cap ===
+# === RetryPolicy declarations on the spec's DispatchActions ================
 
 
-def _proposal_gate_ctx(store: SqliteStore, fs: LocalFsStore) -> GateContext:
-    return GateContext(
-        entity_kind="proposal",
-        entity_id="prop-gate",
-        entity_state="designing",
-        entity_version=0,
-        metadata_store=store,
-        artifact_store=fs,  # type: ignore[arg-type]
-        config=EngineConfig(),
-        job_outcome=None,
+def test_proposal_spec_designing_declares_retry_policy(tmp_path: Path) -> None:
+    """The ``designing`` state's :class:`DispatchAction` must carry the
+    round-10 :class:`RetryPolicy` — the engine reads this to know which
+    counter to bump on step-1 and which terminal edge to synthesize on
+    dispatch failure."""
+    planner_llm = StubLlmProvider([])
+    spec = build_proposal_pipeline_spec(
+        workspace_root=tmp_path / "ws",
+        llm_for_planner=planner_llm,  # type: ignore[arg-type]
+        require_human_approval=False,
+        max_design_attempts=2,
     )
+    designing = next(s for s in spec.states if s.name == "designing")
+    assert designing.on_entry_dispatch is not None
+    policy = designing.on_entry_dispatch.retry_policy
+    assert policy is not None
+    assert policy.attempt_counter_field == "design_attempt"
+    assert policy.max_attempts == 2
+    assert policy.on_exhaustion_target_state == "failed"
+    assert "design retry budget exhausted" in policy.on_exhaustion_reason
 
 
-@pytest.mark.parametrize(
-    ("design_attempt", "max_attempts", "expect_advance"),
-    [(0, 1, False), (1, 1, True), (1, 2, False), (2, 2, True), (3, 2, True)],
-)
-async def test_design_failed_terminal_gate_respects_budget(
-    sqlite_store: SqliteStore,
-    localfs_store: LocalFsStore,
-    design_attempt: int,
-    max_attempts: int,
-    expect_advance: bool,
-) -> None:
-    """``designing → failed`` fires iff ``design_attempt >= max_design_attempts``."""
-    proposal = make_proposal_record(proposal_id="prop-gate", state="designing")
-    proposal = proposal.model_copy(update={"design_attempt": design_attempt})
-    await sqlite_store.create_proposal(proposal)
-    gate = _make_gate_design_failed_terminal(max_design_attempts=max_attempts)
-    outcome = await gate(_proposal_gate_ctx(sqlite_store, localfs_store))
-    assert outcome.advance is expect_advance
-
-
-@pytest.mark.parametrize(
-    ("registration_attempt", "max_attempts", "expect_advance"),
-    [(0, 2, False), (1, 2, False), (2, 2, True), (3, 2, True)],
-)
-async def test_registration_exhausted_gate_respects_budget(
-    sqlite_store: SqliteStore,
-    localfs_store: LocalFsStore,
-    registration_attempt: int,
-    max_attempts: int,
-    expect_advance: bool,
-) -> None:
-    """``designed → failed`` fires iff ``registration_attempt >= max_registration_attempts``."""
-    proposal = make_proposal_record(proposal_id="prop-gate", state="designed")
-    proposal = proposal.model_copy(update={"registration_attempt": registration_attempt})
-    await sqlite_store.create_proposal(proposal)
-    gate = _make_gate_registration_exhausted(max_registration_attempts=max_attempts)
-    ctx = _proposal_gate_ctx(sqlite_store, localfs_store).model_copy(
-        update={"entity_state": "designed"}
+def test_proposal_spec_registered_declares_retry_policy(tmp_path: Path) -> None:
+    """The ``registered`` state's dispatch action carries a
+    :class:`RetryPolicy` for the registration handler — round-10 moved
+    the manual ``designed → failed (registration retry exhausted)``
+    terminal into engine synthesis off ``registered``."""
+    planner_llm = StubLlmProvider([])
+    spec = build_proposal_pipeline_spec(
+        workspace_root=tmp_path / "ws",
+        llm_for_planner=planner_llm,  # type: ignore[arg-type]
+        require_human_approval=False,
+        max_registration_attempts=2,
     )
-    outcome = await gate(ctx)
-    assert outcome.advance is expect_advance
+    registered = next(s for s in spec.states if s.name == "registered")
+    assert registered.on_entry_dispatch is not None
+    policy = registered.on_entry_dispatch.retry_policy
+    assert policy is not None
+    assert policy.attempt_counter_field == "registration_attempt"
+    assert policy.max_attempts == 2
+    assert policy.on_exhaustion_target_state == "failed"
+    assert "registration retry budget exhausted" in policy.on_exhaustion_reason
+
+
+def test_proposal_spec_has_no_manual_retry_exhausted_edges(tmp_path: Path) -> None:
+    """Round 10 removed every manual ``*_failed (retry exhausted)``
+    :class:`EdgeDef` — the engine synthesizes them now. A regression in
+    which a spec author re-introduces a manual edge alongside the
+    :class:`RetryPolicy` would double-evaluate and break the round-8
+    declaration-order rule."""
+    planner_llm = StubLlmProvider([])
+    spec = build_proposal_pipeline_spec(
+        workspace_root=tmp_path / "ws",
+        llm_for_planner=planner_llm,  # type: ignore[arg-type]
+        require_human_approval=False,
+    )
+    edge_names = [e.name for e in spec.edges]
+    assert not any("retry exhausted" in n for n in edge_names), (
+        f"unexpected manual retry-exhausted edges still in spec: {edge_names}"
+    )

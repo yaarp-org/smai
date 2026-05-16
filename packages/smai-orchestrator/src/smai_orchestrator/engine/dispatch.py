@@ -72,6 +72,8 @@ from smai_orchestrator.engine.types import (
     EdgeDef,
     EngineSpec,
     GateContext,
+    GateOutcome,
+    RetryPolicy,
     StateDef,
 )
 
@@ -140,6 +142,24 @@ async def run_dispatch(  # noqa: PLR0913
     from smai_orchestrator.engine.state_machine import DriveOutcome
 
     # ---- Step 1: CAS state to the target ---------------------------------
+    # Round 10: when the target action declares a ``retry_policy``, the
+    # engine bundles the attempt-counter bump into step-1's CAS (same
+    # ``fields=`` payload as the state transition) so the bookkeeping
+    # rides with the state move — no separate write, no version race
+    # against handler-internal writes, and no chance for spec authors to
+    # forget the bump (the old failure mode that round 5 patched
+    # piecemeal across three handlers). Reading the counter requires a
+    # pre-CAS ``get_entity`` call (per-dispatch overhead, conditional on
+    # the policy being set); the version-check on the CAS catches any
+    # racy mismatch.
+    step1_fields: dict[str, object] = {}
+    action = target_state.on_entry_dispatch
+    if action is not None and action.retry_policy is not None:
+        retry_policy = action.retry_policy
+        current_record = await get_entity(metadata_store, spec.entity_kind, entity_id)
+        if current_record is not None:
+            current_count = getattr(current_record, retry_policy.attempt_counter_field, 0)
+            step1_fields[retry_policy.attempt_counter_field] = current_count + 1
     try:
         post_transition_record = await transition_state(
             metadata_store,
@@ -147,7 +167,7 @@ async def run_dispatch(  # noqa: PLR0913
             entity_id,
             expected_version,
             target_state.name,
-            fields={},
+            fields=step1_fields,
             event_channel=config.event_channel,
             from_state=edge.from_state,
             edge_name=edge.name,
@@ -158,7 +178,8 @@ async def run_dispatch(  # noqa: PLR0913
         return DriveOutcome(status="conflict", fired_edge=edge)
 
     # Two paths: terminal-or-no-dispatch vs. real dispatch action.
-    action = target_state.on_entry_dispatch
+    # ``action`` was bound above (alongside the retry-policy bookkeeping
+    # check); reuse it.
     if action is None:
         return DriveOutcome(
             status="advanced",
@@ -371,11 +392,20 @@ async def _handle_dispatch_failure(  # noqa: PLR0913
         to ``edge.from_state``), or ``status="conflict"`` (a peer moved
         the entity out from under us; the next cycle reconciles). Both
         non-conflict outcomes record ``last_error``.
+
+    Round 10 (declarative retry bookkeeping): when the dispatch action
+    declares a :class:`RetryPolicy`, a *synthesized* retry-exhausted
+    terminal edge participates in the edge re-evaluation. The
+    synthesized edge is evaluated FIRST (declaration-order-equivalent)
+    so it pre-empts any manual edge that would otherwise re-fire the
+    dispatch, matching the round-8 declaration-order rule. The
+    counter bump itself rides step-1's CAS in :func:`run_dispatch` —
+    by the time this function runs, the counter already reflects the
+    just-failed attempt.
     """
     # Lazy import to break the dispatch ↔ state_machine import cycle.
     from smai_orchestrator.engine.state_machine import (  # noqa: PLC0415
         DriveOutcome,
-        evaluate_outgoing_edges_with_outcome,
     )
 
     refreshed = await get_entity(metadata_store, spec.entity_kind, entity_id)
@@ -397,12 +427,31 @@ async def _handle_dispatch_failure(  # noqa: PLR0913
         config=config,
         job_outcome=None,
     )
-    evaluated = await evaluate_outgoing_edges_with_outcome(
-        spec=spec,
-        entity_state=target_state.name,
-        phase="dispatch_time",
-        gate_context=gate_context,
-    )
+    # Build the candidate edge list: synthesized retry-exhausted edge
+    # FIRST (if the action declares a RetryPolicy), then the spec's
+    # manually-declared dispatch_time edges from the dispatch state.
+    # This declaration-first-equivalent ordering is what makes the
+    # retry budget pre-empt any manual edges; matches the round-8
+    # declaration-order rule for the manual case that this synthesis
+    # replaces.
+    candidate_edges: list[EdgeDef] = []
+    action_for_policy = target_state.on_entry_dispatch
+    if action_for_policy is not None and action_for_policy.retry_policy is not None:
+        candidate_edges.append(
+            _synthesize_retry_exhausted_edge(
+                from_state=target_state.name,
+                policy=action_for_policy.retry_policy,
+            )
+        )
+    candidate_edges.extend(spec.edges_from(target_state.name, fires_on="dispatch_time"))
+
+    evaluated: tuple[EdgeDef, GateOutcome] | None = None
+    for candidate in candidate_edges:
+        outcome = await candidate.gate_rule(gate_context)
+        if outcome.advance:
+            evaluated = (candidate, outcome)
+            break
+
     if evaluated is not None:
         fail_edge, fail_outcome = evaluated
         try:
@@ -444,6 +493,53 @@ async def _handle_dispatch_failure(  # noqa: PLR0913
     except ConflictError:
         return DriveOutcome(status="conflict", fired_edge=edge, error=error)
     return DriveOutcome(status="dispatch_failed_rolled_back", fired_edge=edge, error=error)
+
+
+def _synthesize_retry_exhausted_edge(
+    *,
+    from_state: str,
+    policy: RetryPolicy,
+) -> EdgeDef:
+    """Build the engine-synthesized retry-exhausted terminal edge for
+    a :class:`RetryPolicy`-declaring :class:`DispatchAction` (round 10).
+
+    The edge participates in :func:`_handle_dispatch_failure`'s
+    candidate-list evaluation as if the spec author had declared it
+    themselves. Edge name encodes the synthesis so audit queries
+    against ``transition_log.edge_name`` can disambiguate engine-
+    synthesized terminals from manual ones — useful when reconciling
+    behavior across spec authors. ``gate_outcome_reason`` comes
+    straight from :attr:`RetryPolicy.on_exhaustion_reason` so audit
+    queries that match on the pre-round-10 reason strings (e.g.
+    ``WHERE gate_outcome_reason LIKE '%retry budget exhausted%'``)
+    keep matching.
+    """
+
+    async def _gate(ctx: GateContext) -> GateOutcome:
+        record = await get_entity(ctx.metadata_store, ctx.entity_kind, ctx.entity_id)
+        if record is None:
+            return GateOutcome(
+                advance=False,
+                reason=f"{ctx.entity_kind} record not found",
+            )
+        count = getattr(record, policy.attempt_counter_field, 0)
+        if count >= policy.max_attempts:
+            return GateOutcome(advance=True, reason=policy.on_exhaustion_reason)
+        return GateOutcome(
+            advance=False,
+            reason=(f"{policy.attempt_counter_field}={count} < max_attempts={policy.max_attempts}"),
+        )
+
+    return EdgeDef(
+        name=(
+            f"{from_state} → {policy.on_exhaustion_target_state} "
+            f"(synthesized retry-exhausted terminal)"
+        ),
+        from_state=from_state,
+        target_state=policy.on_exhaustion_target_state,
+        gate_rule=_gate,
+        fires_on="dispatch_time",
+    )
 
 
 async def reset_orphan(  # noqa: PLR0913

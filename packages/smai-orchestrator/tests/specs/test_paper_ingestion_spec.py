@@ -105,23 +105,41 @@ def test_paper_spec_edges_per_03_section_5_2(paper_spec) -> None:  # type: ignor
     triggers for the inline-dispatch edges; per the spec module's
     "spec ambiguities resolved" note (the inline-dispatch retraction
     that mirrors :mod:`smai_orchestrator.specs.proposal`'s pattern) the
-    spec uses ``dispatch_time`` for every edge. The expected
-    state-pair set survives unchanged.
+    spec uses ``dispatch_time`` for every edge.
+
+    Round 10: the manual ``*_failed (retry exhausted)`` edges off
+    ``fetching`` / ``screening`` / ``planning`` are gone — the engine
+    synthesizes them from the dispatch actions' :class:`RetryPolicy`
+    declarations (where one is declared). The ``fetching → failed``
+    edge was a placeholder pre-round-10 (gate always returned
+    advance=False; no counter on PaperRecord) and is dropped entirely.
     """
     by_pair = {(e.from_state, e.target_state) for e in paper_spec.edges}
     # ``submitted`` outgoing — content-already-extracted short-circuit + fetch.
     assert ("submitted", "screening") in by_pair
     assert ("submitted", "fetching") in by_pair
-    # ``fetching`` outgoing — success + retry-exhausted.
+    # ``fetching`` outgoing — success path only.
     assert ("fetching", "screening") in by_pair
-    assert ("fetching", "failed") in by_pair
-    # ``screening`` outgoing — accept / reject / retry-exhausted.
+    # ``screening`` outgoing — accept / reject. Retry-exhausted terminal
+    # is engine-synthesized off the dispatch action's RetryPolicy.
     assert ("screening", "planning") in by_pair
     assert ("screening", "rejected") in by_pair
-    assert ("screening", "failed") in by_pair
-    # ``planning`` outgoing — success + retry-exhausted.
+    # ``planning`` outgoing — success. Retry-exhausted terminal is
+    # engine-synthesized off the dispatch action's RetryPolicy.
     assert ("planning", "registered") in by_pair
-    assert ("planning", "failed") in by_pair
+
+    # Confirm the synthesis hooks: screening + planning dispatch
+    # actions declare :class:`RetryPolicy` targeting ``failed``.
+    screening = next(s for s in paper_spec.states if s.name == "screening")
+    assert screening.on_entry_dispatch is not None
+    screening_policy = screening.on_entry_dispatch.retry_policy
+    assert screening_policy is not None
+    assert screening_policy.on_exhaustion_target_state == "failed"
+    planning = next(s for s in paper_spec.states if s.name == "planning")
+    assert planning.on_entry_dispatch is not None
+    planning_policy = planning.on_entry_dispatch.retry_policy
+    assert planning_policy is not None
+    assert planning_policy.on_exhaustion_target_state == "failed"
 
 
 def test_paper_spec_partial_has_no_outgoing_edges(paper_spec) -> None:  # type: ignore[no-untyped-def]

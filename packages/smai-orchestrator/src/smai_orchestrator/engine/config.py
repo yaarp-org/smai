@@ -34,15 +34,20 @@ from smai_orchestrator.engine.clock import (
 )
 
 
-class RetryPolicy(BaseModel):
+class RetryBackoffConfig(BaseModel):
     """Named backoff configuration for retry-edge gate rules (`05` §6).
 
-    Gate rules consult a :class:`RetryPolicy` from
-    :attr:`EngineConfig.retry_policies` when deciding whether a failed
-    attempt should be retried (advance to the prior state) or abandoned
-    (advance to a terminal-fail state). The policy's *application* is
-    the gate rule's responsibility — this object just carries the
-    knobs.
+    Distinct from :class:`smai_orchestrator.engine.types.RetryPolicy`
+    (round 10), which is the declarative *retry-bookkeeping primitive*
+    on :class:`DispatchAction`. This class carries free-form backoff
+    knobs that gate rules can consult from
+    :attr:`EngineConfig.retry_policies` (deployment-tunable per the spec
+    author's discretion). The policy's *application* is the gate rule's
+    responsibility — this object just carries the knobs.
+
+    Pre-round-10 this was named ``RetryPolicy``; renamed when round 10
+    lifted the declarative dispatch-bookkeeping primitive into the
+    engine types module under that name.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -103,11 +108,15 @@ class EngineConfig(BaseModel):
     extension calls (the heartbeat task is cancelled before its first
     sleep elapses)."""
 
-    retry_policies: dict[str, RetryPolicy] = Field(default_factory=dict)
-    """Named retry policies referenced by retry-edge gate rules (`05`
-    §6). The spec declares which retry policy each failure edge
-    consults; the deployment configures the actual numbers via this
-    map."""
+    retry_policies: dict[str, RetryBackoffConfig] = Field(default_factory=dict)
+    """Named retry-backoff configs referenced by retry-edge gate rules
+    (`05` §6). The spec declares which named config each failure edge
+    consults; the deployment configures the actual numbers via this map.
+
+    Distinct from :class:`DispatchAction.retry_policy`: this map carries
+    free-form backoff knobs (delay, multiplier) for gate-driven retry
+    logic, while ``DispatchAction.retry_policy`` is the declarative
+    bookkeeping primitive the engine consumes directly (round 10)."""
 
     # ---- Worker-loop fields (Task 2.C2) -----------------------------------
 
@@ -265,4 +274,4 @@ class EngineConfig(BaseModel):
     rather than silently skipped."""
 
 
-__all__ = ["EngineConfig", "RetryPolicy"]
+__all__ = ["EngineConfig", "RetryBackoffConfig"]

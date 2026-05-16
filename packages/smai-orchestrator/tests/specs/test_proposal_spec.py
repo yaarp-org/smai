@@ -98,17 +98,34 @@ def test_proposal_spec_edges_per_03_section_4_2(proposal_spec) -> None:  # type:
     soundness failure. Per Phase-3 inline-planner pattern: the retry
     happens within the planner session itself (the planner's
     ``finalize_plan`` tool returns errors so the agent self-corrects)
-    rather than via an inter-state engine transition. The ``failed``
-    terminal still routes via the ``designing → failed`` edge when
-    the planner exits without finalizing.
+    rather than via an inter-state engine transition.
+
+    Round 10: ``designing → failed`` and ``designed → failed`` (the
+    registration retry exhausted terminal) are no longer manual
+    ``EdgeDef``s — the engine synthesizes them from the dispatch
+    actions' :class:`RetryPolicy` declarations. The ``failed`` terminal
+    is reached via the synthesized edge off the dispatch state
+    (``designing → failed`` from the planner dispatch's policy;
+    ``registered → failed`` from the registration dispatch's policy).
     """
     by_pair = {(e.from_state, e.target_state) for e in proposal_spec.edges}
     assert ("proposal_submitted", "designing") in by_pair
     assert ("designing", "designed") in by_pair
-    assert ("designing", "failed") in by_pair
     assert ("designed", "registered") in by_pair
     assert ("designed", "rejected") in by_pair
-    assert ("designed", "failed") in by_pair
+    # ``designing → failed`` and ``designed/registered → failed`` are
+    # engine-synthesized from RetryPolicy and don't appear in the
+    # manual edges list (round 10).
+    designing = next(s for s in proposal_spec.states if s.name == "designing")
+    assert designing.on_entry_dispatch is not None
+    designing_policy = designing.on_entry_dispatch.retry_policy
+    assert designing_policy is not None
+    assert designing_policy.on_exhaustion_target_state == "failed"
+    registered = next(s for s in proposal_spec.states if s.name == "registered")
+    assert registered.on_entry_dispatch is not None
+    registered_policy = registered.on_entry_dispatch.retry_policy
+    assert registered_policy is not None
+    assert registered_policy.on_exhaustion_target_state == "failed"
 
 
 def test_proposal_spec_scheduling_queries_declared(proposal_spec) -> None:  # type: ignore[no-untyped-def]
@@ -524,28 +541,32 @@ async def test_design_finalized_gate_blocks_on_unfinalized_buffer(  # type: igno
     assert rec.state == "designing", f"gate should block; got {rec.state}"
 
 
-# === Round-8 fix B: registration retry exhaustion → failed terminal =========
+# === Round-10 (replaces round-8 fix B): registration retry exhaustion ======
 
 
-def test_proposal_designed_edges_order_per_round8_fix_b(  # type: ignore[no-untyped-def]
+def test_proposal_registered_dispatch_carries_retry_policy(  # type: ignore[no-untyped-def]
     proposal_spec,
 ) -> None:
-    """``designed → failed (registration retry exhausted)`` must be declared
-    BEFORE ``designed → registered (user approved)`` so the terminal gate
-    wins once the budget is exhausted.
+    """Round 10 replaces the round-8 manual ``designed → failed
+    (registration retry exhausted)`` EdgeDef with a declarative
+    :class:`RetryPolicy` on the ``registered`` state's dispatch action.
+    The engine synthesizes the retry-exhausted terminal off
+    ``registered`` (not off ``designed``) when the registration handler
+    fails enough times.
 
-    Pre-round-8 the approval edge came first; with ``user_decision="approved"``
-    a registration handler returning errors would re-fire indefinitely
-    instead of terminating.
+    Pre-round-8 the approval edge came first and a registration error
+    re-fired indefinitely. Round 8 patched the bug by reordering manual
+    edges. Round 10 eliminates the bug class by removing the manual
+    edge entirely — the synthesized terminal is always declaration-
+    first-equivalent inside ``_handle_dispatch_failure``.
     """
-    designed_edges = [e for e in proposal_spec.edges if e.from_state == "designed"]
-    by_name = [e.name for e in designed_edges]
-    failed_idx = next(i for i, n in enumerate(by_name) if "registration retry exhausted" in n)
-    approved_idx = next(i for i, n in enumerate(by_name) if "user approved" in n)
-    assert failed_idx < approved_idx, (
-        f"registration-exhausted edge must come before user-approved "
-        f"so the terminal gate wins; got order {by_name}"
-    )
+    registered = next(s for s in proposal_spec.states if s.name == "registered")
+    assert registered.on_entry_dispatch is not None
+    policy = registered.on_entry_dispatch.retry_policy
+    assert policy is not None
+    assert policy.attempt_counter_field == "registration_attempt"
+    assert policy.on_exhaustion_target_state == "failed"
+    assert "registration retry budget exhausted" in policy.on_exhaustion_reason
 
 
 @pytest.mark.asyncio
@@ -561,12 +582,12 @@ async def test_proposal_registration_retry_exhaustion_lands_in_failed(  # type: 
     1..10 checked field presence) but cannot be projected to
     ``ExperimentDocument`` (e.g. ``controlled_conditions.dataset`` as a
     bare string instead of a dict) wedged the proposal in ``designed``
-    forever: ``user_decision="approved"`` kept firing the approval gate,
-    the registration handler kept erroring, and the registration-
-    exhausted terminal gate was declaration-ordered *after* approval so
-    it never fired. round-8 fix B reorders the edges; this test confirms
-    the terminal is reached and ``last_error`` reflects the projection
-    failure.
+    forever pre-round-8. Round 8 fixed it by reordering manual edges;
+    round 10 lifts the retry bookkeeping into a :class:`RetryPolicy`
+    declaration so the synthesized terminal fires inside
+    :func:`_handle_dispatch_failure` directly off ``registered``
+    (instead of off ``designed`` after a rollback) — one fewer round-
+    trip but the same final state with ``last_error`` populated.
     """
     planner_llm = StubLlmProvider([])  # no planner runs — we pre-stage everything
     spec = build_proposal_pipeline_spec(
@@ -658,9 +679,15 @@ async def test_proposal_registration_retry_exhaustion_lands_in_failed(  # type: 
             {"k": "proposal", "i": proposal_id},
         )
         rows = [dict(r) for r in result.mappings().all()]
-    terminal_rows = [r for r in rows if (r["from_state"], r["to_state"]) == ("designed", "failed")]
-    assert len(terminal_rows) == 1, f"expected one designed→failed row; got {rows}"
-    assert "registration retry exhausted" in terminal_rows[0]["edge_name"]
+    # Round 10: the synthesized terminal fires off ``registered`` (the
+    # dispatch state) rather than off ``designed`` (the pre-round-10
+    # manual edge fired post-rollback). Same final state with the same
+    # last_error, but the transition-log row is ``registered → failed``.
+    terminal_rows = [
+        r for r in rows if (r["from_state"], r["to_state"]) == ("registered", "failed")
+    ]
+    assert len(terminal_rows) == 1, f"expected one registered→failed row; got {rows}"
+    assert "synthesized retry-exhausted terminal" in terminal_rows[0]["edge_name"]
     assert "registration retry budget exhausted" in (terminal_rows[0]["gate_outcome_reason"] or "")
 
 

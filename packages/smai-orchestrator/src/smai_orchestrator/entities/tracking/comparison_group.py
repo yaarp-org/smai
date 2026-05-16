@@ -68,6 +68,17 @@ class ComparisonGroupRecord(LeaseableRecord):
     code_review_attempt: int = 0
     code_review_result_hash: str | None = None
 
+    # === Implementation-phase retry counter (round 10) ===
+    # Bumped by the engine on each (re-)entry into the ``implementing``
+    # state's dispatch via the declared :class:`RetryPolicy`; the
+    # synthesized retry-exhausted terminal edge transitions the CG to
+    # ``implementation_failed`` once it reaches
+    # ``max_implementation_phase_attempts``. Distinct from
+    # :attr:`code_review_attempt` (which counts code-review retries
+    # against the implementer code) and from
+    # :attr:`EntryRecord.implementation_attempt` (per-entry).
+    implementation_phase_attempt: int = 0
+
     _validate_ids = field_validator(
         "id",
         "proposal_id",

@@ -288,6 +288,21 @@ this repo inherits the license; you don't need to add per-file SPDX
 headers (the repo doesn't currently use them, though doing so would be
 the conventional shape if the policy is ever tightened).
 
+### Declarative retry bookkeeping on dispatched states
+
+Spec authors adding a new dispatched state (a `StateDef` with
+`on_entry_dispatch`) that needs a retry budget MUST declare a
+`RetryPolicy` on the `DispatchAction` instead of (a) bumping a counter
+inside the handler body and (b) registering a manual
+`*_failed (retry exhausted)` `EdgeDef`. The engine bumps the counter on
+step-1's CAS and synthesizes the retry-exhausted terminal edge
+automatically; doing either by hand on top double-counts or double-
+evaluates and breaks the retry budget.
+
+See `packages/smai-orchestrator/src/smai_orchestrator/specs/RETRY_POLICY.md`
+for the full contract, the per-spec inventory, and the "how to add a
+new dispatched state with a retry budget" runbook.
+
 ---
 
 ## Plugin-author guide

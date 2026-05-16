@@ -157,6 +157,7 @@ from smai_orchestrator.engine.types import (
     EdgeDef,
     GateContext,
     GateOutcome,
+    RetryPolicy,
     SchedulingQueryRef,
     StateDef,
 )
@@ -430,31 +431,6 @@ def _make_gate_screener_decision(
     return _gate
 
 
-def _make_gate_screening_failed_terminal(
-    *,
-    max_screening_attempts: int,
-) -> Callable[[GateContext], Awaitable[GateOutcome]]:
-    """``screening → failed`` (dispatch_time, screening_failed_terminal).
-
-    Reads :class:`PaperRecord.screening_attempt`; advances when the
-    retry budget is exhausted. Declared after the pass / reject
-    edges so a fresh screener success can still route correctly.
-    """
-
-    async def _gate(ctx: GateContext) -> GateOutcome:
-        paper = await ctx.metadata_store.get_paper(ctx.entity_id)
-        if paper is None:
-            return GateOutcome(advance=False, reason="paper not found")
-        if paper.screening_attempt >= max_screening_attempts:
-            return GateOutcome(
-                advance=True,
-                reason="screening retry budget exhausted; terminal",
-            )
-        return GateOutcome(advance=False, reason="screening retry budget remaining")
-
-    return _gate
-
-
 def _make_gate_techniques_finalized(
     *,
     technique_buffer_key_for: Callable[[str], str],
@@ -490,58 +466,6 @@ def _make_gate_techniques_finalized(
             advance=True,
             reason="planner finalized technique buffer; advance to registered",
         )
-
-    return _gate
-
-
-def _make_gate_planning_failed_terminal(
-    *,
-    max_planning_attempts: int,
-) -> Callable[[GateContext], Awaitable[GateOutcome]]:
-    """``planning → failed`` (dispatch_time, planning_failed_terminal)."""
-
-    async def _gate(ctx: GateContext) -> GateOutcome:
-        paper = await ctx.metadata_store.get_paper(ctx.entity_id)
-        if paper is None:
-            return GateOutcome(advance=False, reason="paper not found")
-        if paper.planning_attempt >= max_planning_attempts:
-            return GateOutcome(
-                advance=True,
-                reason="planning retry budget exhausted; terminal",
-            )
-        return GateOutcome(advance=False, reason="planning retry budget remaining")
-
-    return _gate
-
-
-def _make_gate_fetch_failed_terminal(
-    *,
-    max_fetch_attempts: int,
-) -> Callable[[GateContext], Awaitable[GateOutcome]]:
-    """``fetching → failed`` (dispatch_time, fetch_failed_terminal).
-
-    `08` §5.2 line 593: "v1 has no retry on fetch ... v2 may add one
-    via the ``paper_fetch_retry`` policy (config-only — the retry edge
-    is omitted in the canonical spec; deployments add it if needed)."
-    Default ``max_fetch_attempts=1`` matches v1 (single-attempt; on
-    failure, terminal).
-    """
-
-    # ``max_fetch_attempts`` is currently informational. v1's `08`
-    # §5.2 line 593 explicitly defers fetch retries: "v1 has no retry
-    # on fetch ... v2 may add one via the ``paper_fetch_retry``
-    # policy (config-only — the retry edge is omitted in the canonical
-    # spec; deployments add it if needed)". The gate exists in the
-    # edges list as a structural placeholder so a future
-    # `paper_fetch_retry`-aware deployment can swap in a real budget
-    # check; the canonical spec keeps it always-false. The kwarg is
-    # captured here so a deployment subclass can read its configured
-    # value via :meth:`__closure__` introspection if needed.
-    del max_fetch_attempts
-
-    async def _gate(ctx: GateContext) -> GateOutcome:
-        del ctx
-        return GateOutcome(advance=False, reason="fetch retry not exhausted (always-fire absent)")
 
     return _gate
 
@@ -1122,7 +1046,6 @@ def build_paper_ingestion_spec(
     fetcher: PaperFetcher | None = None,
     max_screening_attempts: int = 1,
     max_planning_attempts: int = 1,
-    max_fetch_attempts: int = 1,
     metric_registry_summary: str = "(default v1 metric registry — accuracy, loss)",
     paper_text_key_for: Callable[[str], str] | None = None,
     figures_key_for: Callable[[str], str] | None = None,
@@ -1153,8 +1076,6 @@ def build_paper_ingestion_spec(
             screening stage. v1 default 1 (one retry beyond initial).
         max_planning_attempts: Per `08` §5.2 retry budget for the
             planning stage. v1 default 1.
-        max_fetch_attempts: Per `08` §5.2 retry budget for the fetch
-            stage. v1 default 1 (no retry).
         metric_registry_summary: Free-text summary threaded into the
             planner's prompt context.
         paper_text_key_for / figures_key_for / expanded_tex_key_for
@@ -1208,6 +1129,18 @@ def build_paper_ingestion_spec(
                 ),
                 pool=POOL_PAPER_INGESTION,
                 handle_field="screener_job_handle",
+                # Round 10: engine bumps ``screening_attempt`` on step-1
+                # CAS; synthesized terminal fires on dispatch failure
+                # once the budget is exhausted. Pre-round-10 the counter
+                # was declared but never incremented (no handler-side
+                # bump) so the manual terminal gate
+                # ``_make_gate_screening_failed_terminal`` never fired.
+                retry_policy=RetryPolicy(
+                    attempt_counter_field="screening_attempt",
+                    max_attempts=max_screening_attempts,
+                    on_exhaustion_target_state="failed",
+                    on_exhaustion_reason="screening retry budget exhausted; terminal",
+                ),
             ),
         ),
         StateDef(
@@ -1227,6 +1160,14 @@ def build_paper_ingestion_spec(
                 ),
                 pool=POOL_PAPER_INGESTION,
                 handle_field="planner_job_handle",
+                # Same as screening: pre-round-10 the counter never
+                # incremented so the manual terminal never fired.
+                retry_policy=RetryPolicy(
+                    attempt_counter_field="planning_attempt",
+                    max_attempts=max_planning_attempts,
+                    on_exhaustion_target_state="failed",
+                    on_exhaustion_reason="planning retry budget exhausted; terminal",
+                ),
             ),
         ),
         StateDef(
@@ -1267,7 +1208,13 @@ def build_paper_ingestion_spec(
             gate_rule=_make_gate_dispatch_fetch_ready(),
             fires_on="dispatch_time",
         ),
-        # ``fetching`` outgoing — success path then terminal-on-budget.
+        # ``fetching`` outgoing — success path. Round 10: the fetch
+        # retry-exhausted edge was a placeholder (gate always returned
+        # advance=False); removed since no counter on
+        # :class:`PaperRecord` tracks fetch attempts. Deployments
+        # needing fetch retries can declare a :class:`RetryPolicy` on
+        # the ``fetching`` dispatch action (would require adding a
+        # ``fetch_attempt`` field to PaperRecord first).
         EdgeDef(
             name="paper.fetching → screening",
             from_state="fetching",
@@ -1277,17 +1224,9 @@ def build_paper_ingestion_spec(
             ),
             fires_on="dispatch_time",
         ),
-        EdgeDef(
-            name="paper.fetching → failed (retry exhausted)",
-            from_state="fetching",
-            target_state="failed",
-            gate_rule=_make_gate_fetch_failed_terminal(
-                max_fetch_attempts=max_fetch_attempts,
-            ),
-            fires_on="dispatch_time",
-        ),
-        # ``screening`` outgoing — pass first, reject second, retry-
-        # exhausted-terminal third.
+        # ``screening`` outgoing — pass first, reject second. The
+        # retry-exhausted terminal is engine-synthesized from the
+        # screening-state's :class:`RetryPolicy` (round 10).
         EdgeDef(
             name="paper.screening → planning (screener accept)",
             from_state="screening",
@@ -1308,31 +1247,14 @@ def build_paper_ingestion_spec(
             ),
             fires_on="dispatch_time",
         ),
-        EdgeDef(
-            name="paper.screening → failed (retry exhausted)",
-            from_state="screening",
-            target_state="failed",
-            gate_rule=_make_gate_screening_failed_terminal(
-                max_screening_attempts=max_screening_attempts,
-            ),
-            fires_on="dispatch_time",
-        ),
-        # ``planning`` outgoing — success first, retry-exhausted second.
+        # ``planning`` outgoing — success path. Retry-exhausted terminal
+        # is engine-synthesized from the planning-state's :class:`RetryPolicy`.
         EdgeDef(
             name="paper.planning → registered (techniques finalized)",
             from_state="planning",
             target_state="registered",
             gate_rule=_make_gate_techniques_finalized(
                 technique_buffer_key_for=technique_buffer_key_fn,
-            ),
-            fires_on="dispatch_time",
-        ),
-        EdgeDef(
-            name="paper.planning → failed (retry exhausted)",
-            from_state="planning",
-            target_state="failed",
-            gate_rule=_make_gate_planning_failed_terminal(
-                max_planning_attempts=max_planning_attempts,
             ),
             fires_on="dispatch_time",
         ),
@@ -1417,7 +1339,6 @@ def register_paper_ingestion_pipeline(
     fetcher: PaperFetcher | None = None,
     max_screening_attempts: int = 1,
     max_planning_attempts: int = 1,
-    max_fetch_attempts: int = 1,
     metric_registry_summary: str = "(default v1 metric registry — accuracy, loss)",
     paper_text_key_for: Callable[[str], str] | None = None,
     figures_key_for: Callable[[str], str] | None = None,
@@ -1441,7 +1362,6 @@ def register_paper_ingestion_pipeline(
         fetcher=fetcher,
         max_screening_attempts=max_screening_attempts,
         max_planning_attempts=max_planning_attempts,
-        max_fetch_attempts=max_fetch_attempts,
         metric_registry_summary=metric_registry_summary,
         paper_text_key_for=paper_text_key_for,
         figures_key_for=figures_key_for,

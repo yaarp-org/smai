@@ -7,8 +7,11 @@ Per ``designs/smai/05-orchestrator.md`` §1. The C1 surface ships:
   :class:`GateRule`, :class:`EdgeDef`, :class:`StateDef`,
   :class:`DispatchContext`, :class:`DispatchOutcome`,
   :class:`DispatchHandler`, :class:`DispatchAction`, :class:`EngineSpec`.
-* Engine config — :class:`EngineConfig`, :class:`RetryPolicy`, the
-  :data:`TimeProvider` / :data:`WallClockProvider` seams.
+* Engine config — :class:`EngineConfig`, :class:`RetryBackoffConfig`,
+  the :data:`TimeProvider` / :data:`WallClockProvider` seams.
+* Retry bookkeeping — :class:`RetryPolicy` on :class:`DispatchAction`
+  (round 10): engine bumps the counter on step-1 CAS and synthesizes a
+  retry-exhausted terminal edge in :func:`_handle_dispatch_failure`.
 * Phase-3 driver — :func:`evaluate_outgoing_edges`,
   :func:`drive_entity_phase3`, :class:`DriveOutcome`.
 * Phase-1 driver — :func:`phase1_step`, :class:`Phase1Outcome`.
@@ -33,7 +36,7 @@ from smai_orchestrator.engine.clock import (
     default_time_provider,
     default_wall_clock,
 )
-from smai_orchestrator.engine.config import EngineConfig, RetryPolicy
+from smai_orchestrator.engine.config import EngineConfig, RetryBackoffConfig
 from smai_orchestrator.engine.dispatch import (
     DispatchOutcomeWire,
     reset_orphan,
@@ -64,6 +67,7 @@ from smai_orchestrator.engine.types import (
     GateOutcome,
     GateRule,
     PhaseTrigger,
+    RetryPolicy,
     SchedulingQueryRef,
     StateDef,
 )
@@ -86,6 +90,7 @@ __all__ = [
     "GateRule",
     "Phase1Outcome",
     "PhaseTrigger",
+    "RetryBackoffConfig",
     "RetryPolicy",
     "SchedulingQueryRef",
     "StateDef",

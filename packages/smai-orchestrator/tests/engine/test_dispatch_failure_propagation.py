@@ -1,7 +1,7 @@
 """Round-6 friction A: a dispatch handler returning an error must not
 leave the entity silently parked in its dispatch state.
 
-The pre-round-6 bug: the planner dispatch returns
+The pre-round-6 bug: the planner dispatch returned
 ``DispatchOutcome(error=...)`` after bumping ``design_attempt`` (which
 bumps the row version). The engine's forward-rollback CAS was keyed on
 the *pre-handler* version, so it spuriously conflicted, and the
@@ -9,11 +9,20 @@ proposal stayed wedged in ``designing`` with a null handle — invisible
 to the phase-1 scheduling query that filters on a non-null handle, so
 never re-discovered, never re-dispatched, never terminated.
 
-The fix (:func:`smai_orchestrator.engine.dispatch._handle_dispatch_failure`):
+The round-6 fix (:func:`smai_orchestrator.engine.dispatch._handle_dispatch_failure`):
 re-read for a fresh version, then either advance to a spec-declared
 error-handling edge (the ``*_failed`` retry-exhausted terminal) or
 forward-roll-back to ``edge.from_state`` — recording ``last_error`` in
 both cases, and writing a ``transition_log`` row for each step.
+
+Round-10 (declarative retry bookkeeping): the synthesized retry-
+exhausted edge replaces what used to be a manually-declared
+``*_failed (retry exhausted)`` EdgeDef. Tests below declare a
+:class:`RetryPolicy` on the dispatch action instead of a manual gate
+factory; the engine synthesizes the terminal during
+:func:`_handle_dispatch_failure` and the failing handler no longer
+needs to bump the counter itself (the engine does that on step-1's
+CAS).
 """
 
 from __future__ import annotations
@@ -30,6 +39,7 @@ from smai_orchestrator.engine import (
     EdgeDef,
     EngineConfig,
     EngineSpec,
+    RetryPolicy,
     StateDef,
     drive_entity_phase3,
 )
@@ -41,35 +51,28 @@ from sqlalchemy import text
 
 
 def _failing_planner_handler(error: str) -> Any:
-    """A dispatch handler that bumps ``design_attempt`` (state held,
-    version advances — the real ``_make_dispatch_planner`` pattern) and
-    then returns a ``DispatchOutcome`` with an error and no handle."""
+    """A dispatch handler that returns a ``DispatchOutcome`` with an
+    error and no handle. Round-10: the handler no longer bumps the
+    retry counter itself — the engine does that on step-1's CAS via
+    the :class:`RetryPolicy` on the dispatch action."""
 
     async def _handler(ctx: DispatchContext) -> DispatchOutcome:
-        proposal = await ctx.metadata_store.get_proposal(ctx.entity_id)
-        assert proposal is not None
-        await ctx.metadata_store.transition_proposal_state(
-            proposal.id,
-            proposal.version,
-            proposal.state,  # pyright: ignore[reportArgumentType] — field-only update
-            design_attempt=proposal.design_attempt + 1,
-        )
+        del ctx
         return DispatchOutcome(submitted_handles=[], error=error)
 
     return _handler
 
 
 def _spec(*, handler: Any, max_design_attempts: int) -> EngineSpec:
+    """Build a minimal proposal-shaped EngineSpec wired with a round-10
+    :class:`RetryPolicy` on ``designing``. The engine synthesizes the
+    retry-exhausted terminal off ``designing`` from the policy — no
+    manual ``designing → failed`` EdgeDef is declared here, matching the
+    real proposal spec after the round-10 migration."""
+
     async def _gate_enter(ctx: GateContext) -> GateOutcome:
         del ctx
         return GateOutcome(advance=True, reason="enter designing")
-
-    async def _gate_failed_terminal(ctx: GateContext) -> GateOutcome:
-        proposal = await ctx.metadata_store.get_proposal(ctx.entity_id)
-        assert proposal is not None
-        if proposal.design_attempt >= max_design_attempts:
-            return GateOutcome(advance=True, reason="design retry budget exhausted")
-        return GateOutcome(advance=False, reason="design retry budget remaining")
 
     return EngineSpec(
         entity_kind="proposal",
@@ -83,6 +86,12 @@ def _spec(*, handler: Any, max_design_attempts: int) -> EngineSpec:
                     handler=handler,
                     pool="proposal_pipeline",
                     handle_field="planner_job_handle",
+                    retry_policy=RetryPolicy(
+                        attempt_counter_field="design_attempt",
+                        max_attempts=max_design_attempts,
+                        on_exhaustion_target_state="failed",
+                        on_exhaustion_reason="design retry budget exhausted; terminal",
+                    ),
                 ),
             ),
             StateDef(name="failed", is_terminal=True),
@@ -95,13 +104,8 @@ def _spec(*, handler: Any, max_design_attempts: int) -> EngineSpec:
                 gate_rule=_gate_enter,
                 fires_on="dispatch_time",
             ),
-            EdgeDef(
-                name="proposal.designing → failed (retry exhausted)",
-                from_state="designing",
-                target_state="failed",
-                gate_rule=_gate_failed_terminal,
-                fires_on="dispatch_time",
-            ),
+            # No manual ``designing → failed`` edge — round 10's engine
+            # synthesis covers it from the RetryPolicy above.
         ],
     )
 
@@ -137,10 +141,12 @@ async def _transition_log_rows(store: Any, entity_id: str) -> list[dict[str, Any
 async def test_handler_error_does_not_leave_entity_parked(
     sqlite_store, fake_compute, fake_artifact_store
 ) -> None:
-    """One drive cycle: enter ``designing`` → handler bumps the counter +
-    returns an error → engine rolls the proposal back to
-    ``proposal_submitted`` with ``last_error`` set (not wedged in
-    ``designing``), and a rollback row lands in ``transition_log``."""
+    """One drive cycle: enter ``designing`` (engine bumps the counter
+    to 1 on step-1 CAS) → handler returns an error → engine evaluates
+    the synthesized retry-exhausted edge (count=1, cap=2 → does NOT
+    fire) → engine rolls the proposal back to ``proposal_submitted``
+    with ``last_error`` set, and a rollback row lands in
+    ``transition_log``."""
     proposal = await _seed_proposal(sqlite_store)
     spec = _spec(
         handler=_failing_planner_handler("planner did not finalize"),
@@ -164,7 +170,7 @@ async def test_handler_error_does_not_leave_entity_parked(
     # NOT wedged in designing — rolled back to be re-dispatched.
     assert final.state == "proposal_submitted"
     assert final.last_error == "planner did not finalize"
-    assert final.design_attempt == 1  # handler bumped it
+    assert final.design_attempt == 1  # engine bumped it on step-1 CAS
     assert final.planner_job_handle is None
 
     rows = await _transition_log_rows(sqlite_store, "prop_wedge_test")
@@ -178,8 +184,7 @@ async def test_repeated_failures_reach_failed_terminal_with_last_error(
 ) -> None:
     """Re-dispatching until ``design_attempt >= max_design_attempts``
     advances the proposal to the ``failed`` terminal with ``last_error``
-    populated (the engine re-evaluates the dispatch state's outgoing
-    ``dispatch_time`` edges on a dispatch failure)."""
+    populated via the engine-synthesized retry-exhausted edge."""
     await _seed_proposal(sqlite_store)
     spec = _spec(
         handler=_failing_planner_handler("planner did not finalize"),
@@ -209,7 +214,8 @@ async def test_repeated_failures_reach_failed_terminal_with_last_error(
     assert final_state == "failed", f"got {final_state}"
     # The hop that routed the proposal to the ``failed`` terminal is
     # reported as a *failure* (``dispatch_failed_routed``), not a clean
-    # ``advanced`` — so the worker tallies it under phase3_dispatch_failed.
+    # ``advanced`` — the synthesized edge fires inside
+    # ``_handle_dispatch_failure``.
     assert last_outcome_status == "dispatch_failed_routed"
     final = await sqlite_store.get_proposal("prop_wedge_test")
     assert final is not None
@@ -218,10 +224,11 @@ async def test_repeated_failures_reach_failed_terminal_with_last_error(
 
     rows = await _transition_log_rows(sqlite_store, "prop_wedge_test")
     pairs = [(r["from_state"], r["to_state"]) for r in rows]
-    # The final hop into the terminal is recorded with the gate's edge name.
+    # The final hop into the terminal is recorded with the engine-
+    # synthesized edge name.
     assert ("designing", "failed") in pairs
     fail_row = next(r for r in rows if (r["from_state"], r["to_state"]) == ("designing", "failed"))
-    assert "retry exhausted" in fail_row["edge_name"]
+    assert "synthesized retry-exhausted terminal" in fail_row["edge_name"]
 
 
 async def test_raising_handler_also_propagates(

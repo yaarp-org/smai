@@ -104,6 +104,7 @@ from smai_orchestrator.engine.types import (
     EdgeDef,
     GateContext,
     GateOutcome,
+    RetryPolicy,
     SchedulingQueryRef,
     StateDef,
 )
@@ -1045,6 +1046,7 @@ def build_cg_execution_spec(
     seeds: Sequence[int] = (0,),
     runtime_image: str = "smai-runtime:dev",
     max_review_attempts: int = 1,
+    max_implementation_phase_attempts: int = 2,
     require_human_approval: bool = False,
     evaluation_dispatch_trace: list[str] | None = None,
 ) -> PipelineSpec:
@@ -1070,6 +1072,15 @@ def build_cg_execution_spec(
         max_review_attempts: DEC-016 retry budget — the number of
             ``implemented → implementing`` retries an entry is allowed
             before being marked ``implementation_failed``.
+        max_implementation_phase_attempts: Round-10 retry budget for the
+            CG-level harness-builder dispatch. Each (re-)entry into
+            ``implementing`` bumps :attr:`ComparisonGroupRecord.implementation_phase_attempt`
+            via the engine-synthesized step-1 CAS; once the count
+            reaches this cap a dispatch failure routes the CG to the
+            ``implementation_failed`` terminal via the engine-
+            synthesized retry-exhausted edge. Default ``2`` (one retry
+            beyond initial). Closes the round-10 latent infinite-retry
+            on CG implementing-phase dispatch failures.
         require_human_approval: DEC-003 deployment-configurable flag.
             When ``True`` the ``implemented → running`` review-pass
             edge holds the CG in ``implemented`` until human approval
@@ -1113,6 +1124,18 @@ def build_cg_execution_spec(
                 ),
                 pool=POOL_AGENTS,
                 handle_field="harness_job_handle",
+                # Round 10: a dispatch failure here (e.g. Modal
+                # ``Sandbox.create`` failing pre-submit, or the harness
+                # builder agent's session raising before submitting a
+                # validation job) used to infinitely roll back to
+                # ``draft`` and re-dispatch; the synthesized retry-
+                # exhausted terminal closes that loop.
+                retry_policy=RetryPolicy(
+                    attempt_counter_field="implementation_phase_attempt",
+                    max_attempts=max_implementation_phase_attempts,
+                    on_exhaustion_target_state="implementation_failed",
+                    on_exhaustion_reason=("implementation-phase retry budget exhausted; terminal"),
+                ),
             ),
         ),
         StateDef(

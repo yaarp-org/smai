@@ -72,9 +72,14 @@ Spec ambiguities resolved
   declaration matches the CG-execution spec's pool declaration so the
   worker's slot accounting aggregates correctly per `05` §3.4.
 
-* **Run-level retry semantics** (`03` §3.9 open item) deferred. v1 has
-  no auto-retry on runs; the brief doesn't introduce one either. A
-  ``failed → pending`` edge with budget gating is left as a follow-up.
+* **Run-level retry semantics** (`03` §3.9 open item) handled in round
+  10 via the declarative :class:`RetryPolicy` on the ``submitted``
+  dispatch action. The engine bumps :attr:`RunRecord.run_attempt` on
+  each step-1 CAS, and the synthesized retry-exhausted edge terminates
+  the run at ``failed`` once ``run_attempt >= max_run_attempts``. The
+  ``failed → pending`` re-queue edge is still out of scope (run-level
+  resubmit on transient ``Compute.submit`` errors would need an
+  operator-driven re-queue verb).
 """
 
 from __future__ import annotations
@@ -87,7 +92,6 @@ from smai_core.artifacts import HarnessContract
 from smai_core.plugins import (
     ArtifactNotFound,
     ArtifactStore,
-    ConflictError,
     JobHandle,
 )
 
@@ -99,6 +103,7 @@ from smai_orchestrator.engine.types import (
     EdgeDef,
     GateContext,
     GateOutcome,
+    RetryPolicy,
     SchedulingQueryRef,
     StateDef,
 )
@@ -347,23 +352,12 @@ def _make_dispatch_run_compute_submit(
         if run is None:
             return DispatchOutcome(error=f"RunRecord {ctx.entity_id!r} not found")
 
-        # Bump ``run_attempt`` on each (re-)entry into the run dispatch
-        # so the ``max_run_attempts`` retry-budget gate sees a real
-        # count rather than 0. v1 has no run-level retry edge yet, but a
-        # run that is forward-rolled-back to ``pending`` and re-dispatched
-        # ticks this up. Field-only ``transition_*_state`` preserving the
-        # current state; best-effort on CAS conflict — mirrors
-        # ``cg_execution.py``. The engine re-reads before its handle
-        # write, so this field-only bump doesn't poison the dispatch.
-        try:
-            await ctx.metadata_store.transition_run_state(
-                run.id,
-                run.version,
-                run.state,  # pyright: ignore[reportArgumentType] — field-only update
-                run_attempt=run.run_attempt + 1,
-            )
-        except ConflictError:
-            pass
+        # Round 10: ``run_attempt`` is bumped by the engine on step-1's
+        # CAS via the :class:`RetryPolicy` declared on the ``submitted``
+        # state's dispatch action; the synthesized retry-exhausted
+        # terminal transitions a run to ``failed`` once
+        # ``run_attempt >= max_run_attempts``. Pre-round-10 the bump was
+        # done here in the handler body but there was no terminal edge.
 
         gpu = await _load_compute_requirements_gpu(ctx.artifact_store, run.cg_id)
         image = gpu_image if gpu else cpu_image
@@ -405,6 +399,7 @@ def build_run_record_spec(
     *,
     runtime_image: str = "smai-runtime:dev",
     runtime_cpu_image: str = "smai-runtime-cpu:dev",
+    max_run_attempts: int = 3,
 ) -> PipelineSpec:
     """Build the SMAI :class:`RunRecord` sub-state-machine
     :class:`PipelineSpec` (entity_kind=``"run"``).
@@ -419,6 +414,12 @@ def build_run_record_spec(
             (``runtime-cpu.Dockerfile``, lean multi-arch base). The
             run-record dispatcher selects between the two at dispatch
             time off the CG's :class:`HarnessContract`.
+        max_run_attempts: Round-10 retry budget for the
+            ``pending → submitted`` dispatch (compute submit). Bumped by
+            the engine on step-1's CAS; the synthesized retry-exhausted
+            terminal transitions the run to ``failed`` once
+            ``run_attempt >= max_run_attempts``. Default ``3`` (two
+            retries beyond the initial submit).
 
     Per `01` §5.5 the canonical :class:`RunState` literal is
     ``pending → submitted → running → succeeded | failed | inconclusive``;
@@ -445,6 +446,17 @@ def build_run_record_spec(
                 handler=submit_dispatch,
                 pool=POOL_RUNS,
                 handle_field="compute_job_handle",
+                # Round 10: ``Compute.submit`` failures used to forward-
+                # roll-back unconditionally and re-dispatch with no
+                # budget. The synthesized retry-exhausted terminal
+                # closes that loop after :param:`max_run_attempts`
+                # submits.
+                retry_policy=RetryPolicy(
+                    attempt_counter_field="run_attempt",
+                    max_attempts=max_run_attempts,
+                    on_exhaustion_target_state="failed",
+                    on_exhaustion_reason="run submit retry budget exhausted; terminal",
+                ),
             ),
         ),
         StateDef(name="running"),
@@ -551,6 +563,7 @@ def register_run_record_spec(
     *,
     runtime_image: str = "smai-runtime:dev",
     runtime_cpu_image: str = "smai-runtime-cpu:dev",
+    max_run_attempts: int = 3,
 ) -> PipelineSpec:
     """Construct and register the :class:`RunRecord` sub-spec.
 
@@ -569,6 +582,7 @@ def register_run_record_spec(
     spec = build_run_record_spec(
         runtime_image=runtime_image,
         runtime_cpu_image=runtime_cpu_image,
+        max_run_attempts=max_run_attempts,
     )
     register_pipeline_spec(spec)
     return spec
