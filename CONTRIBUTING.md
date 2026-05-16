@@ -98,7 +98,7 @@ The five gates each run in seconds-to-tens-of-seconds against the
 workspace root:
 
 ```bash
-uv run pytest                            # ~1700 tests; ~30s warm
+uv run pytest                            # 2214 passed / 33 skipped; ~110s warm
 uv run pyright                           # type-check (strict on packages above + all plugins)
 uv run ruff check .                      # lint
 uv run ruff format --check .             # formatting check (no rewrite)
@@ -209,7 +209,7 @@ async def test_real_aws_round_trip() -> None:
 When you add a new credentialed test, follow this two-decorator pattern.
 The env var name is plugin-specific by convention:
 `AWS_TEST_BUCKET` / `MODAL_TOKEN_ID` / `ANTHROPIC_API_KEY` /
-`OPENAI_API_KEY` / `RUNPOD_API_KEY` / `SMAI_POSTGRES_TEST_URL`.
+`OPENAI_API_KEY` / `RUNPOD_API_KEY` / `SMAI_TEST_POSTGRES_URL`.
 
 ### Per-task test-fixture filename hygiene
 
@@ -416,9 +416,15 @@ auth, invalid-request, transient-then-succeed, tool-use-response).
 Defined in `smai_core.plugins.metadata_store`. CRUD for the six
 pipeline-tracking record types (`ComparisonGroupRecord`, `EntryRecord`,
 `RunRecord`, `ProposalRecord`, `PaperRecord`, `FactorModelRecord`),
-plus 19 scheduling queries × 5 entity kinds, plus
-`acquire_lease` / `release_lease` / `extend_lease` per DEC-035 #2,
-plus `count_with_in_flight_jobs` per DEC-035 #3.
+the per-state scheduling queries across the five leaseable entity
+kinds, `acquire_lease` / `release_lease` / `extend_lease` per DEC-035
+#2, `count_with_in_flight_jobs` per DEC-035 #3, the `TechniqueRef`
+registry surface (`get_technique` / `list_techniques` /
+`upsert_technique`), the agent-telemetry surface added during post-M5
+triage (`create_agent_session` / `update_agent_session` /
+`get_agent_session` and `append_transition_log`, which populate the
+`agent_sessions` and `transition_log` tables), and a `Transaction`
+sub-Protocol for the atomic create-and-transition paths.
 
 Per DEC-030 / DEC-036 the substrate is **SQL-shaped only** —
 `SqliteStore` and `PostgresStore` share a SQLAlchemy 2.0 async Core
@@ -430,8 +436,8 @@ either:
   dialect — see how `smai-store-postgres` imports
   `smai-store-sqlite`'s `_schema.py` / `_serde.py`), or
 - **Wrap an external substrate** (e.g., a managed multi-tenant store)
-  while still returning the six record types and honoring the 47
-  Protocol method signatures.
+  while still returning the six record types and honoring the full
+  Protocol method surface.
 
 Capability flags (`MetadataStoreCapabilities`) include
 `is_tenant_aware`, `supports_transactions`,

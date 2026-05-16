@@ -163,9 +163,31 @@ but Alembic's autogenerate is sync-only):
    ``postgresql://...``); the generated revision is dialect-portable
    so the async-driver path picks it up at runtime.
 
-3. Hand-edit the generated revision: keep ``upgrade()`` additive, set
-   ``downgrade()`` to ``raise NotImplementedError(...)`` per the
-   forward-only policy.
+3. Hand-edit the generated revision:
+
+   * Keep ``upgrade()`` additive and set ``downgrade()`` to ``raise
+     NotImplementedError(...)`` per the forward-only policy (DEC-036).
+   * Use the **dual-mode add-column pattern** established by revisions
+     0003 / 0004. The 0001 baseline applies the schema via
+     ``MetaData.create_all(checkfirst=True)`` against the *canonical*
+     SQLAlchemy declarations in :mod:`.metadata`, which already include
+     your new column once step 1 is done. So on a fresh database 0001
+     creates the column and a naive ``op.add_column`` in your revision
+     then errors on the duplicate. Guard it:
+
+     ```python
+     if context.is_offline_mode():
+         # MockConnection can't be introspected; emit the ADD COLUMN
+         # unconditionally so --sql output covers the legacy upgrade path.
+         op.add_column("<table>", sa.Column("<col>", ...))
+         return
+     inspector = sa.inspect(op.get_bind())
+     existing = {c["name"] for c in inspector.get_columns("<table>")}
+     if "<col>" not in existing:
+         op.add_column("<table>", sa.Column("<col>", ...))
+     ```
+
+     `versions/0003_cg_symbolic_id.py` is the reference shape.
 
 4. Add a unit test in `tests/test_migrations/` that runs the new
    revision against an in-memory SQLite + asserts the resulting
@@ -179,19 +201,35 @@ but Alembic's autogenerate is sync-only):
 
 ## Branch graph (Task 3.G2: opt-in tenant_aware extension)
 
-The Alembic env carries **two branches** as of 3.G2:
+The Alembic env carries **two branches**:
 
 | Branch label | Head revision | Applied by |
 |--------------|---------------|------------|
-| `default` | `0001_initial_schema` | Every reference plugin's `migrate()` at boot; `smai migrate` (no flag); `smai dev`. |
+| `default` | `0004_cg_impl_phase_attempt` | Every reference plugin's `migrate()` at boot; `smai migrate` (no flag); `smai dev`. |
 | `tenant_aware` | `0002_tenant_aware_schema` | `PostgresStore(tenant_aware=True).migrate()`; `smai migrate --upgrade-to=tenant_aware`. |
 
 The `tenant_aware` branch is a **separate-root** revision with
 `depends_on="0001_initial_schema"`. Alembic enforces the dependency:
 upgrading to `tenant_aware@head` against an unstamped database applies
 0001 first then 0002; against a 0001-stamped database it applies only
-0002. The shape keeps the OSS canonical schema (`default@head` =
-0001 only) decoupled from the opt-in extension.
+0002. The shape keeps the OSS canonical schema (the `default` branch)
+decoupled from the opt-in extension.
+
+### Default-branch revisions
+
+The `default` branch is a linear chain `0001 → 0003 → 0004` (0002 is
+the off-branch tenant_aware extension above):
+
+| Revision | Adds |
+|----------|------|
+| `0001_initial_schema` | The full v1 schema declared in :mod:`.metadata` (applied via `create_all(checkfirst=True)`). |
+| `0003_cg_symbolic_id` | Nullable `cgs.symbolic_id VARCHAR(128)` — preserves the planner's human-readable CG draft id after the round-9 fix made the primary CG `id` a fresh ULID-shaped string. |
+| `0004_cg_impl_phase_attempt` | `cgs.implementation_phase_attempt INTEGER` (default 0) — the CG-level retry counter the round-10 `RetryPolicy` on the `implementing` dispatch state reads. |
+
+Both 0003 and 0004 use the dual-mode add-column pattern documented in
+"Adding a new revision" above (offline-unconditional / online
+inspect-and-skip) so they are no-ops on a fresh database that 0001's
+`create_all` already brought to the canonical shape.
 
 ### What 0002 adds
 

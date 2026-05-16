@@ -162,7 +162,7 @@ Requires [`uv`](https://docs.astral.sh/uv/) and Python 3.11+.
 ```bash
 git clone <repo-url> smai && cd smai
 uv sync                 # install the workspace (editable) + dev deps
-uv run pytest           # ~2100 tests, ~100s warm
+uv run pytest           # ~2250 tests, ~110s warm
 ```
 
 Boot the laptop deployment with the web UI:
@@ -337,6 +337,12 @@ pipeline state machines, and the contract artifacts are untouched.
 `smai init` scaffolds an annotated `smai.yaml`; `smai verify` pings
 every configured plugin and reports PASS/FAIL per interface before you
 commit to a run.
+
+**Logging.** `smai dev` and `smai start` default to `WARNING`-level
+logging. Pass `--verbose` / `-v` to raise the worker and engine to
+`INFO` (per-dispatch, per-transition, per-cycle lines), or `-vv` for
+`DEBUG`. With no `-v` flag, the `SMAI_LOG_LEVEL` env var is honored
+(e.g. `SMAI_LOG_LEVEL=INFO`); a `-v` flag wins over the env var.
 
 **Where state lives.** `smai dev` and `smai ui` provision `~/.smai/{state.db,artifacts,workspaces}` for you (creating the directories and injecting the paths), so a bare `metadata_store_config: {}` works under those verbs. `smai migrate`, `smai verify`, and `smai start` use the `smai.yaml` value verbatim, and an empty `metadata_store_config: {}` resolves to the sqlite plugin's *in-memory* default, which makes `smai migrate` a silent no-op (it reports success, then the database evaporates on exit). For those verbs, set an explicit file path:
 
