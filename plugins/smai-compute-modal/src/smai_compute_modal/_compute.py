@@ -135,6 +135,9 @@ class ModalCompute:
             supports_gpu=True,
             max_timeout_seconds=int(max_timeout_seconds),
             supports_log_streaming=False,
+            # Modal pulls the job image from a registry via
+            # ``Image.from_registry`` — the operator must publish it.
+            requires_published_image=True,
         )
 
     # --- public surface (Compute Protocol) ---------------------------------
@@ -556,6 +559,16 @@ def _is_image_pull_error(exc: BaseException) -> bool:
     image / manifest / registry / pull is unambiguously an image-pull
     failure; the only other Modal entities ``Sandbox.create`` looks
     up are App (handled by ``_ensure_app``) and the image itself.
+
+    Image *build* failures are folded in here too: when an operator
+    points :attr:`smai_orchestrator.engine.config.EngineConfig.runtime_image`
+    at a tag Modal cannot resolve, ``Sandbox.create`` surfaces a
+    ``RemoteError: Image build ... failed`` — class name ``RemoteError``,
+    message containing "image" + "build" but none of pull / registry /
+    manifest. The permissive fallback recognizes "image" co-present
+    with "build" so that lands as :class:`JobImageInvalid` (an
+    actionable image-config error) rather than :class:`ComputeUnavailable`
+    (a transient-substrate error the caller would pointlessly retry).
     """
     msg = str(exc).lower()
     # Strong signals: the registry-side error vocabulary surfaces
@@ -570,10 +583,15 @@ def _is_image_pull_error(exc: BaseException) -> bool:
     ):
         return True
     # Permissive fallback: any exception whose message simultaneously
-    # references "image" and either "pull" or "registry" or "manifest"
-    # — covers wrapped ``RuntimeError`` shapes that lose the typed
-    # parentage on their way to the plugin.
-    if "image" in msg and any(marker in msg for marker in ("pull", "registry", "manifest")):
+    # references "image" and either "pull" / "registry" / "manifest" /
+    # "build" — covers wrapped ``RuntimeError`` shapes that lose the
+    # typed parentage on their way to the plugin, and the
+    # ``RemoteError: Image build ... failed`` shape. "build" is scoped
+    # to require "image" co-present so an unrelated build-step error
+    # does not over-match.
+    if "image" in msg and any(
+        marker in msg for marker in ("pull", "registry", "manifest", "build")
+    ):
         return True
     return False
 

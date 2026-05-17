@@ -83,6 +83,17 @@ class ComputeCapabilities(BaseModel):
     ``supports_log_streaming``:
         Optional: future addition for ``tail -f`` style. v1 plugins
         all return ``False``.
+
+    ``requires_published_image``:
+        ``True`` for registry-pull substrates (Modal / RunPod) — the
+        ``image`` argument to :meth:`Compute.submit` MUST be a tag the
+        substrate can pull from a registry it can reach, so the
+        operator owns publishing it. ``False`` for local-build
+        substrates (``LocalGpu``) that build the image on the host.
+        Pre-flight checks (``smai verify``, the worker boot path) read
+        this flag to refuse a registry-pull substrate paired with the
+        local-only built-in default runtime image, rather than letting
+        the failure surface as an opaque mid-run image-build error.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -90,6 +101,7 @@ class ComputeCapabilities(BaseModel):
     supports_gpu: bool
     max_timeout_seconds: int
     supports_log_streaming: bool = False
+    requires_published_image: bool = False
 
 
 # === Error contract (§7.3) ===================================================

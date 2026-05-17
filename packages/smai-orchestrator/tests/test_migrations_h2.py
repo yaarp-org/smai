@@ -64,15 +64,17 @@ def _load_initial_revision_module() -> ModuleType:
 def test_head_revision_is_latest_default_revision() -> None:
     """The shipped default-branch head walks to the latest revision.
 
-    Round 10 added ``0004_cg_implementation_phase_attempt`` downstream
-    of ``0003_cg_symbolic_id`` to add the CG record's
-    ``implementation_phase_attempt`` counter (the round-10 declarative
-    retry-bookkeeping primitive needs a per-CG counter for the
+    Round 10 added ``0004_cg_impl_phase_attempt`` downstream of
+    ``0003_cg_symbolic_id`` to add the CG record's
+    ``implementation_phase_attempt`` counter. Round 11 added
+    ``0005_entry_dispatch_attempt`` downstream of that to add the
+    ``EntryRecord.entry_dispatch_attempt`` counter (the per-entry
+    declarative retry-bookkeeping primitive for the entry-spec
     ``implementing`` dispatch action's :class:`RetryPolicy`).
     The tenant_aware branch (``0002``) sits on a separate root and does
     not affect the default head.
     """
-    assert get_head_revision() == "0004_cg_impl_phase_attempt"
+    assert get_head_revision() == "0005_entry_dispatch_attempt"
 
 
 async def test_upgrade_to_head_creates_every_table() -> None:
@@ -150,6 +152,62 @@ def test_initial_revision_metadata_fields() -> None:
     revision = _load_initial_revision_module()
     assert revision.revision == "0001_initial_schema"
     assert revision.down_revision is None
+
+
+def _load_revision_module(filename: str, mod_name: str) -> ModuleType:
+    """Load an Alembic revision file by name for direct introspection.
+
+    Generic counterpart to :func:`_load_initial_revision_module` —
+    revision filenames start with a digit so they are not importable as
+    plain modules.
+    """
+    versions_dir = Path(__file__).resolve().parents[1] / (
+        "src/smai_orchestrator/migrations/versions"
+    )
+    spec = importlib.util.spec_from_file_location(mod_name, versions_dir / filename)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_revision_0005_entry_dispatch_attempt_metadata_fields() -> None:
+    """Round-11 revision 0005 chains off 0004 and is forward-only.
+
+    Mirrors the round-10 ``0004_cg_impl_phase_attempt`` shape: a
+    single ADD COLUMN, chained off the prior default-branch head, with
+    a ``downgrade()`` that raises per the forward-only policy (DEC-036).
+    """
+    revision = _load_revision_module("0005_entry_dispatch_attempt.py", "h2_rev_0005")
+    assert revision.revision == "0005_entry_dispatch_attempt"
+    assert revision.down_revision == "0004_cg_impl_phase_attempt"
+    with pytest.raises(NotImplementedError, match="not implemented"):
+        revision.downgrade()
+
+
+async def test_upgrade_to_head_lands_entry_dispatch_attempt_column() -> None:
+    """After ``upgrade_to_head`` the ``entries`` table carries the
+    round-11 ``entry_dispatch_attempt`` column (the ``RetryPolicy``
+    counter for the entry-spec ``implementing`` dispatch action)."""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        await upgrade_to_head(engine)
+
+        async with engine.connect() as conn:
+
+            def _entry_columns(sync_conn: object) -> set[str]:
+                from sqlalchemy import Inspector
+                from sqlalchemy import inspect as _inspect
+
+                inspector = _inspect(sync_conn)
+                assert isinstance(inspector, Inspector)
+                return {col["name"] for col in inspector.get_columns("entries")}
+
+            columns = await conn.run_sync(_entry_columns)
+
+        assert "entry_dispatch_attempt" in columns
+    finally:
+        await engine.dispose()
 
 
 async def test_prune_retention_tables_deletes_old_rows() -> None:

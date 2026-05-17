@@ -248,6 +248,9 @@ class RunPodCompute:
             supports_gpu=True,
             max_timeout_seconds=int(max_timeout_seconds),
             supports_log_streaming=False,
+            # RunPod pulls the job image from a registry — the operator
+            # must publish it where RunPod can reach it.
+            requires_published_image=True,
         )
 
     # --- public surface (Compute Protocol) ---------------------------------

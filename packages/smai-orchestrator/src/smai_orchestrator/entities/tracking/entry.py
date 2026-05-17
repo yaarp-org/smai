@@ -56,6 +56,19 @@ class EntryRecord(LeaseableRecord):
     # === Implementation-stage retry state ===
     implementation_attempt: int = 0
 
+    # === Dispatch retry counter (round 11) ===
+    # Bumped by the engine on each (re-)entry into the ``implementing``
+    # state's dispatch via the declared :class:`RetryPolicy`; the
+    # synthesized retry-exhausted terminal edge transitions the entry to
+    # ``implementation_failed`` once it reaches
+    # ``max_entry_dispatch_attempts``. Distinct from
+    # :attr:`implementation_attempt` (which the CG-spec's review-retry
+    # gate bumps when routing an entry from ``implemented`` back to
+    # ``pending``): merging the two would double-count the dispatch
+    # bump against the recovery-path bump. Closes the round-10 latent
+    # infinite-retry on entry implementation-dispatch failures.
+    entry_dispatch_attempt: int = 0
+
     _validate_ids = field_validator(
         "id",
         "cg_id",

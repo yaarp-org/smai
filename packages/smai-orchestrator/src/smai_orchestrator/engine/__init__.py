@@ -36,7 +36,12 @@ from smai_orchestrator.engine.clock import (
     default_time_provider,
     default_wall_clock,
 )
-from smai_orchestrator.engine.config import EngineConfig, RetryBackoffConfig
+from smai_orchestrator.engine.config import (
+    DEFAULT_RUNTIME_CPU_IMAGE,
+    DEFAULT_RUNTIME_IMAGE,
+    EngineConfig,
+    RetryBackoffConfig,
+)
 from smai_orchestrator.engine.dispatch import (
     DispatchOutcomeWire,
     reset_orphan,
@@ -73,6 +78,8 @@ from smai_orchestrator.engine.types import (
 )
 
 __all__ = [
+    "DEFAULT_RUNTIME_CPU_IMAGE",
+    "DEFAULT_RUNTIME_IMAGE",
     "ConcurrencyPool",
     "CostRecordContext",
     "CostRecordHandler",

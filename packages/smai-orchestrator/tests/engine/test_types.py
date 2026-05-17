@@ -17,6 +17,7 @@ from _helpers import (
     make_dispatch,
     make_gate,
 )
+from pydantic import ValidationError
 from smai_core.plugins import JobHandle
 from smai_orchestrator.engine import (
     DispatchAction,
@@ -26,6 +27,7 @@ from smai_orchestrator.engine import (
     GateContext,
     GateOutcome,
     RetryBackoffConfig,
+    RetryPolicy,
     StateDef,
     default_time_provider,
     default_wall_clock,
@@ -231,3 +233,55 @@ async def test_gate_outcome_round_trips() -> None:
     assert o1.reason is None
     o2 = GateOutcome(advance=False, reason="contract not satisfied")
     assert o2.reason == "contract not satisfied"
+
+
+# === RetryPolicy field validation (round-10 carry-forward) ===================
+
+
+def test_retry_policy_constructs_with_all_fields() -> None:
+    """A well-formed :class:`RetryPolicy` round-trips its four fields."""
+    policy = RetryPolicy(
+        attempt_counter_field="design_attempt",
+        max_attempts=2,
+        on_exhaustion_target_state="failed",
+        on_exhaustion_reason="design retry budget exhausted; terminal",
+    )
+    assert policy.attempt_counter_field == "design_attempt"
+    assert policy.max_attempts == 2
+    assert policy.on_exhaustion_target_state == "failed"
+    assert policy.on_exhaustion_reason == "design retry budget exhausted; terminal"
+
+
+def test_retry_policy_is_frozen() -> None:
+    """:class:`RetryPolicy` is frozen — field assignment raises so a
+    spec author cannot mutate a declared policy after construction."""
+    policy = RetryPolicy(
+        attempt_counter_field="design_attempt",
+        max_attempts=2,
+        on_exhaustion_target_state="failed",
+        on_exhaustion_reason="terminal",
+    )
+    with pytest.raises(ValidationError):
+        policy.max_attempts = 3  # type: ignore[misc]
+
+
+def test_retry_policy_forbids_extra_fields() -> None:
+    """``extra='forbid'`` — a typo'd field name is a loud error, not a
+    silently-ignored attribute."""
+    with pytest.raises(ValidationError):
+        RetryPolicy(
+            attempt_counter_field="design_attempt",
+            max_attempts=2,
+            on_exhaustion_target_state="failed",
+            on_exhaustion_reason="terminal",
+            on_exhastion_reason="typo",  # type: ignore[call-arg]
+        )
+
+
+def test_retry_policy_requires_all_four_fields() -> None:
+    """All four fields are required — omitting any raises."""
+    with pytest.raises(ValidationError):
+        RetryPolicy(  # type: ignore[call-arg]
+            attempt_counter_field="design_attempt",
+            max_attempts=2,
+        )

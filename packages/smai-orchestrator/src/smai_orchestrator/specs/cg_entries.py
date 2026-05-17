@@ -63,6 +63,7 @@ from smai_orchestrator.engine.types import (
     EdgeDef,
     GateContext,
     GateOutcome,
+    RetryPolicy,
     SchedulingQueryRef,
     StateDef,
 )
@@ -164,6 +165,7 @@ def build_cg_entries_spec(
     *,
     workspace_root: Path,
     runtime_image: str = "smai-runtime:dev",
+    max_entry_dispatch_attempts: int = 2,
 ) -> PipelineSpec:
     """Build the SMAI CG-entries :class:`PipelineSpec`.
 
@@ -175,6 +177,18 @@ def build_cg_entries_spec(
         runtime_image: Container image for ``run_experiment`` validation
             jobs the implementer agent submits during its multi-turn
             loop. v1 default ``smai-runtime:dev`` per Task 2.D1.
+        max_entry_dispatch_attempts: Round-11 retry budget for the
+            per-entry technique-implementer dispatch. Each (re-)entry
+            into ``implementing`` bumps
+            :attr:`EntryRecord.entry_dispatch_attempt` via the
+            engine-synthesized step-1 CAS; once the count reaches this
+            cap a dispatch failure routes the entry to the
+            ``implementation_failed`` terminal via the engine-
+            synthesized retry-exhausted edge. Default ``2`` (one retry
+            beyond the initial attempt), parity with
+            ``cg_execution``'s ``max_implementation_phase_attempts``.
+            Closes the round-10 latent infinite-retry on entry
+            implementation-dispatch failures.
 
     Returns:
         A :class:`PipelineSpec` with ``entity_kind="entry"``,
@@ -202,6 +216,24 @@ def build_cg_entries_spec(
                 ),
                 pool=POOL_AGENTS,
                 handle_field="implementation_job_handle",
+                # Round 11: a dispatch-handler failure here (the
+                # technique-implementer agent's session raising before
+                # it submits an implementation job) used to roll back
+                # to ``pending`` and re-dispatch forever — the entry
+                # spec declared no dispatch-failure terminal edge.
+                # Round 10 left this ``retry_policy=None`` because the
+                # entry's ``implementation_attempt`` counter is owned by
+                # the CG-level review-retry gate (double-count hazard);
+                # ``entry_dispatch_attempt`` is the separate counter that
+                # closes the loop without colliding with that gate.
+                retry_policy=RetryPolicy(
+                    attempt_counter_field="entry_dispatch_attempt",
+                    max_attempts=max_entry_dispatch_attempts,
+                    on_exhaustion_target_state="implementation_failed",
+                    on_exhaustion_reason=(
+                        "entry implementation-dispatch retry budget exhausted; terminal"
+                    ),
+                ),
             ),
         ),
         StateDef(name="implemented", is_terminal=True),

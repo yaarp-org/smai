@@ -41,7 +41,7 @@ StateDef(
    one-more-time").
 
 The synthesized edge name is
-`"<from> -> <to> (synthesized retry-exhausted terminal)"` and the
+`"<from> → <to> (synthesized retry-exhausted terminal)"` and the
 `gate_outcome_reason` written to `transition_log` is exactly
 `policy.on_exhaustion_reason`. Audit queries that match on the pre-
 round-10 reason wording (e.g.
@@ -84,13 +84,14 @@ state has no counter on the record).
   `EngineConfig.retry_policies` (which spec authors consult from gate
   bodies if they need backoff-aware retry logic).
 
-## Per-spec inventory at round 10
+## Per-spec inventory at round 11
 
 | Spec | State | counter | max | terminal | source |
 |---|---|---|---|---|---|
 | proposal | `designing` | `design_attempt` | `max_design_attempts` (1) | `failed` | engine-synthesized |
 | proposal | `registered` | `registration_attempt` | `max_registration_attempts` (2) | `failed` | engine-synthesized |
 | cg_execution | `implementing` | `implementation_phase_attempt` | `max_implementation_phase_attempts` (2) | `implementation_failed` | engine-synthesized (round-10 net-new) |
+| cg_entries | `implementing` | `entry_dispatch_attempt` | `max_entry_dispatch_attempts` (2) | `implementation_failed` | engine-synthesized (round-11 net-new) |
 | run_record | `submitted` | `run_attempt` | `max_run_attempts` (3) | `failed` | engine-synthesized (round-10 net-new) |
 | paper_ingestion | `screening` | `screening_attempt` | `max_screening_attempts` (1) | `failed` | engine-synthesized |
 | paper_ingestion | `planning` | `planning_attempt` | `max_planning_attempts` (1) | `failed` | engine-synthesized |
@@ -104,12 +105,6 @@ Dispatched states with `retry_policy=None`:
   handles run-level retries.
 - `cg_execution.evaluating` — writes evaluation artifacts to a
   predictable key; idempotent.
-- `cg_entries.implementing` — `EntryRecord.implementation_attempt` is
-  bumped by the CG-spec's review-retry gate (not on dispatch entry),
-  so adding `RetryPolicy` here would double-count. Round 11 candidate:
-  if dispatch-handler crashes on the entry side become a problem,
-  decide whether to merge the two attempt-counter semantics or add a
-  separate `entry_dispatch_attempt` field.
 - `paper_ingestion.fetching` — no counter on `PaperRecord` for fetch
   attempts; `08` §5.2 explicitly defers fetch retries to v2. Add a
   `fetch_attempt` field + a `RetryPolicy` if a deployment needs it.

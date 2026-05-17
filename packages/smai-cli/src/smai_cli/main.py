@@ -286,6 +286,7 @@ def smai_dev(
             runtime_config,
             workspace_root=workspace_root,
         ) as runtime:
+            _enforce_runtime_image_published(runtime)
             stop_event = asyncio.Event()
 
             def _signal_handler(*_: Any) -> None:
@@ -1480,6 +1481,7 @@ def smai_ui(  # noqa: PLR0913
             # verb's docstring + OPERATIONS.md.
             if resolved_with_worker:
                 _enforce_lease_capability(runtime)
+                _enforce_runtime_image_published(runtime)
             fastapi_app = make_api_app(runtime, auth_config=auth_config)
             uvicorn_config = uvicorn.Config(
                 fastapi_app,
@@ -1634,6 +1636,35 @@ def _enforce_lease_capability(runtime: Any) -> None:
         )
 
 
+def _enforce_runtime_image_published(runtime: Any) -> None:
+    """Worker boot pre-flight: refuse a registry-pull Compute substrate
+    paired with the local-only built-in default runtime image.
+
+    Shared across every path that boots a worker which will dispatch
+    experiment seed runs — ``smai dev``, ``smai start``, and
+    ``smai ui --with-worker``. A registry-pull substrate (Modal /
+    RunPod, anything whose ``ComputeCapabilities.requires_published_image``
+    is ``True``) cannot pull the local-only built-in default tags
+    (``smai-runtime:dev`` / ``smai-runtime-cpu:dev``); left unchecked
+    the failure surfaces as an opaque ``RemoteError: Image build ...
+    failed`` mid-CG-execution (round 11). This catches it at boot with
+    a concrete, actionable message.
+
+    Reuses :func:`smai_cli.verify.verify_runtime_image_config` so the
+    boot-path check is byte-identical to the one ``smai verify`` runs.
+    """
+    from smai_cli.verify import verify_runtime_image_config  # noqa: PLC0415
+
+    engine = runtime.config.engine
+    result = verify_runtime_image_config(
+        runtime.plugins.compute,
+        engine.runtime_image,
+        engine.runtime_cpu_image,
+    )
+    if not result.ok:
+        _err(f"worker pre-flight refused to boot — {result.reason}")
+
+
 @app.command("start")
 def smai_start(
     config: Annotated[
@@ -1686,6 +1717,12 @@ def smai_start(
       MUST match the migrations head. Equivalent to
       ``smai migrate --check`` but programmatic (no subprocess shell-
       out). Run ``smai migrate`` to upgrade.
+    * Unpublished runtime image: a registry-pull compute substrate
+      (Modal / RunPod) paired with the local-only built-in default
+      ``engine.runtime_image`` — the operator never published an
+      image. Checked after the runtime starts via
+      :func:`_enforce_runtime_image_published` (shared with
+      ``smai dev`` / ``smai ui --with-worker``).
 
     Operational guidance for systemd / supervisord / launchd unit
     examples + recommended connection-pool sizing + log handling lives
@@ -1723,6 +1760,7 @@ def smai_start(
             workspace_root=workspace_root,
         ) as runtime:
             _enforce_lease_capability(runtime)
+            _enforce_runtime_image_published(runtime)
 
             stop_event = asyncio.Event()
 
@@ -1760,6 +1798,20 @@ def smai_verify(
         str,
         typer.Option("--format", help="Output format: 'text' or 'json'."),
     ] = "text",
+    probe_image: Annotated[
+        bool,
+        typer.Option(
+            "--probe-image",
+            help=(
+                "Additionally submit a trivial no-op job per runtime "
+                "image to confirm it is pullable by the configured "
+                "compute substrate. COSTS REAL MONEY / TIME (a real, "
+                "minimal compute job per image) — opt-in only. The "
+                "free, always-on runtime-image config check runs "
+                "without this flag."
+            ),
+        ),
+    ] = False,
 ) -> None:
     """Ping each configured plugin (`09` §6.2 — pre-flight).
 
@@ -1784,11 +1836,18 @@ def smai_verify(
     * **Compute** — read-only ``status`` against a non-existent
       handle; expects :class:`JobNotFound`. Surfaces auth +
       substrate reachability.
+    * **Runtime-image config** (round 11) — a free, always-on check:
+      when the compute substrate is registry-pull (Modal / RunPod),
+      fails if ``engine.runtime_image`` / ``runtime_cpu_image`` are
+      still the local-only built-in defaults the substrate cannot
+      pull.
+    * **Runtime-image probe** (``--probe-image``, opt-in) — submits a
+      trivial no-op job per runtime image to confirm pullability.
+      **Costs real money / time**, so it is opt-in only.
 
-    Exit code: 0 iff all four plugins ping clean. Non-zero (1) if
-    any plugin fails — the per-plugin reason is printed to stdout,
-    and the verb exits with code 1 so CI / deployment scripts can
-    gate on it.
+    Exit code: 0 iff every check passes. Non-zero (1) if any check
+    fails — the per-check reason is printed to stdout, and the verb
+    exits with code 1 so CI / deployment scripts can gate on it.
     """
     from smai_orchestrator import instantiate_plugins  # noqa: PLC0415
 
@@ -1798,6 +1857,8 @@ def smai_verify(
         verify_compute,
         verify_llm_provider,
         verify_metadata_store,
+        verify_runtime_image_config,
+        verify_runtime_image_probe,
     )
 
     try:
@@ -1823,12 +1884,28 @@ def smai_verify(
             # and `smai verify` is a single-shot pre-flight, not a
             # per-role health check.
             llm_provider = next(iter(plugins.llm_providers.values()))
+            engine_cfg = runtime_config.engine
             results = {
                 "llm_provider": await verify_llm_provider(llm_provider),
                 "metadata_store": await verify_metadata_store(plugins.metadata_store),
                 "artifact_store": await verify_artifact_store(plugins.artifact_store),
                 "compute": await verify_compute(plugins.compute),
+                # Free, always-on: a registry-pull substrate paired with
+                # the local-only default runtime image is a hard fail.
+                "runtime_image": verify_runtime_image_config(
+                    plugins.compute,
+                    engine_cfg.runtime_image,
+                    engine_cfg.runtime_cpu_image,
+                ),
             }
+            if probe_image:
+                # Opt-in real probe — costs money/time; runs only after
+                # the cheap checks above are constructed.
+                results["runtime_image_probe"] = await verify_runtime_image_probe(
+                    plugins.compute,
+                    engine_cfg.runtime_image,
+                    engine_cfg.runtime_cpu_image,
+                )
         return results
 
     try:

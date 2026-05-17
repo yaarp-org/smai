@@ -266,6 +266,38 @@ async def test_submit_unknown_sandbox_create_failure_is_compute_unavailable() ->
         )
 
 
+async def test_submit_image_build_failure_translates_to_job_image_invalid() -> None:
+    """A Modal ``RemoteError: Image build ... failed`` (the shape an
+    unpublished local-only ``runtime_image`` tag produces) classifies as
+    :class:`JobImageInvalid`, not :class:`ComputeUnavailable` — round 11.
+
+    The ``RemoteError`` class name carries none of the pull / registry /
+    manifest vocabulary, so this exercises the "image" + "build"
+    permissive-fallback branch of ``_is_image_pull_error``.
+    """
+
+    class RemoteError(Exception):
+        """Stand-in for :class:`modal.exception.RemoteError`."""
+
+    fake = FakeModal()
+
+    def boom(*_args: object, **_kwargs: object) -> object:
+        raise RemoteError(
+            "Image build for im-1234 failed with the exception:\nno such tag smai-runtime:dev"
+        )
+
+    fake.Sandbox.create = boom  # type: ignore[method-assign,assignment]
+    compute = _new_compute(modal=fake)
+    with pytest.raises(JobImageInvalid) as exc_info:
+        await compute.submit(
+            image="smai-runtime:dev",
+            command=["python", "-c", "pass"],
+            env={},
+            timeout_seconds=10,
+        )
+    assert exc_info.value.image == "smai-runtime:dev"
+
+
 async def test_submit_returns_handle_with_reconnection_metadata() -> None:
     compute = _new_compute()
     handle = await compute.submit(
@@ -398,6 +430,12 @@ def test_image_pull_error_detection_recognizes_modal_shapes() -> None:
     assert _is_image_pull_error(FakeNotFoundError("unable to pull image foo"))
     # Bare "manifest unknown" string from registry side
     assert _is_image_pull_error(RuntimeError("manifest unknown for image"))
+    # Round 11: ``RemoteError: Image build ... failed`` — the class name
+    # carries no pull / registry / manifest vocabulary, so "image" +
+    # "build" co-presence in the message is what classifies it.
+    assert _is_image_pull_error(RuntimeError("Image build for im-1 failed"))
+    # "build" without "image" must NOT over-match an unrelated failure.
+    assert not _is_image_pull_error(RuntimeError("build step 3 failed"))
     # Generic Modal NotFoundError without an image-related message is NOT
     # an image error (could be App / Volume not-found from a different
     # SDK call) — but the plugin's only NotFoundError path on

@@ -29,10 +29,13 @@ from smai_cli.verify import (
     verify_compute,
     verify_llm_provider,
     verify_metadata_store,
+    verify_runtime_image_config,
+    verify_runtime_image_probe,
 )
 from smai_core.plugins import (
     ArtifactStoreCapabilities,
     CacheConfig,
+    ComputeCapabilities,
     JobHandle,
     JobStatus,
     LlmCapabilities,
@@ -40,8 +43,9 @@ from smai_core.plugins import (
     NormalizedMessage,
     ToolDefinition,
 )
-from smai_core.plugins.compute import ComputeUnavailable, JobNotFound
+from smai_core.plugins.compute import ComputeUnavailable, JobImageInvalid, JobNotFound
 from smai_core.plugins.metadata_store._capabilities import MetadataStoreCapabilities
+from smai_orchestrator.engine import DEFAULT_RUNTIME_CPU_IMAGE, DEFAULT_RUNTIME_IMAGE
 
 # === Stubs scoped to this test module ========================================
 
@@ -611,7 +615,231 @@ pipelines: ["smai_cg_execution", "smai_cg_entries"]
         result = runner.invoke(app, ["verify", "-c", str(smai_yaml), "--format", "json"])
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
-    assert set(payload.keys()) == {"llm_provider", "metadata_store", "artifact_store", "compute"}
+    assert set(payload.keys()) == {
+        "llm_provider",
+        "metadata_store",
+        "artifact_store",
+        "compute",
+        "runtime_image",
+    }
     for entry in payload.values():
         assert entry["ok"] is True
         assert isinstance(entry["reason"], str)
+
+
+# === verify_runtime_image_config (round 11) ==================================
+
+
+class _RegistryPullCompute(FakeCompute):
+    """Compute whose substrate pulls the job image from a registry — the
+    operator must publish it. Mirrors Modal / RunPod's
+    :attr:`ComputeCapabilities.requires_published_image`."""
+
+    name: str = "fake-registry-pull"
+    capabilities: ComputeCapabilities = ComputeCapabilities(
+        supports_gpu=True,
+        max_timeout_seconds=3600,
+        supports_log_streaming=False,
+        requires_published_image=True,
+    )
+
+
+class _ImageInvalidCompute(_RegistryPullCompute):
+    """Registry-pull compute whose ``submit`` rejects the image — the
+    probe's failure case."""
+
+    async def submit(  # type: ignore[override]
+        self,
+        image: str,
+        command: list[str],
+        env: dict[str, str],
+        gpu: bool = False,
+        timeout_seconds: int = 3600,
+        **plugin_options: object,
+    ) -> JobHandle:
+        del command, env, gpu, timeout_seconds, plugin_options
+        raise JobImageInvalid(image, "manifest unknown")
+
+
+def test_verify_runtime_image_config_local_build_passes() -> None:
+    """A local-build substrate (``requires_published_image`` False, e.g.
+    ``localgpu``) paired with the default image tags is the intended
+    flow — PASS."""
+    result = verify_runtime_image_config(
+        FakeCompute(), DEFAULT_RUNTIME_IMAGE, DEFAULT_RUNTIME_CPU_IMAGE
+    )
+    assert result.ok is True
+    assert result.latency_ms is None
+
+
+def test_verify_runtime_image_config_registry_pull_default_image_fails() -> None:
+    """A registry-pull substrate paired with the local-only built-in
+    default image tags is the round-11 bug — FAIL with an actionable
+    message naming both offending fields and the runbook."""
+    result = verify_runtime_image_config(
+        _RegistryPullCompute(), DEFAULT_RUNTIME_IMAGE, DEFAULT_RUNTIME_CPU_IMAGE
+    )
+    assert result.ok is False
+    assert "engine.runtime_image" in result.reason
+    assert "engine.runtime_cpu_image" in result.reason
+    assert "fake-registry-pull" in result.reason
+    assert "OPERATIONS.md" in result.reason
+
+
+def test_verify_runtime_image_config_registry_pull_overridden_passes() -> None:
+    """A registry-pull substrate with both runtime images overridden to
+    published references — PASS."""
+    result = verify_runtime_image_config(
+        _RegistryPullCompute(),
+        "registry.example.com/org/smai-runtime:v2",
+        "registry.example.com/org/smai-runtime-cpu:v2",
+    )
+    assert result.ok is True
+
+
+def test_verify_runtime_image_config_registry_pull_one_default_fails() -> None:
+    """Only one image left at the default still fails — the check names
+    just the offending field."""
+    result = verify_runtime_image_config(
+        _RegistryPullCompute(),
+        "registry.example.com/org/smai-runtime:v2",
+        DEFAULT_RUNTIME_CPU_IMAGE,
+    )
+    assert result.ok is False
+    assert "engine.runtime_cpu_image" in result.reason
+    assert "engine.runtime_image is" not in result.reason
+
+
+# === verify_runtime_image_probe (round 11, opt-in) ===========================
+
+
+@pytest.mark.asyncio
+async def test_verify_runtime_image_probe_passes_on_clean_submit() -> None:
+    """The probe submits a no-op job per runtime image; a substrate that
+    accepts the submit means the image is reachable — PASS."""
+    result = await verify_runtime_image_probe(
+        FakeCompute(),
+        "registry.example.com/org/smai-runtime:v2",
+        "registry.example.com/org/smai-runtime-cpu:v2",
+    )
+    assert result.ok is True
+    assert "smai-runtime:v2" in result.reason
+    assert "smai-runtime-cpu:v2" in result.reason
+    assert result.latency_ms is not None
+
+
+@pytest.mark.asyncio
+async def test_verify_runtime_image_probe_dedupes_equal_images() -> None:
+    """When the GPU and CPU images are identical the probe submits once."""
+    compute = FakeCompute()
+    result = await verify_runtime_image_probe(compute, "same:tag", "same:tag")
+    assert result.ok is True
+    # Only one probe job submitted (counter advanced once).
+    assert compute._counter == 1
+
+
+@pytest.mark.asyncio
+async def test_verify_runtime_image_probe_fails_on_image_invalid() -> None:
+    """A substrate that rejects the image at ``submit`` time
+    (:class:`JobImageInvalid`) fails the probe."""
+    result = await verify_runtime_image_probe(
+        _ImageInvalidCompute(),
+        "registry.example.com/org/not-pushed:v2",
+        "registry.example.com/org/not-pushed-cpu:v2",
+    )
+    assert result.ok is False
+    assert "not reachable" in result.reason
+
+
+# === smai verify CLI verb — round-11 runtime-image checks ====================
+
+
+def _run_verify_cli(
+    monkeypatch: pytest.MonkeyPatch,
+    compute: object,
+    *,
+    extra_args: list[str] | None = None,
+) -> object:
+    """Invoke ``smai verify`` against a stub ``InstantiatedPlugins`` with
+    the given ``compute``. Shared boilerplate for the round-11 CLI tests.
+    """
+    from smai_cli.main import app
+    from smai_orchestrator import InstantiatedPlugins
+    from typer.testing import CliRunner
+
+    class _StubInstantiate:
+        def __init__(self, plugins: InstantiatedPlugins) -> None:
+            self._plugins = plugins
+
+        async def __aenter__(self) -> InstantiatedPlugins:
+            return self._plugins
+
+        async def __aexit__(self, *_: object) -> None:
+            del _
+
+    plugins = InstantiatedPlugins(
+        llm_providers={"planner": StubLlmProvider()},
+        metadata_store=_OkMetadataStub(),  # type: ignore[arg-type]
+        artifact_store=InMemoryArtifactStore(),  # type: ignore[arg-type]
+        compute=compute,  # type: ignore[arg-type]
+    )
+
+    def _fake_instantiate_plugins(_selection: object, **_kwargs: object) -> _StubInstantiate:
+        return _StubInstantiate(plugins)
+
+    monkeypatch.setattr("smai_orchestrator.instantiate_plugins", _fake_instantiate_plugins)
+
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        smai_yaml = Path(tmp_dir) / "smai.yaml"
+        smai_yaml.write_text(
+            """
+engine: {}
+plugins:
+  llm_provider: bedrock
+  metadata_store: sqlite
+  artifact_store: localfs
+  compute: localgpu
+pipelines: ["smai_cg_execution", "smai_cg_entries"]
+""",
+            encoding="utf-8",
+        )
+        runner = CliRunner()
+        return runner.invoke(app, ["verify", "-c", str(smai_yaml), *(extra_args or [])])
+
+
+def test_smai_verify_cli_registry_pull_default_image_exits_one(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``smai verify`` exits 1 when a registry-pull compute substrate is
+    paired with the local-only default ``engine.runtime_image`` (the
+    config under test leaves ``engine: {}`` so the defaults apply)."""
+    result = _run_verify_cli(monkeypatch, _RegistryPullCompute())
+    assert result.exit_code == 1, result.output  # type: ignore[attr-defined]
+    assert "FAIL runtime_image" in result.output  # type: ignore[attr-defined]
+    assert "OPERATIONS.md" in result.output  # type: ignore[attr-defined]
+
+
+def test_smai_verify_cli_local_build_default_image_passes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A local-build substrate + default image is the intended flow —
+    the runtime_image check reports PASS and the verb exits 0."""
+    result = _run_verify_cli(monkeypatch, _JobNotFoundCompute())
+    assert result.exit_code == 0, result.output  # type: ignore[attr-defined]
+    assert "PASS runtime_image" in result.output  # type: ignore[attr-defined]
+
+
+def test_smai_verify_cli_probe_image_flag_runs_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``smai verify --probe-image`` adds a ``runtime_image_probe`` check;
+    without the flag the probe is skipped."""
+    with_flag = _run_verify_cli(monkeypatch, _JobNotFoundCompute(), extra_args=["--probe-image"])
+    assert with_flag.exit_code == 0, with_flag.output  # type: ignore[attr-defined]
+    assert "runtime_image_probe" in with_flag.output  # type: ignore[attr-defined]
+
+    without_flag = _run_verify_cli(monkeypatch, _JobNotFoundCompute())
+    assert "runtime_image_probe" not in without_flag.output  # type: ignore[attr-defined]

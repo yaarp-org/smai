@@ -435,6 +435,75 @@ few that bite in practice:
 
 ---
 
+## 7.1 Building and publishing the runtime images
+
+A registry-pull compute substrate (`modal`, `runpod`) cannot use the
+built-in default `engine.runtime_image` / `engine.runtime_cpu_image`
+values (`smai-runtime:dev` / `smai-runtime-cpu:dev`). Those are
+local-only Docker tags `localgpu` builds on the host; Modal / RunPod
+pull the job image from a registry, so the operator must publish it and
+point the config at the published reference. `smai verify` and the
+worker boot pre-flight (`smai dev` / `smai start` / `smai ui
+--with-worker`) hard-fail on the unpublished-default combination rather
+than letting it surface as an opaque `RemoteError: Image build ...
+failed` mid-run.
+
+The reference Dockerfiles live at
+`plugins/smai-compute-localgpu/dockerfiles/runtime.Dockerfile` (GPU,
+`nvidia/cuda` base) and `runtime-cpu.Dockerfile` (CPU-only, lean
+`python:3.11-slim` base).
+
+1. **Build for the substrate's architecture.** Modal and RunPod run an
+   `amd64` (`linux/amd64`) substrate. An Apple-Silicon (or other
+   `arm64`) operator who builds without an explicit platform pin will
+   produce an `arm64` image that pushes fine but fails to run on the
+   substrate. **Always pin `--platform linux/amd64`** (this line is
+   load-bearing — a wrong arch is the single most common silent
+   failure here):
+
+   ```bash
+   REGISTRY=registry.example.com/your-org   # a registry the substrate can reach
+
+   docker buildx build --platform linux/amd64 \
+     -f plugins/smai-compute-localgpu/dockerfiles/runtime.Dockerfile \
+     -t "$REGISTRY/smai-runtime:v2" \
+     --push .
+
+   docker buildx build --platform linux/amd64 \
+     -f plugins/smai-compute-localgpu/dockerfiles/runtime-cpu.Dockerfile \
+     -t "$REGISTRY/smai-runtime-cpu:v2" \
+     --push .
+   ```
+
+   (`docker buildx build --push` builds and pushes in one step. With a
+   plain `docker build`, pass `--platform linux/amd64`, then
+   `docker push` each tag separately.)
+
+2. **Make sure the substrate can authenticate to the registry.** A
+   public registry needs nothing; a private one needs the substrate's
+   pull credentials configured out-of-band (Modal image registry
+   secrets, RunPod registry auth). SMAI does not manage registry
+   credentials.
+
+3. **Point `smai.yaml` at the published references:**
+
+   ```yaml
+   engine:
+     runtime_image: registry.example.com/your-org/smai-runtime:v2
+     runtime_cpu_image: registry.example.com/your-org/smai-runtime-cpu:v2
+   ```
+
+4. **Confirm before booting a worker.** Run `smai verify` for the free,
+   always-on config check, or `smai verify --probe-image` to additionally
+   submit a real (billed) no-op job per image and confirm the substrate
+   can actually pull each one.
+
+SMAI publishes no default runtime image and does not auto-build or
+auto-publish — image publication is an operator responsibility per
+`07-plugin-interfaces.md` §7.4.
+
+---
+
 ## 8. Cross-references
 
 - `designs/smai/09-cli.md` §6 — `smai start` verb shape + required

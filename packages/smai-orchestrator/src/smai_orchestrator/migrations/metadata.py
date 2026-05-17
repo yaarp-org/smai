@@ -142,6 +142,8 @@ entries_table: Table = Table(
     Column("implementation_job_handle", JSON(none_as_null=True), nullable=True),
     # Implementation retry counter
     Column("implementation_attempt", Integer, nullable=False, default=0),
+    # Dispatch retry counter (round 11).
+    Column("entry_dispatch_attempt", Integer, nullable=False, default=0),
     # Common
     Column("version", Integer, nullable=False, default=0),
     Column("created_at", DateTime(timezone=True), nullable=False),

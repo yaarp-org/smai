@@ -230,6 +230,16 @@ def _patch_short_circuit(monkeypatch: pytest.MonkeyPatch) -> None:
                         (),
                         {"capabilities": type("_C", (), {"supports_leasing": True})()},
                     )()
+                    # localgpu builds images locally — the round-11
+                    # runtime-image pre-flight passes.
+                    compute = type(
+                        "_Compute",
+                        (),
+                        {
+                            "name": "localgpu",
+                            "capabilities": type("_CC", (), {"requires_published_image": False})(),
+                        },
+                    )()
 
                 return _P()
 

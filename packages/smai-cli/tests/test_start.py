@@ -442,6 +442,87 @@ def test_enforce_lease_capability_allows_multi_worker_against_leasing_store() ->
     _enforce_lease_capability(_Runtime())
 
 
+# === Worker pre-flight: runtime-image config check (round 11) ================
+
+
+def _make_image_check_runtime(
+    *, requires_published_image: bool, runtime_image: str, runtime_cpu_image: str
+) -> object:
+    """Build a minimal duck-typed runtime for the ``_enforce_runtime_image_published``
+    tests — exposes only ``plugins.compute.capabilities`` + ``config.engine``."""
+    from smai_core.plugins import ComputeCapabilities
+
+    class _Compute:
+        name = "modal" if requires_published_image else "localgpu"
+        capabilities = ComputeCapabilities(
+            supports_gpu=True,
+            max_timeout_seconds=3600,
+            requires_published_image=requires_published_image,
+        )
+
+    class _Plugins:
+        compute = _Compute()
+
+    class _EngineCfg:
+        pass
+
+    _EngineCfg.runtime_image = runtime_image  # type: ignore[attr-defined]
+    _EngineCfg.runtime_cpu_image = runtime_cpu_image  # type: ignore[attr-defined]
+
+    class _Config:
+        engine = _EngineCfg()
+
+    class _Runtime:
+        config = _Config()
+        plugins = _Plugins()
+
+    return _Runtime()
+
+
+def test_enforce_runtime_image_published_rejects_registry_pull_default_image() -> None:
+    """``_enforce_runtime_image_published`` exits 1 when a registry-pull
+    compute substrate is paired with the local-only default runtime
+    image (round 11)."""
+    import typer
+    from smai_cli.main import _enforce_runtime_image_published
+    from smai_orchestrator.engine import DEFAULT_RUNTIME_CPU_IMAGE, DEFAULT_RUNTIME_IMAGE
+
+    runtime = _make_image_check_runtime(
+        requires_published_image=True,
+        runtime_image=DEFAULT_RUNTIME_IMAGE,
+        runtime_cpu_image=DEFAULT_RUNTIME_CPU_IMAGE,
+    )
+    with pytest.raises(typer.Exit):
+        _enforce_runtime_image_published(runtime)
+
+
+def test_enforce_runtime_image_published_allows_local_build_default_image() -> None:
+    """A local-build substrate with the default image tags is the
+    intended flow — no raise."""
+    from smai_cli.main import _enforce_runtime_image_published
+    from smai_orchestrator.engine import DEFAULT_RUNTIME_CPU_IMAGE, DEFAULT_RUNTIME_IMAGE
+
+    runtime = _make_image_check_runtime(
+        requires_published_image=False,
+        runtime_image=DEFAULT_RUNTIME_IMAGE,
+        runtime_cpu_image=DEFAULT_RUNTIME_CPU_IMAGE,
+    )
+    _enforce_runtime_image_published(runtime)
+
+
+def test_enforce_runtime_image_published_allows_registry_pull_overridden_image() -> None:
+    """A registry-pull substrate with the runtime images overridden to
+    published references — no raise."""
+    from smai_cli.main import _enforce_runtime_image_published
+
+    runtime = _make_image_check_runtime(
+        requires_published_image=True,
+        runtime_image="registry.example.com/org/smai-runtime:v2",
+        runtime_cpu_image="registry.example.com/org/smai-runtime-cpu:v2",
+    )
+    _enforce_runtime_image_published(runtime)
+
+
 # === SIGINT/SIGTERM signal handling ==========================================
 
 

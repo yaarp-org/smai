@@ -33,6 +33,15 @@ from smai_orchestrator.engine.clock import (
     default_wall_clock,
 )
 
+# Built-in default runtime-image tags (round-4 friction A). These are
+# local Docker tags ``LocalGpuCompute`` builds on the host; a
+# registry-pull substrate (Modal / RunPod) cannot pull them. Exposed as
+# module-level constants so the ``smai verify`` and worker-boot
+# pre-flights can compare the configured value against the default
+# without re-typing the string literal (round 11).
+DEFAULT_RUNTIME_IMAGE = "smai-runtime:dev"
+DEFAULT_RUNTIME_CPU_IMAGE = "smai-runtime-cpu:dev"
+
 
 class RetryBackoffConfig(BaseModel):
     """Named backoff configuration for retry-edge gate rules (`05` §6).
@@ -205,7 +214,7 @@ class EngineConfig(BaseModel):
 
     # ---- Runtime container images (round-4 friction A) -------------------
 
-    runtime_image: str = "smai-runtime:dev"
+    runtime_image: str = DEFAULT_RUNTIME_IMAGE
     """Container image hosting *experiment seed runs* whose
     ``controlled_conditions.compute.gpu`` is ``true`` (the default). The
     reference build is ``runtime.Dockerfile`` — ``nvidia/cuda``-based,
@@ -214,7 +223,7 @@ class EngineConfig(BaseModel):
     :class:`HarnessContract` requests GPU. Override per deployment via
     ``smai.yaml`` (e.g. to point at a published internal image)."""
 
-    runtime_cpu_image: str = "smai-runtime-cpu:dev"
+    runtime_cpu_image: str = DEFAULT_RUNTIME_CPU_IMAGE
     """Container image hosting experiment seed runs whose
     ``controlled_conditions.compute.gpu`` is ``false`` (round-4 friction
     A). The reference build is ``runtime-cpu.Dockerfile`` — lean,
