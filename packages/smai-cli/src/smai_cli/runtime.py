@@ -31,7 +31,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping
+from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -508,13 +508,28 @@ class ExperimentsService:
         single = compile_experiment(document, registries)
         return {document.experiment.id: single}
 
-    async def submit_text(self, yaml_text: str) -> list[str]:
+    async def submit_text(
+        self,
+        yaml_text: str,
+        techniques: Sequence[TechniqueRef] | None = None,
+    ) -> list[str]:
         """Compile, persist artifacts to :class:`ArtifactStore`, and
         create CGs in :class:`MetadataStore`.
 
         Returns the list of CG IDs created (one for an
         :class:`ExperimentDocument`; N for a :class:`FactorModelDocument`).
+
+        ``techniques`` — hand-authored :class:`TechniqueRef` objects to
+        upsert into the store's technique mirror *before* registries are
+        resolved, so an experiment referencing a user-defined
+        ``technique_id`` clears the ``technique.id_registered``
+        verification rule. The upsert is idempotent
+        (:meth:`MetadataStore.upsert_technique` is a true upsert), so a
+        re-submit with the same techniques is harmless.
         """
+        if techniques:
+            for ref in techniques:
+                await self._plugins.metadata_store.upsert_technique(ref)
         document = _resolve_document(yaml_text)
         registries: Registries = await self._resolve_registries()
         if isinstance(document, FactorModelDocument):

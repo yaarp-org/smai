@@ -325,11 +325,33 @@ def smai_run(
         bool,
         typer.Option("--watch", help="Tail state transitions until terminal."),
     ] = False,
+    techniques: Annotated[
+        list[Path] | None,
+        typer.Option(
+            "--techniques",
+            exists=True,
+            dir_okay=False,
+            readable=True,
+            help="Technique JSON file(s) to register before submitting. Repeatable. "
+            "Each file is a JSON list (or {id: ref} object) of TechniqueRef "
+            "objects, byte-identical to the format `smai compile --techniques` "
+            "accepts. Every TechniqueRef is upserted into the MetadataStore so "
+            "an experiment whose entries reference a hand-authored technique_id "
+            "clears the technique.id_registered verification rule.",
+        ),
+    ] = None,
 ) -> None:
     """Submit ``experiment.yaml`` to a running deployment (`09` §5.2).
 
     Compiles + persists artifacts + creates a CG row in ``draft``.
     Returns the CG ID on stdout. ``--watch`` polls until terminal.
+
+    ``--techniques FILE`` (repeatable) registers hand-authored
+    techniques into the MetadataStore before the experiment is
+    compiled. The upsert is idempotent, and it happens before
+    compilation: if the run fails after the upserts the techniques
+    stay registered, and a re-run with the same ``--techniques``
+    re-upserts them harmlessly.
     """
     overrides: dict[str, Any] = _apply_dev_filesystem_defaults({})
     try:
@@ -342,11 +364,14 @@ def smai_run(
         _err(str(exc))
 
     yaml_text = experiment_yaml.read_text(encoding="utf-8")
+    technique_refs = (
+        list(_load_technique_refs_from_files(techniques).values()) if techniques else None
+    )
 
     async def _run() -> None:
         # Don't spin up the worker — `smai run` is a one-shot submit.
         async with Runtime.start_in_band(runtime_config, run_worker=False) as runtime:
-            cg_ids = await runtime.experiments.submit_text(yaml_text)
+            cg_ids = await runtime.experiments.submit_text(yaml_text, techniques=technique_refs)
             for cg_id in cg_ids:
                 typer.echo(cg_id)
             if watch:

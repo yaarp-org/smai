@@ -215,8 +215,36 @@ methodology and does not read the metadata store, so any technique your
 experiment references must be supplied inline: `smai compile
 experiment.yaml --techniques techniques.json` (a JSON list of
 `TechniqueRef` objects, or an object keyed by id; repeatable).
-`smai run` reads registered techniques from the store, so it needs no
-such flag once a proposal or paper-ingestion run has populated them.
+`smai run` reads registered techniques from the store, so once a
+proposal or paper-ingestion run has populated them it needs no such
+flag. For a hand-authored technique that no pipeline has registered,
+pass `smai run experiment.yaml --techniques techniques.json`
+(repeatable; the same file format `smai compile --techniques`
+accepts): each `TechniqueRef` is upserted into the metadata store
+before the experiment is compiled, so verification passes.
+
+A `techniques.json` is a JSON list of `TechniqueRef` objects (or an
+object keyed by id). Required fields: `id` (the `technique_id` your
+experiment entries reference), `name`, `description`, `category`,
+`compatible_factor_types` (`additive` / `substitutive`), and
+`affects_extension_points`. Optional: `standard` (default `false` —
+when `false`, a `fidelity_anchor` is required), `fidelity_anchor`,
+`implies_controlled`, `parameter_schema`. Unknown fields are rejected.
+A minimal example:
+
+```json
+[
+  {
+    "id": "tech_cutout",
+    "name": "Cutout",
+    "description": "Cutout regularization: random square patches masked out of training images.",
+    "category": "augmentation",
+    "compatible_factor_types": ["additive"],
+    "affects_extension_points": ["train_transforms"],
+    "standard": true
+  }
+]
+```
 
 Everything else dispatches real agent calls and (eventually) real
 compute, so it needs whatever the selected plugins need. The dev
@@ -651,6 +679,7 @@ smai start             Boot the production deployment (out-of-band worker; expli
 smai ui                Boot the API + SPA process. Auto-detects --with-worker from the plugin
                        shape (sqlite+localfs → on; anything else → off).
 smai run <yaml>        Compile + register a CG; optional --watch polls until terminal.
+                       --techniques FILE (repeatable) registers hand-authored techniques first.
 smai submit-proposal   Primary input verb. Submit a novel-technique description; the planner
   <description>        drafts the ExperimentDefinition.
 smai approve-proposal  Human gate at `designed`. Approval atomically registers 1–N CGs.
