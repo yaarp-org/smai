@@ -42,6 +42,25 @@ from smai_orchestrator.engine.clock import (
 DEFAULT_RUNTIME_IMAGE = "smai-runtime:dev"
 DEFAULT_RUNTIME_CPU_IMAGE = "smai-runtime-cpu:dev"
 
+# Built-in default agent-image tag (round 12). The harness-builder and
+# technique-implementer agents dispatch as containers under this image;
+# like the runtime-image defaults above it is a local-only Docker tag a
+# registry-pull substrate cannot pull. Round-12 extends the round-11
+# image-distribution pre-flights to cover it.
+#
+# Reconciliation note: ``smai_agents.agents.{harness_builder,
+# technique_implementer}`` and ``smai_compute_localgpu`` each carry their
+# own ``DEFAULT_AGENT_IMAGE = "smai-agent:dev"`` literal. This module
+# does NOT import theirs even though ``check_deps.py`` permits the
+# smai-orchestrator → smai-agents edge: ``EngineConfig`` is a foundational
+# import and the spec builders deliberately lazy-import smai-agents to
+# keep the heavy agent fleet off the module-load path. Keeping a local
+# literal here preserves that discipline (same call round 11 made for the
+# runtime-image defaults, which smai-compute-localgpu also re-declares).
+# All four copies must hold the same string; that is asserted by a unit
+# test rather than an import.
+DEFAULT_AGENT_IMAGE = "smai-agent:dev"
+
 
 class RetryBackoffConfig(BaseModel):
     """Named backoff configuration for retry-edge gate rules (`05` §6).
@@ -222,6 +241,26 @@ class EngineConfig(BaseModel):
     dispatcher passes this to :meth:`Compute.submit` when the CG's
     :class:`HarnessContract` requests GPU. Override per deployment via
     ``smai.yaml`` (e.g. to point at a published internal image)."""
+
+    agent_image: str = DEFAULT_AGENT_IMAGE
+    """Container image hosting the *agent-side* CG-execution jobs — the
+    harness builder and the technique implementer (round 12). Both
+    dispatch as containers via :meth:`Compute.submit` with this image.
+    The reference build is ``agent.Dockerfile`` (lean, no ML stack,
+    distinct from :attr:`runtime_image` / :attr:`runtime_cpu_image`).
+
+    The built-in default ``smai-agent:dev`` is a local-only Docker tag
+    ``LocalGpuCompute`` builds on the host; a registry-pull substrate
+    (Modal / RunPod) cannot pull it, so override this per deployment via
+    ``smai.yaml`` to point at a published image (the ``smai verify``
+    config check and the worker-boot pre-flight hard-fail on the
+    unpublished-default combination). Threaded through
+    :func:`build_cg_execution_spec` / :func:`build_cg_entries_spec` into
+    the harness-builder / technique-implementer dispatch factories.
+
+    Only the two containerized agents read this — the planner, code
+    reviewer, contextual evaluator, supervisor, and paper-ingestion
+    agents run in-process in the worker."""
 
     runtime_cpu_image: str = DEFAULT_RUNTIME_CPU_IMAGE
     """Container image hosting experiment seed runs whose

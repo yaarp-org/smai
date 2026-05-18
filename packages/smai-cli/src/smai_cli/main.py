@@ -286,7 +286,7 @@ def smai_dev(
             runtime_config,
             workspace_root=workspace_root,
         ) as runtime:
-            _enforce_runtime_image_published(runtime)
+            _enforce_container_images_published(runtime)
             stop_event = asyncio.Event()
 
             def _signal_handler(*_: Any) -> None:
@@ -1481,7 +1481,7 @@ def smai_ui(  # noqa: PLR0913
             # verb's docstring + OPERATIONS.md.
             if resolved_with_worker:
                 _enforce_lease_capability(runtime)
-                _enforce_runtime_image_published(runtime)
+                _enforce_container_images_published(runtime)
             fastapi_app = make_api_app(runtime, auth_config=auth_config)
             uvicorn_config = uvicorn.Config(
                 fastapi_app,
@@ -1636,19 +1636,21 @@ def _enforce_lease_capability(runtime: Any) -> None:
         )
 
 
-def _enforce_runtime_image_published(runtime: Any) -> None:
+def _enforce_container_images_published(runtime: Any) -> None:
     """Worker boot pre-flight: refuse a registry-pull Compute substrate
-    paired with the local-only built-in default runtime image.
+    paired with a local-only built-in default container image.
 
     Shared across every path that boots a worker which will dispatch
-    experiment seed runs — ``smai dev``, ``smai start``, and
+    CG-execution jobs — ``smai dev``, ``smai start``, and
     ``smai ui --with-worker``. A registry-pull substrate (Modal /
     RunPod, anything whose ``ComputeCapabilities.requires_published_image``
-    is ``True``) cannot pull the local-only built-in default tags
-    (``smai-runtime:dev`` / ``smai-runtime-cpu:dev``); left unchecked
-    the failure surfaces as an opaque ``RemoteError: Image build ...
-    failed`` mid-CG-execution (round 11). This catches it at boot with
-    a concrete, actionable message.
+    is ``True``) cannot pull the local-only built-in default tags — the
+    experiment-seed-run images (``smai-runtime:dev`` /
+    ``smai-runtime-cpu:dev``, round 11) or the agent-side
+    harness-builder / technique-implementer image (``smai-agent:dev``,
+    round 12); left unchecked the failure surfaces as an opaque
+    ``RemoteError: Image build ... failed`` mid-CG-execution. This
+    catches it at boot with a concrete, actionable message.
 
     Reuses :func:`smai_cli.verify.verify_runtime_image_config` so the
     boot-path check is byte-identical to the one ``smai verify`` runs.
@@ -1660,6 +1662,7 @@ def _enforce_runtime_image_published(runtime: Any) -> None:
         runtime.plugins.compute,
         engine.runtime_image,
         engine.runtime_cpu_image,
+        engine.agent_image,
     )
     if not result.ok:
         _err(f"worker pre-flight refused to boot — {result.reason}")
@@ -1717,12 +1720,12 @@ def smai_start(
       MUST match the migrations head. Equivalent to
       ``smai migrate --check`` but programmatic (no subprocess shell-
       out). Run ``smai migrate`` to upgrade.
-    * Unpublished runtime image: a registry-pull compute substrate
+    * Unpublished container image: a registry-pull compute substrate
       (Modal / RunPod) paired with the local-only built-in default
-      ``engine.runtime_image`` — the operator never published an
-      image. Checked after the runtime starts via
-      :func:`_enforce_runtime_image_published` (shared with
-      ``smai dev`` / ``smai ui --with-worker``).
+      ``engine.runtime_image`` / ``runtime_cpu_image`` / ``agent_image``
+      — the operator never published an image. Checked after the
+      runtime starts via :func:`_enforce_container_images_published`
+      (shared with ``smai dev`` / ``smai ui --with-worker``).
 
     Operational guidance for systemd / supervisord / launchd unit
     examples + recommended connection-pool sizing + log handling lives
@@ -1760,7 +1763,7 @@ def smai_start(
             workspace_root=workspace_root,
         ) as runtime:
             _enforce_lease_capability(runtime)
-            _enforce_runtime_image_published(runtime)
+            _enforce_container_images_published(runtime)
 
             stop_event = asyncio.Event()
 
@@ -1803,12 +1806,13 @@ def smai_verify(
         typer.Option(
             "--probe-image",
             help=(
-                "Additionally submit a trivial no-op job per runtime "
-                "image to confirm it is pullable by the configured "
-                "compute substrate. COSTS REAL MONEY / TIME (a real, "
-                "minimal compute job per image) — opt-in only. The "
-                "free, always-on runtime-image config check runs "
-                "without this flag."
+                "Additionally submit a trivial no-op job per configured "
+                "container image (the two runtime images + the agent "
+                "image, deduped) to confirm it is pullable by the "
+                "configured compute substrate. COSTS REAL MONEY / TIME "
+                "(a real, minimal compute job per unique image) — opt-in "
+                "only. The free, always-on container-image config check "
+                "runs without this flag."
             ),
         ),
     ] = False,
@@ -1836,14 +1840,17 @@ def smai_verify(
     * **Compute** — read-only ``status`` against a non-existent
       handle; expects :class:`JobNotFound`. Surfaces auth +
       substrate reachability.
-    * **Runtime-image config** (round 11) — a free, always-on check:
-      when the compute substrate is registry-pull (Modal / RunPod),
-      fails if ``engine.runtime_image`` / ``runtime_cpu_image`` are
-      still the local-only built-in defaults the substrate cannot
-      pull.
-    * **Runtime-image probe** (``--probe-image``, opt-in) — submits a
-      trivial no-op job per runtime image to confirm pullability.
-      **Costs real money / time**, so it is opt-in only.
+    * **Container-image config** (round 11 / round 12) — a free,
+      always-on check: when the compute substrate is registry-pull
+      (Modal / RunPod), fails if ``engine.runtime_image`` /
+      ``runtime_cpu_image`` (the experiment-seed-run images) or
+      ``engine.agent_image`` (the harness-builder / technique-
+      implementer agent image) are still the local-only built-in
+      defaults the substrate cannot pull.
+    * **Container-image probe** (``--probe-image``, opt-in) — submits a
+      trivial no-op job per configured image (the two runtime images +
+      the agent image, deduped) to confirm pullability. **Costs real
+      money / time**, so it is opt-in only.
 
     Exit code: 0 iff every check passes. Non-zero (1) if any check
     fails — the per-check reason is printed to stdout, and the verb
@@ -1896,6 +1903,7 @@ def smai_verify(
                     plugins.compute,
                     engine_cfg.runtime_image,
                     engine_cfg.runtime_cpu_image,
+                    engine_cfg.agent_image,
                 ),
             }
             if probe_image:
@@ -1905,6 +1913,7 @@ def smai_verify(
                     plugins.compute,
                     engine_cfg.runtime_image,
                     engine_cfg.runtime_cpu_image,
+                    engine_cfg.agent_image,
                 )
         return results
 

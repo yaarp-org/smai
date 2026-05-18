@@ -104,6 +104,7 @@ def register_smai_specs(
     llm_for_contextual_evaluator: LlmProvider,
     seeds: Sequence[int] = (0,),
     runtime_image: str = "smai-runtime:dev",
+    agent_image: str = "smai-agent:dev",
     max_review_attempts: int = 1,
     require_human_approval: bool = False,
     evaluation_dispatch_trace: list[str] | None = None,
@@ -117,9 +118,9 @@ def register_smai_specs(
     (e.g., to project to :class:`EngineSpec` for the worker loop).
 
     Args mirror :func:`build_cg_execution_spec`; the entry spec
-    inherits ``workspace_root`` and ``runtime_image`` only (it doesn't
-    use the LlmProviders since the implementer agent runs inside the
-    dispatched Compute container).
+    inherits ``workspace_root``, ``runtime_image``, and ``agent_image``
+    only (it doesn't use the LlmProviders since the implementer agent
+    runs inside the dispatched Compute container).
 
     The proposal-pipeline, paper-ingestion, and run-record specs are
     registered separately by their own helpers
@@ -142,6 +143,7 @@ def register_smai_specs(
         llm_for_contextual_evaluator=llm_for_contextual_evaluator,
         seeds=seeds,
         runtime_image=runtime_image,
+        agent_image=agent_image,
         max_review_attempts=max_review_attempts,
         require_human_approval=require_human_approval,
         evaluation_dispatch_trace=evaluation_dispatch_trace,
@@ -149,6 +151,7 @@ def register_smai_specs(
     entry_spec = build_cg_entries_spec(
         workspace_root=workspace_root,
         runtime_image=runtime_image,
+        agent_image=agent_image,
     )
     register_pipeline_spec(cg_spec)
     register_pipeline_spec(entry_spec)

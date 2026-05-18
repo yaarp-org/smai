@@ -1045,6 +1045,7 @@ def build_cg_execution_spec(
     llm_for_contextual_evaluator: LlmProvider,
     seeds: Sequence[int] = (0,),
     runtime_image: str = "smai-runtime:dev",
+    agent_image: str = "smai-agent:dev",
     max_review_attempts: int = 1,
     max_implementation_phase_attempts: int = 2,
     require_human_approval: bool = False,
@@ -1069,6 +1070,11 @@ def build_cg_execution_spec(
             iterates. Default ``(0,)`` for fast smoke tests.
         runtime_image: Container image name for the runtime experiment
             jobs the ``running`` dispatch submits.
+        agent_image: Container image for the *agent-side* harness-builder
+            dispatch job (round 12). Threaded into
+            :func:`make_dispatch_harness_build`. The orchestrator path
+            passes :attr:`EngineConfig.agent_image`; the literal default
+            here keeps direct / Tier-B callers working.
         max_review_attempts: DEC-016 retry budget — the number of
             ``implemented → implementing`` retries an entry is allowed
             before being marked ``implementation_failed``.
@@ -1109,6 +1115,7 @@ def build_cg_execution_spec(
 
     harness_builder_dispatch = make_dispatch_harness_build(
         workspace_root=workspace_root,
+        agent_image=agent_image,
         run_experiment_image=runtime_image,
     )
 

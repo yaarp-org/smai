@@ -30,20 +30,23 @@ Probe semantics (per the Task 3.G3 brief carry-forward #4):
   (auth failure, substrate unreachable) surfaces as a verify
   failure.
 
-* **Runtime-image config** (round 11) — :func:`verify_runtime_image_config`
-  is a free, deterministic, always-on check: when the configured
-  :class:`Compute` substrate is registry-pull
-  (:attr:`ComputeCapabilities.requires_published_image`), it fails if
-  ``engine.runtime_image`` / ``runtime_cpu_image`` are still the
-  local-only built-in defaults the substrate cannot pull.
-* **Runtime-image real probe** (round 11, opt-in) —
+* **Container-image config** (round 11 / round 12) —
+  :func:`verify_runtime_image_config` is a free, deterministic,
+  always-on check: when the configured :class:`Compute` substrate is
+  registry-pull (:attr:`ComputeCapabilities.requires_published_image`),
+  it fails if ``engine.runtime_image`` / ``runtime_cpu_image`` (the
+  experiment-seed-run images, round 11) or ``engine.agent_image`` (the
+  harness-builder / technique-implementer agent-side image, round 12)
+  are still the local-only built-in defaults the substrate cannot pull.
+* **Container-image real probe** (round 11 / round 12, opt-in) —
   :func:`verify_runtime_image_probe` is gated behind
   ``smai verify --probe-image``: it submits a trivial no-op job per
-  runtime image to confirm pullability. It costs real money / time, so
-  it is opt-in only.
+  configured image (the two runtime images + the agent image, deduped)
+  to confirm pullability. It costs real money / time, so it is opt-in
+  only.
 
 No new Protocol methods are introduced — every probe uses an existing
-method (the runtime-image probe uses ``submit`` / ``cancel``). Where
+method (the image probe uses ``submit`` / ``cancel``). Where
 the brief named a method that doesn't exist on the Protocol (e.g.,
 ``ArtifactStore.head``), this module uses the nearest equivalent that
 satisfies the same probe-semantics contract.
@@ -65,15 +68,20 @@ from smai_core.plugins import (
     TextContent,
 )
 from smai_core.plugins.compute import ComputeError, JobImageInvalid, JobNotFound
-from smai_orchestrator.engine import DEFAULT_RUNTIME_CPU_IMAGE, DEFAULT_RUNTIME_IMAGE
+from smai_orchestrator.engine import (
+    DEFAULT_AGENT_IMAGE,
+    DEFAULT_RUNTIME_CPU_IMAGE,
+    DEFAULT_RUNTIME_IMAGE,
+)
 
 _VERIFY_PROBE_KEY = "smai-verify-probe-key-that-does-not-exist"
 _VERIFY_PROBE_HANDLE = "smai-verify-probe-handle-that-does-not-exist"
 
-# Doc pointer surfaced in the runtime-image config-check failure message
-# (and the build-and-push runbook it references).
-_RUNTIME_IMAGE_RUNBOOK = (
-    "packages/smai-cli/OPERATIONS.md, section 'Building and publishing the runtime images'"
+# Doc pointer surfaced in the container-image config-check failure
+# message (and the build-and-push runbook it references).
+_CONTAINER_IMAGE_RUNBOOK = (
+    "packages/smai-cli/OPERATIONS.md, section "
+    "'Building and publishing the runtime and agent images'"
 )
 
 
@@ -267,23 +275,27 @@ def verify_runtime_image_config(
     compute: Compute,
     runtime_image: str,
     runtime_cpu_image: str,
+    agent_image: str,
 ) -> VerifyResult:
     """Hard-fail config check: a registry-pull Compute substrate paired
-    with the local-only built-in default runtime image.
+    with a local-only built-in default container image.
 
     Always-on, free, deterministic — no I/O, so ``latency_ms`` is
     ``None``. When the configured :class:`Compute` plugin reports
     :attr:`ComputeCapabilities.requires_published_image` (Modal /
     RunPod), the ``image`` argument to :meth:`Compute.submit` MUST be a
-    registry-pullable tag. The built-in :class:`EngineConfig` defaults
-    (``smai-runtime:dev`` / ``smai-runtime-cpu:dev``) are local-only
-    Docker tags ``LocalGpuCompute`` builds on the host; a registry-pull
-    substrate cannot pull them. Left unchecked the failure surfaces as
-    an opaque ``RemoteError: Image build ... failed`` mid-CG-execution
-    (round 11) — this catches it at pre-flight with a concrete pointer.
+    registry-pullable tag. The built-in :class:`EngineConfig` defaults —
+    the experiment-seed-run images (``smai-runtime:dev`` /
+    ``smai-runtime-cpu:dev``, round 11) and the agent-side
+    harness-builder / technique-implementer image (``smai-agent:dev``,
+    round 12) — are local-only Docker tags ``LocalGpuCompute`` builds on
+    the host; a registry-pull substrate cannot pull them. Left unchecked
+    the failure surfaces as an opaque ``RemoteError: Image build ...
+    failed`` mid-CG-execution — this catches it at pre-flight with a
+    concrete pointer.
 
     Local-build substrates (``requires_published_image`` ``False``,
-    e.g. ``LocalGpu``) always pass: building the default tag locally is
+    e.g. ``LocalGpu``) always pass: building the default tags locally is
     exactly the intended flow.
     """
     capabilities = compute.capabilities
@@ -292,7 +304,7 @@ def verify_runtime_image_config(
             ok=True,
             reason=(
                 f"compute {compute.name!r} builds images locally; the default "
-                "runtime image tags are fine"
+                "runtime / agent image tags are fine"
             ),
             latency_ms=None,
         )
@@ -301,12 +313,14 @@ def verify_runtime_image_config(
         offenders.append(("engine.runtime_image", runtime_image))
     if runtime_cpu_image == DEFAULT_RUNTIME_CPU_IMAGE:
         offenders.append(("engine.runtime_cpu_image", runtime_cpu_image))
+    if agent_image == DEFAULT_AGENT_IMAGE:
+        offenders.append(("engine.agent_image", agent_image))
     if not offenders:
         return VerifyResult(
             ok=True,
             reason=(
-                f"runtime image(s) overridden from the local-only defaults for "
-                f"the {compute.name!r} registry-pull substrate"
+                f"runtime / agent image(s) overridden from the local-only defaults "
+                f"for the {compute.name!r} registry-pull substrate"
             ),
             latency_ms=None,
         )
@@ -317,9 +331,9 @@ def verify_runtime_image_config(
     return VerifyResult(
         ok=False,
         reason=(
-            f"{parts}. Build the runtime image and push it to a registry the "
+            f"{parts}. Build the image(s) and push to a registry the "
             f"{compute.name!r} substrate can reach, then set the field(s) in "
-            f"smai.yaml. See {_RUNTIME_IMAGE_RUNBOOK}."
+            f"smai.yaml. See {_CONTAINER_IMAGE_RUNBOOK}."
         ),
         latency_ms=None,
     )
@@ -346,7 +360,7 @@ async def _probe_one_runtime_image(compute: Compute, image: str, label: str) -> 
     except JobImageInvalid as exc:
         return False, (
             f"{label} {image!r}: image not reachable from the substrate — {exc}. "
-            f"See {_RUNTIME_IMAGE_RUNBOOK}."
+            f"See {_CONTAINER_IMAGE_RUNBOOK}."
         )
     except Exception as exc:  # noqa: BLE001 — every plugin error funnels here
         return False, f"{label} {image!r}: probe submit failed — {_format_exception(exc)}"
@@ -362,9 +376,11 @@ async def verify_runtime_image_probe(
     compute: Compute,
     runtime_image: str,
     runtime_cpu_image: str,
+    agent_image: str,
 ) -> VerifyResult:
     """Opt-in real probe (``smai verify --probe-image``): submit a
-    trivial no-op job per runtime image to confirm it is pullable.
+    trivial no-op job per configured container image to confirm it is
+    pullable.
 
     This is **not** a cheap registry-only check. The generic
     :class:`Compute` Protocol exposes only ``submit`` / ``status`` /
@@ -375,13 +391,26 @@ async def verify_runtime_image_probe(
     therefore **costs real money / time** and is opt-in; ``smai verify
     --help`` documents that.
 
-    Probes :attr:`runtime_image` and :attr:`runtime_cpu_image` (deduped
-    when they are equal). Fails if either image is unreachable.
+    Probes :attr:`runtime_image`, :attr:`runtime_cpu_image`, and
+    :attr:`agent_image` — deduped by image string so a deployment that
+    points two (or all three) fields at the same tag pays for one probe
+    job, not two. Fails if any image is unreachable.
     """
     started = time.monotonic()
-    images: list[tuple[str, str]] = [("runtime_image", runtime_image)]
-    if runtime_cpu_image != runtime_image:
-        images.append(("runtime_cpu_image", runtime_cpu_image))
+    # Dedup by image string, preserving first-seen order: the runtime /
+    # agent fields commonly collide (e.g. all three left at their
+    # defaults on a local-build substrate) and one probe job per unique
+    # tag is enough to establish pullability.
+    images: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for label, image in (
+        ("runtime_image", runtime_image),
+        ("runtime_cpu_image", runtime_cpu_image),
+        ("agent_image", agent_image),
+    ):
+        if image not in seen:
+            seen.add(image)
+            images.append((label, image))
     messages: list[str] = []
     all_ok = True
     for label, image in images:

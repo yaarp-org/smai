@@ -165,6 +165,7 @@ def build_cg_entries_spec(
     *,
     workspace_root: Path,
     runtime_image: str = "smai-runtime:dev",
+    agent_image: str = "smai-agent:dev",
     max_entry_dispatch_attempts: int = 2,
 ) -> PipelineSpec:
     """Build the SMAI CG-entries :class:`PipelineSpec`.
@@ -177,6 +178,12 @@ def build_cg_entries_spec(
         runtime_image: Container image for ``run_experiment`` validation
             jobs the implementer agent submits during its multi-turn
             loop. v1 default ``smai-runtime:dev`` per Task 2.D1.
+        agent_image: Container image for the *agent-side*
+            technique-implementer dispatch job (round 12). Threaded into
+            :func:`make_dispatch_technique_implementation`. The
+            orchestrator path passes :attr:`EngineConfig.agent_image`;
+            the literal default here keeps direct / Tier-B callers
+            working.
         max_entry_dispatch_attempts: Round-11 retry budget for the
             per-entry technique-implementer dispatch. Each (re-)entry
             into ``implementing`` bumps
@@ -201,6 +208,7 @@ def build_cg_entries_spec(
 
     technique_implementer_dispatch = make_dispatch_technique_implementation(
         workspace_root=workspace_root,
+        agent_image=agent_image,
         run_experiment_image=runtime_image,
     )
 

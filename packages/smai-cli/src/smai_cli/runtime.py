@@ -1472,6 +1472,11 @@ class Runtime:
                 llm_for_code_reviewer=llm_for_code_reviewer,
                 llm_for_contextual_evaluator=llm_for_contextual_evaluator,
                 runtime_image=effective_runtime_image,
+                # Round 12: the agent-side container image for the
+                # harness-builder / technique-implementer dispatches.
+                # Unlike the runtime images there is no test-override
+                # parameter — the configured value is the single source.
+                agent_image=config.engine.agent_image,
             )
             # Register the :class:`RunRecord` sub-state-machine spec
             # alongside the Phase-2 specs (per Task 3.E3 / DEC-034 #3).
