@@ -120,11 +120,16 @@ def test_cg_spec_scheduling_queries_declared(cg_spec) -> None:  # type: ignore[n
 def test_cg_spec_edge_declaration_order_success_first(cg_spec) -> None:  # type: ignore[no-untyped-def]
     """Per `03` §2.4 success edges are declared before retry / failure
     edges within the same (from_state, fires_on) group."""
-    # implementing job_succeeded: success → implemented BEFORE no-survivors → impl_failed
-    impl_success = cg_spec.edges_from("implementing", fires_on="job_succeeded")
-    assert len(impl_success) >= 2
-    assert impl_success[0].target_state == "implemented"
-    assert impl_success[1].target_state == "implementation_failed"
+    # Round 14: ``implementing`` edges fire on ``dispatch_time`` (the
+    # harness builder runs in-process). Success → implemented BEFORE
+    # no-survivors → impl_failed; the harness-build-failed edge is gone
+    # (routed through the dispatch handler's error path + RetryPolicy).
+    impl_dispatch = cg_spec.edges_from("implementing", fires_on="dispatch_time")
+    assert len(impl_dispatch) == 2
+    assert impl_dispatch[0].target_state == "implemented"
+    assert impl_dispatch[1].target_state == "implementation_failed"
+    assert cg_spec.edges_from("implementing", fires_on="job_succeeded") == []
+    assert cg_spec.edges_from("implementing", fires_on="job_failed") == []
 
     # implemented dispatch_time: running BEFORE implementing-retry BEFORE impl_failed
     implemented_dispatch = cg_spec.edges_from("implemented", fires_on="dispatch_time")
@@ -150,12 +155,16 @@ def test_cg_spec_three_failure_terminal_routes_per_dec_034_1(cg_spec) -> None:  
 
 def test_cg_spec_engine_spec_projection_partitions_phases(cg_spec) -> None:  # type: ignore[no-untyped-def]
     """:meth:`PipelineSpec.engine_spec` partitions per-state queries by
-    presence of phase-1 trigger edges (``job_succeeded`` / ``job_failed``)."""
+    presence of phase-1 trigger edges (``job_succeeded`` / ``job_failed``).
+
+    Round 14: every CG-execution dispatch (including the in-process
+    harness builder) advances via ``dispatch_time`` edges, so the spec
+    has *no* phase-1 query states — every scheduling query is phase-2."""
     eng = cg_spec.engine_spec()
-    # ``implementing`` has both job_succeeded + job_failed edges → phase-1.
-    assert "implementing" in eng.phase1_queries
-    # ``draft`` / ``implemented`` / ``running`` / ``evaluating`` have only
-    # dispatch_time edges → phase-2.
+    assert eng.phase1_queries == {}
+    # ``implementing`` runs the harness builder in-process; it + the
+    # other dispatch states are phase-2 (re-evaluated each cycle).
+    assert "implementing" in eng.phase2_queries
     assert "draft" in eng.phase2_queries
     assert "implemented" in eng.phase2_queries
     assert "running" in eng.phase2_queries
@@ -171,10 +180,16 @@ def test_entry_spec_states_set(entry_spec) -> None:  # type: ignore[no-untyped-d
 
 def test_entry_spec_edges_success_first(entry_spec) -> None:  # type: ignore[no-untyped-def]
     """Per `03` §2.4: validation-pass success edge BEFORE validation-fail
-    terminal edge within the same (from_state, fires_on) group."""
-    impl_success = entry_spec.edges_from("implementing", fires_on="job_succeeded")
-    assert impl_success[0].target_state == "implemented"
-    assert impl_success[1].target_state == "implementation_failed"
+    terminal edge within the same (from_state, fires_on) group.
+
+    Round 14: the entry ``implementing`` edges fire on ``dispatch_time``
+    (the technique implementer runs in-process); the ``job failed``
+    edge is gone (routed through the RetryPolicy)."""
+    impl_dispatch = entry_spec.edges_from("implementing", fires_on="dispatch_time")
+    assert impl_dispatch[0].target_state == "implemented"
+    assert impl_dispatch[1].target_state == "implementation_failed"
+    assert entry_spec.edges_from("implementing", fires_on="job_succeeded") == []
+    assert entry_spec.edges_from("implementing", fires_on="job_failed") == []
 
 
 def test_entry_spec_pool_assignment(entry_spec) -> None:  # type: ignore[no-untyped-def]

@@ -6,9 +6,11 @@ splits v1's single ``failed`` terminal into three:
 
 Each terminal is reached via a distinct gate:
 
-* ``implementation_failed`` — harness build failed (job_failed gate)
-  OR the post-success gate found zero implemented entries OR
-  code-review failed with no surviving entries.
+* ``implementation_failed`` — the post-harness gate found zero
+  implemented entries OR code-review failed with no surviving entries.
+  (A *harness build* failure is routed through the dispatch handler's
+  error path + the ``implementing`` RetryPolicy as of round 14, not via
+  a gate.)
 * ``running_failed`` — all runs terminal but zero succeeded.
 * ``evaluation_failed`` — evaluation dispatch wrote an error file
   (e.g., RawMetricsShapeError, missing ValidationConfig).
@@ -32,39 +34,12 @@ from smai_orchestrator.engine.types import GateContext
 from smai_orchestrator.specs.cg_execution import (
     _make_gate_evaluation_complete,
     _make_gate_evaluation_failed,
-    _make_gate_harness_failed_terminal,
     _make_gate_harness_succeeded_no_survivors,
     _make_gate_runs_all_terminal_zero_success,
 )
 from smai_store_sqlite import SqliteStore
 
 # === implementation_failed paths ============================================
-
-
-async def test_implementation_failed_via_harness_job_failed(
-    sqlite_store: SqliteStore,
-    localfs_store: LocalFsStore,
-) -> None:
-    """The ``cg.harness_failed_terminal`` gate fires unconditionally on
-    phase-1 ``job_failed``. Per `03` §3.3 there's no auto-retry on
-    harness build."""
-    cg_id = "cg-harness-fail"
-    cg = make_cg(cg_id=cg_id, state="implementing")
-    await sqlite_store.create_cg(cg)
-
-    gate = _make_gate_harness_failed_terminal()
-    ctx = GateContext(
-        entity_kind="cg",
-        entity_id=cg_id,
-        entity_state="implementing",
-        entity_version=cg.version,
-        metadata_store=sqlite_store,
-        artifact_store=localfs_store,  # type: ignore[arg-type]
-        config=EngineConfig(),
-        job_outcome=make_job_status("failed"),
-    )
-    outcome = await gate(ctx)
-    assert outcome.advance is True
 
 
 async def test_implementation_failed_via_zero_implemented_entries(

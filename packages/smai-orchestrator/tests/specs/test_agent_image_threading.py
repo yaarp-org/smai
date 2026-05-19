@@ -1,151 +1,70 @@
-"""Round 12 — ``EngineConfig.agent_image`` threads through to the two
-containerized-agent dispatch factories.
+"""Round 14 — ``EngineConfig.agent_image`` is retained but unconsumed.
 
-CG-execution dispatches exactly two agent jobs as containers: the
-harness builder (CG-level :func:`build_cg_execution_spec`) and the
-technique implementer (entry-level :func:`build_cg_entries_spec`). Both
-submit to :class:`Compute` with ``image=agent_image``. Round 12 made
-that image configurable via :attr:`EngineConfig.agent_image`; round 11
-had only ``runtime_image`` / ``runtime_cpu_image`` configurable.
+Round 12 added :attr:`EngineConfig.agent_image` and threaded it into a
+containerized harness-builder / technique-implementer dispatch. Round 14
+removed that containerized path: both agents now run **in-process in the
+worker** (mirroring the planner), so nothing submits a :class:`Compute`
+job under the agent image. The spec builders no longer accept an
+``agent_image`` argument and the agent dispatch factories no longer take
+one.
 
-These tests assert the configured value reaches each dispatch factory:
-directly via the spec builders and through the
-:func:`register_smai_specs` convenience helper the CLI bootstrap calls.
-The four ``DEFAULT_AGENT_IMAGE`` copies (one per package, kept distinct
-to avoid pulling the heavy smai-agents module into the foundational
-``EngineConfig`` import) are pinned to the same string by a unit test
-here rather than by a cross-package import.
+The field is deliberately kept — reserved for a possible future
+re-containerization of the agent fleet — so these tests pin that it
+still exists, still defaults to :data:`DEFAULT_AGENT_IMAGE`, and that
+the spec builders / dispatch factories no longer carry the threading.
 """
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
-from pathlib import Path
-from typing import Any
+import inspect
 
-import pytest
 import smai_agents.agents.harness_builder as harness_builder_mod
 import smai_agents.agents.technique_implementer as technique_implementer_mod
 import smai_compute_localgpu as localgpu_mod
-from _specs_fakes import StubLlmProvider  # type: ignore[import-not-found]
 from smai_orchestrator.engine import DEFAULT_AGENT_IMAGE, EngineConfig
 from smai_orchestrator.specs import register_smai_specs
 from smai_orchestrator.specs.cg_entries import build_cg_entries_spec
 from smai_orchestrator.specs.cg_execution import build_cg_execution_spec
 
-_OVERRIDE_IMAGE = "registry.example.com/your-org/smai-agent:v2"
 
-
-async def _noop_handler(ctx: Any) -> Any:  # pragma: no cover - never invoked
-    """Stand-in dispatch handler returned by the patched factories."""
-    raise AssertionError("the patched dispatch factory's handler must not run")
-
-
-def _recording_factory(captured: dict[str, Any]) -> Callable[..., Callable[[Any], Awaitable[Any]]]:
-    """Build a fake dispatch-factory that records its kwargs."""
-
-    def _factory(**kwargs: Any) -> Callable[[Any], Awaitable[Any]]:
-        captured.update(kwargs)
-        return _noop_handler
-
-    return _factory
-
-
-def test_agent_image_reaches_harness_builder_factory(monkeypatch: pytest.MonkeyPatch) -> None:
-    """``build_cg_execution_spec(agent_image=...)`` passes the value
-    straight into :func:`make_dispatch_harness_build`."""
-    captured: dict[str, Any] = {}
-    monkeypatch.setattr(
-        harness_builder_mod, "make_dispatch_harness_build", _recording_factory(captured)
-    )
-
-    build_cg_execution_spec(
-        workspace_root=Path("/tmp/round12-cg"),
-        llm_for_code_reviewer=StubLlmProvider([]),
-        llm_for_contextual_evaluator=StubLlmProvider([]),
-        agent_image=_OVERRIDE_IMAGE,
-    )
-
-    assert captured["agent_image"] == _OVERRIDE_IMAGE
-
-
-def test_agent_image_reaches_technique_implementer_factory(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """``build_cg_entries_spec(agent_image=...)`` passes the value
-    straight into :func:`make_dispatch_technique_implementation`."""
-    captured: dict[str, Any] = {}
-    monkeypatch.setattr(
-        technique_implementer_mod,
-        "make_dispatch_technique_implementation",
-        _recording_factory(captured),
-    )
-
-    build_cg_entries_spec(
-        workspace_root=Path("/tmp/round12-entries"),
-        agent_image=_OVERRIDE_IMAGE,
-    )
-
-    assert captured["agent_image"] == _OVERRIDE_IMAGE
-
-
-def test_register_smai_specs_threads_engine_config_agent_image(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """The full CLI-bootstrap path: ``EngineConfig.agent_image`` →
-    :func:`register_smai_specs` → *both* dispatch factories."""
-    harness_captured: dict[str, Any] = {}
-    technique_captured: dict[str, Any] = {}
-    monkeypatch.setattr(
-        harness_builder_mod, "make_dispatch_harness_build", _recording_factory(harness_captured)
-    )
-    monkeypatch.setattr(
-        technique_implementer_mod,
-        "make_dispatch_technique_implementation",
-        _recording_factory(technique_captured),
-    )
-
-    engine_config = EngineConfig(agent_image=_OVERRIDE_IMAGE)
-    register_smai_specs(
-        workspace_root=Path("/tmp/round12-register"),
-        llm_for_code_reviewer=StubLlmProvider([]),
-        llm_for_contextual_evaluator=StubLlmProvider([]),
-        agent_image=engine_config.agent_image,
-    )
-
-    assert harness_captured["agent_image"] == _OVERRIDE_IMAGE
-    assert technique_captured["agent_image"] == _OVERRIDE_IMAGE
-
-
-def test_default_agent_image_used_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
-    """An unconfigured ``EngineConfig`` threads the built-in default
-    constant — the orchestrator path always passes a value explicitly
-    (never relies on the agent-module factory default)."""
-    captured: dict[str, Any] = {}
-    monkeypatch.setattr(
-        harness_builder_mod, "make_dispatch_harness_build", _recording_factory(captured)
-    )
-
-    build_cg_execution_spec(
-        workspace_root=Path("/tmp/round12-default"),
-        llm_for_code_reviewer=StubLlmProvider([]),
-        llm_for_contextual_evaluator=StubLlmProvider([]),
-        agent_image=EngineConfig().agent_image,
-    )
-
+def test_agent_image_field_retained_and_defaulted() -> None:
+    """The field survives round 14 (reserved for re-containerization)
+    and still defaults to the built-in constant."""
     assert EngineConfig().agent_image == DEFAULT_AGENT_IMAGE
-    assert captured["agent_image"] == DEFAULT_AGENT_IMAGE
+    assert DEFAULT_AGENT_IMAGE == "smai-agent:dev"
 
 
 def test_default_agent_image_constants_agree_across_packages() -> None:
-    """All four ``DEFAULT_AGENT_IMAGE`` copies hold the same string.
-
-    ``smai_orchestrator.engine.config`` keeps a local copy rather than
-    importing smai-agents' (a foundational-import / lazy-import
-    discipline call, see the reconciliation comment in
-    ``engine/config.py``). This test is the reconciliation that comment
-    references — it fails loudly if a copy drifts.
-    """
-    assert DEFAULT_AGENT_IMAGE == harness_builder_mod.DEFAULT_AGENT_IMAGE
-    assert DEFAULT_AGENT_IMAGE == technique_implementer_mod.DEFAULT_AGENT_IMAGE
+    """The two surviving ``DEFAULT_AGENT_IMAGE`` copies hold the same
+    string. Round 14 removed the smai-agents copies (the dispatch
+    factories no longer reference an agent image); ``engine.config``
+    keeps the canonical reserved constant and ``smai_compute_localgpu``
+    keeps its own for the (currently unexercised) local image-build
+    machinery. A local literal — not an import — per the foundational-
+    import discipline noted in ``engine/config.py``; this test is the
+    drift guard that reconciliation comment references."""
     assert DEFAULT_AGENT_IMAGE == localgpu_mod.DEFAULT_AGENT_IMAGE
+
+
+def test_spec_builders_dropped_agent_image_param() -> None:
+    """``build_cg_execution_spec`` / ``build_cg_entries_spec`` /
+    ``register_smai_specs`` no longer accept ``agent_image`` — round 14
+    removed the threading along with the containerized dispatch."""
+    for fn in (build_cg_execution_spec, build_cg_entries_spec, register_smai_specs):
+        assert "agent_image" not in inspect.signature(fn).parameters, fn.__name__
+
+
+def test_dispatch_factories_dropped_agent_image_param() -> None:
+    """The harness-builder / technique-implementer dispatch factories no
+    longer take an ``agent_image`` — they run the agent loop in-process,
+    never submitting a Compute job under an agent image."""
+    assert (
+        "agent_image"
+        not in inspect.signature(harness_builder_mod.make_dispatch_harness_build).parameters
+    )
+    assert (
+        "agent_image"
+        not in inspect.signature(
+            technique_implementer_mod.make_dispatch_technique_implementation
+        ).parameters
+    )

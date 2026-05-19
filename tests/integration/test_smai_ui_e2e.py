@@ -54,6 +54,7 @@ from _4_n3_helpers import (  # type: ignore[import-not-found]
     wait_for_state_change,
 )
 from httpx import ASGITransport, AsyncClient
+from smai_agents import AgentOutcome, AgentSession
 from smai_api import make_api_app
 from smai_artifacts_localfs import LocalFsStore
 from smai_cli.runtime import Runtime
@@ -107,6 +108,19 @@ def _build_per_role_stubs(
         else:
             role_to_stub[role] = StubLlmProvider([], name=f"stub-{role}")
     return role_to_stub
+
+
+async def _noop_agent_runner(session: AgentSession) -> AgentOutcome:
+    """No-op session runner for the round-14 in-process harness-builder
+    / technique-implementer dispatches. The agents' artifacts are
+    pre-staged by :func:`pre_stage_cg_artifacts` before the worker
+    boots, so the runner just reports a successful outcome."""
+    return AgentOutcome(
+        kind="finished",
+        turn_count=0,
+        usage_total=session.usage_total,
+        finish_success=True,
+    )
 
 
 @pytest.mark.asyncio
@@ -165,6 +179,11 @@ async def test_full_user_journey(tmp_path: Path) -> None:
         workspace_root=tmp_path / "workspaces",
         plugin_overrides=overrides,
         run_worker=True,
+        # Round 14: the harness-builder / technique-implementer agents
+        # run in-process; pass no-op runners (the agent outputs are
+        # pre-staged above, before the worker boots).
+        harness_builder_inline_runner=_noop_agent_runner,
+        technique_implementer_inline_runner=_noop_agent_runner,
         # Round-9 added a test-only knob to pin deterministic CG ids.
         # Production generates ULID-shaped ids by default; the N3
         # fixture pre-stages artifacts at ``comparison-groups/<shape.cg_id>``

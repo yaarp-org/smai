@@ -13,20 +13,22 @@ Mocking strategy
 
 The brief calls for the smoke test to drive the orchestrator + state
 machine + plugin lifecycle via :func:`Runtime.start_in_band` while
-side-stepping AWS Bedrock and Docker. The carry-forward from Task 2.D2
-notes that ``Runtime.start_in_band`` constructs the SMAI specs
-internally via :func:`register_smai_specs`; the harness-builder /
-technique-implementer dispatch handlers are wired without their
-``inline_runner`` test seam (the seam is only reachable when
-constructing dispatch handlers manually, per Task 2.B3 / 2.B4). To
-keep the smoke test using the canonical Tier-A entry path, the agent
-containers' artifact side effects are pre-staged to
-:class:`ArtifactStore` before the worker drives cycles. The production
-dispatch handlers fire (workspace materialization included), submit
-fake jobs to :class:`SmokeFakeCompute`, and the orchestrator's phase-1
-polling sees them as succeeded. The downstream gate bodies (manifest
-fanout, code review, runs dispatch with metric harvest, evaluation
-dispatch) all run against the pre-staged + real artifacts.
+side-stepping AWS Bedrock and Docker.
+
+Round 14 moved the harness-builder / technique-implementer agents
+in-process in the worker (no Compute job). ``Runtime.start_in_band``
+now threads a test-only ``*_inline_runner`` seam into the two dispatch
+factories; this test passes :func:`_smoke_inline_runner`, which returns
+a successful :class:`AgentOutcome` without driving the agent loop. The
+agent loops themselves are unit-tested under ``packages/smai-agents/``
+— this M2 gate proves the CG-execution *pipeline* wires up and flows.
+The agent outputs the dispatch completeness checks + the orchestrator
+gates read are pre-staged to :class:`ArtifactStore` before the worker
+drives cycles (:func:`_pre_stage_for_smoke`). The runs dispatch still
+submits fake jobs to :class:`SmokeFakeCompute`; the downstream gate
+bodies (manifest fanout, code review, runs dispatch with metric
+harvest, evaluation dispatch) all run against the pre-staged + real
+artifacts.
 
 Post-R3 the smoke test no longer manually transitions
 :class:`EntryRecord` rows or pre-creates additive baselines in
@@ -97,6 +99,7 @@ from typing import Any
 
 import pytest
 import yaml
+from smai_agents import AgentOutcome, AgentSession
 from smai_artifacts_localfs import LocalFsStore
 from smai_cli.runtime import (
     EXPERIMENT_PLAN_KEY_TEMPLATE,
@@ -520,16 +523,34 @@ def _make_smoke_runtime_config() -> RuntimeConfig:
     )
 
 
+async def _smoke_inline_runner(session: AgentSession) -> AgentOutcome:
+    """Test-only session runner for the harness-builder /
+    technique-implementer dispatches (round 14: those agents run
+    in-process). It returns a successful :class:`AgentOutcome` without
+    driving the loop — the agent loop machinery is unit-tested in
+    ``packages/smai-agents/tests/``; this M2 gate proves the
+    CG-execution *pipeline* wires up and flows. The artifacts the
+    dispatch completeness checks + gates read are pre-staged by
+    :func:`_pre_stage_for_smoke`."""
+    return AgentOutcome(
+        kind="finished",
+        turn_count=0,
+        usage_total=session.usage_total,
+        finish_success=True,
+        finish_summary="smoke inline runner",
+    )
+
+
 def _build_per_role_stubs() -> dict[str, StubLlmProvider]:
     """One :class:`StubLlmProvider` per task role.
 
     Only ``code_reviewer`` and ``contextual_evaluator`` are actually
     invoked in the smoke flow (the harness-builder /
-    technique-implementer dispatches submit fake jobs whose agent
-    loops never run); the other roles get an empty-queue stub that
-    ``AssertionError``s if anything calls them — a tripwire in case a
-    future code path silently activates an agent loop the smoke test
-    is meant to bypass.
+    technique-implementer dispatches run :func:`_smoke_inline_runner`,
+    which never touches the LLM); the other roles get an empty-queue
+    stub that ``AssertionError``s if anything calls them — a tripwire
+    in case a future code path silently activates an agent loop the
+    smoke test is meant to bypass.
     """
     role_to_stub: dict[str, StubLlmProvider] = {}
     for role in DEFAULT_TASK_ROLES:
@@ -603,6 +624,8 @@ async def test_smoke_e2e_round_trip(tmp_path: Path) -> None:
         workspace_root=tmp_path / "workspaces",
         plugin_overrides=overrides,
         run_worker=False,
+        harness_builder_inline_runner=_smoke_inline_runner,
+        technique_implementer_inline_runner=_smoke_inline_runner,
     ) as runtime:
         # Inject a populated technique registry so the smoke YAML
         # compiles cleanly. Uses the same ``_registries_factory``
@@ -688,10 +711,11 @@ async def test_smoke_e2e_round_trip(tmp_path: Path) -> None:
             assert entry_row is not None
             assert entry_row.harness_api_manifest_hash is not None
 
-        # The fake Compute was actually called — the harness-builder
-        # dispatch and the runs dispatch each submitted at least one
-        # job (1 harness + 2 entries × 1 seed = 3 expected).
-        assert len(fake_compute.submitted) >= 3
+        # The fake Compute was actually called by the runs dispatch
+        # (2 entries × 1 seed = 2 expected). Round 14: the harness-
+        # builder and technique-implementer agents run in-process, so
+        # they no longer submit Compute jobs.
+        assert len(fake_compute.submitted) >= 2
 
         # The code-reviewer + contextual-evaluator stubs were invoked.
         assert len(role_stubs["code_reviewer"].calls) >= 1

@@ -7,23 +7,34 @@ Two surfaces:
   builds the :class:`AgentSession` with the harness-builder prompt
   config, the standard tool inventory, and the harness-builder-only
   ``emit_harness_manifest`` tool, then drives the loop via
-  :func:`run_loop`. Tests exercise this path directly per the Task 2.B3
-  brief: "your tests can drive the agent loop in-process for speed."
-  In production it is the entry point a containerized job calls after
-  :func:`dispatch_harness_build` submits it.
+  :func:`run_loop`.
 
 * :func:`dispatch_harness_build` — the
   :data:`smai_orchestrator.engine.types.DispatchHandler`-shaped wrapper
   the engine dispatches when a CG enters the ``implementing`` state per
   ``03-state-machine.md`` §3. Reads the :class:`HarnessContract` from
-  :class:`ArtifactStore` (path resolved via the configurable
-  ``harness_contract_path_for_cg`` callable on the factory), populates
-  the workspace, and returns a :class:`DispatchOutcome` whose
-  ``submitted_handles`` carries the :class:`JobHandle` from
-  :meth:`Compute.submit`. Phase-1 polling per
-  ``05-orchestrator.md`` §3.1 detects completion and fires the matching
-  ``fires_on=job_succeeded`` / ``job_failed`` edge per
-  Task 2.C4's CG-execution pipeline-spec.
+  :class:`ArtifactStore`, populates the workspace, and runs the agent
+  loop **in-process in the worker** — exactly as the planner dispatch
+  does (``smai_agents.agents.planner.make_dispatch_planner``). Round 14
+  removed the abandoned containerized-agent path: there was no agent
+  CLI entry point, ``agent.Dockerfile`` installed no smai packages, and
+  the substrate bind-mounted nothing — every container exited with
+  ``ModuleNotFoundError``. After the session the handler publishes the
+  agent's workspace outputs to :class:`ArtifactStore`
+  (:func:`smai_agents.agents.artifact_publish.publish_workspace_outputs`)
+  and synthesizes an ``inline-<cg_id>`` :class:`JobHandle`; the
+  ``implementing`` state's edges are ``dispatch_time`` (not
+  ``job_succeeded`` — there is no external job to poll), so the next
+  worker cycle re-evaluates them against the published artifacts.
+
+Two production-hardening costs are knowingly deferred (acceptable for
+``smai dev``; open items for ``smai start``): (a) the agent's
+``execute`` tool runs shell subprocesses on the worker host rather than
+in a container — no isolation; (b) the multi-turn agent loop runs
+synchronously and blocks the worker's poll cycle for its full
+duration — the dispatch is not made non-blocking. Both are tracked for
+a future re-containerization, which is also why
+:attr:`EngineConfig.agent_image` is kept (currently unconsumed).
 
 Factor-type-aware framing (DEC-017 / §9 of ``10-runtime-and-templates.md``):
 the harness builder always builds the same code shape; what differs is
@@ -64,6 +75,7 @@ from smai_agents.agent_session_telemetry import (
     make_progress_sink,
     open_agent_session,
 )
+from smai_agents.agents.artifact_publish import publish_workspace_outputs
 from smai_agents.agents.manifest_tool import make_emit_harness_manifest_tool
 from smai_agents.loop import (
     AgentLoopConfig,
@@ -81,11 +93,6 @@ from smai_agents.std_tools import build_standard_tool_registry
 from smai_agents.tools import ToolRegistry
 
 _HARNESS_BUILDER_ROLE: TaskRole = "harness_builder"
-
-# Default substrate image for the agent-side container. Production
-# deployments override at registration time; v1 settled on
-# ``smai-agent:dev`` per Task 2.A4 / DEC-026.
-DEFAULT_AGENT_IMAGE = "smai-agent:dev"
 
 # Path inside the workspace where the materialized HarnessContract lives.
 # Mirrors :data:`smai_runtime.HARNESS_CONTRACT_FILENAME` ("harness_contract.json")
@@ -261,7 +268,6 @@ async def run_harness_builder_session(
 def make_dispatch_harness_build(
     *,
     workspace_root: Path,
-    agent_image: str = DEFAULT_AGENT_IMAGE,
     run_experiment_image: str | None = None,
     run_experiment_gpu: bool = True,
     harness_contract_artifact_path: Callable[[str], str] | None = None,
@@ -275,16 +281,25 @@ def make_dispatch_harness_build(
     Production deployments construct one of these per pipeline-spec
     instance and bind it on the ``implementing`` state's
     :class:`smai_orchestrator.engine.types.DispatchAction.handler` slot.
-    The factory shape lets deployments parameterize the substrate-side
-    image, the per-CG path conventions, and the test-only inline-runner
-    seam.
+
+    The handler runs the harness-builder agent loop **in-process in the
+    worker**, structurally mirroring
+    :func:`smai_agents.agents.planner.make_dispatch_planner`: it calls
+    :func:`run_harness_builder_session` unconditionally (``runner``
+    defaults to :func:`run_loop`), publishes the agent's workspace
+    outputs to :class:`ArtifactStore`, and synthesizes an
+    ``inline-<cg_id>`` :class:`JobHandle`. There is no containerized
+    branch — round 14 removed the unfinished agent-container path.
+
+    Deferred production-hardening (see the module docstring): the
+    ``execute`` tool's shell subprocesses run on the worker host (no
+    container isolation), and the multi-turn loop blocks the worker
+    poll cycle for its full duration (the dispatch is not non-blocking).
+    Both are acceptable for ``smai dev`` and open for ``smai start``.
 
     Args:
         workspace_root: Filesystem root under which per-CG workspaces
-            land. The handler creates ``<workspace_root>/<cg_id>/``
-            before calling :func:`Compute.submit`.
-        agent_image: Container image for the agent-side job. Defaults
-            to :data:`DEFAULT_AGENT_IMAGE`.
+            land at ``<workspace_root>/<cg_id>/``.
         run_experiment_image: Container image for ``run_experiment``
             validation jobs *inside* the agent's tool surface. Threaded
             through to :func:`run_harness_builder_session`.
@@ -298,13 +313,10 @@ def make_dispatch_harness_build(
         status_artifact_path: Callable resolving the per-job status JSON
             key.
         nudge_artifact_path: Callable resolving the supervisor-nudge key.
-        inline_runner: Test-only seam — when non-``None``, the dispatch
-            handler runs the agent loop in-process via this runner
-            instead of submitting a Compute job. Returns a synthetic
-            :class:`JobHandle` whose ``handle`` is ``"inline-<cg_id>"``
-            so the orchestrator's phase-1 polling sees a stable id; the
-            test asserts on workspace post-state and on
-            :func:`Compute.submit` having NOT been called.
+        inline_runner: Test-only runner override — when non-``None`` it
+            replaces :func:`run_loop` as the session runner. Production
+            leaves it ``None``. Mirrors
+            :func:`make_dispatch_planner`'s ``inline_runner`` seam.
 
     Returns:
         A :data:`DispatchHandler`-shaped async callable suitable for
@@ -382,123 +394,98 @@ def make_dispatch_harness_build(
                 ),
             )
 
-        # Test-only inline runner — runs the agent loop in-process and
-        # synthesizes a JobHandle. Production leaves this None and the
-        # branch below submits via Compute.
-        if inline_runner is not None:
-            # Translate :class:`EngineConfig` supervisor settings (Task
-            # 3.G4) into the loop's :class:`AgentLoopConfig`. The
-            # representative ``ctx.llm`` provider doubles as the
-            # supervisor LLM in the C2 single-LLM-per-context shape;
-            # per-role plumbing is the natural follow-up when a
-            # deployment lands per-role models. Some unit tests leave
-            # ``ctx.config = None``; treat that as "supervisor off" so
-            # those tests don't have to wire a full config in.
-            engine_config = getattr(ctx, "config", None)
-            if (
-                engine_config is not None
-                and getattr(engine_config, "supervisor_enabled", False) is True
-            ):
-                supervisor_on = True
-                supervisor_cadence = int(
-                    getattr(engine_config, "supervisor_check_every_n_turns", 0)
-                )
-            else:
-                supervisor_on = False
-                supervisor_cadence = 0
-            loop_config = AgentLoopConfig(supervisor_check_every_turns=supervisor_cadence)
-            session_id = await open_agent_session(
-                ctx.metadata_store,
-                parent_kind="cg",
-                parent_id=cg_id,
-                agent_role="harness_builder",
-                llm=llm,
-            )
-            # Round-6 item D: close the ``agent_sessions`` row on EVERY
-            # exit path (including a raised session).
-            outcome = None
-            try:
-                outcome = await run_harness_builder_session(
-                    workspace_path=workspace_path,
-                    harness_contract=harness_contract,
-                    cg_id=cg_id,
-                    llm=llm,
-                    artifact_store=ctx.artifact_store,
-                    compute=ctx.compute,
-                    manifest_artifact_path=manifest_key,
-                    status_artifact_path=status_key,
-                    nudge_artifact_path=nudge_key,
-                    run_experiment_image=run_experiment_image,
-                    run_experiment_gpu=run_experiment_gpu,
-                    runner=inline_runner,
-                    supervisor_llm=llm if supervisor_on else None,
-                    config=loop_config,
-                    progress_sink=make_progress_sink(ctx.metadata_store, session_id),
-                )
-            finally:
-                await close_agent_session(ctx.metadata_store, session_id, outcome)
-            return DispatchOutcome(
-                submitted_handles=[
-                    JobHandle(plugin="inline", handle=f"inline-{cg_id}"),
-                ],
-                error=None,
-            )
+        # === Run the harness-builder agent loop in-process =================
+        # Translate :class:`EngineConfig` supervisor settings (Task 3.G4)
+        # into the loop's :class:`AgentLoopConfig`. The representative
+        # ``ctx.llm`` provider doubles as the supervisor LLM in the
+        # single-LLM-per-context shape. Some unit tests leave
+        # ``ctx.config = None``; treat that as "supervisor off".
+        engine_config = getattr(ctx, "config", None)
+        if (
+            engine_config is not None
+            and getattr(engine_config, "supervisor_enabled", False) is True
+        ):
+            supervisor_on = True
+            supervisor_cadence = int(getattr(engine_config, "supervisor_check_every_n_turns", 0))
+        else:
+            supervisor_on = False
+            supervisor_cadence = 0
+        loop_config = AgentLoopConfig(supervisor_check_every_turns=supervisor_cadence)
 
-        # Production path: lay down the workspace + contract for the
-        # agent-side container, then submit. The container's entrypoint
-        # invokes :func:`run_harness_builder_session` against the
-        # workspace; the entrypoint module wiring is the deployment's
-        # concern (the agent.Dockerfile per Task 2.A4 ships the smai-agents
-        # CLI that calls into this function).
-        create_workspace_skeleton(workspace_path)
-        write_template_files(workspace_path)
-        contract_path = workspace_path / WORKSPACE_HARNESS_CONTRACT_PATH
-        contract_path.parent.mkdir(parents=True, exist_ok=True)
-        contract_path.write_text(harness_contract.model_dump_json(indent=2))
-
-        # TODO(observability): agent_sessions for the container path — the
-        # container has no MetadataStore handle, so the row would have to
-        # be created here at submit-time and closed when the phase-1
-        # job-succeeded/failed handler observes the terminal job. That
-        # spans two code sites; left for a follow-up. The inline path
-        # (above) and the planner are fully covered.
-
-        command = [
-            "python",
-            "-m",
-            "smai_agents.agents.harness_builder",
-            "--workspace",
-            str(workspace_path),
-            "--cg-id",
-            cg_id,
-            "--manifest-artifact-path",
-            manifest_key,
-        ]
-        env = {
-            "SMAI_CG_ID": cg_id,
-            "SMAI_HARNESS_MANIFEST_KEY": manifest_key,
-            "SMAI_HARNESS_STATUS_KEY": status_key,
-            "SMAI_HARNESS_NUDGE_KEY": nudge_key,
-        }
+        # Open the ``agent_sessions`` telemetry row so the run is
+        # inspectable while it executes (DEC-033 #2). Round-6 item D:
+        # close it on EVERY exit path, including a raised session.
+        session_id = await open_agent_session(
+            ctx.metadata_store,
+            parent_kind="cg",
+            parent_id=cg_id,
+            agent_role="harness_builder",
+            llm=llm,
+        )
+        outcome: AgentOutcome | None = None
         try:
-            handle = await ctx.compute.submit(
-                image=agent_image,
-                command=command,
-                env=env,
-                gpu=False,
+            outcome = await run_harness_builder_session(
+                workspace_path=workspace_path,
+                harness_contract=harness_contract,
+                cg_id=cg_id,
+                llm=llm,
+                artifact_store=ctx.artifact_store,
+                compute=ctx.compute,
+                manifest_artifact_path=manifest_key,
+                status_artifact_path=status_key,
+                nudge_artifact_path=nudge_key,
+                run_experiment_image=run_experiment_image,
+                run_experiment_gpu=run_experiment_gpu,
+                runner=inline_runner,
+                supervisor_llm=llm if supervisor_on else None,
+                config=loop_config,
+                progress_sink=make_progress_sink(ctx.metadata_store, session_id),
             )
-        except Exception as exc:  # noqa: BLE001 — engine surfaces every error as DispatchOutcome.error
+        finally:
+            await close_agent_session(ctx.metadata_store, session_id, outcome)
+
+        # Publish the agent's workspace outputs to ArtifactStore so the
+        # orchestrator's ``implementing`` gates (and the downstream
+        # technique-implementer dispatch) can read them — the agent ran
+        # on the worker's local disk, not in a container that pushed to
+        # the store. Keyed under the harness namespace (the manifest
+        # key's parent) so the layout matches what
+        # ``_load_harness_outputs`` + the code reviewer already expect.
+        harness_key_prefix = manifest_key.rsplit("/", 1)[0]
+        await publish_workspace_outputs(
+            artifact_store=ctx.artifact_store,
+            workspace_path=workspace_path,
+            key_prefix=harness_key_prefix,
+            roots=["harness", "techniques", "validation_results.json"],
+        )
+
+        # Completeness check (mirrors the planner's ``buffer.finalized``
+        # check): the harness builder succeeds iff it emitted the
+        # manifest — the ``emit_harness_manifest`` tool only writes it
+        # after a passing in-workspace validation run (manifest_tool §9
+        # step 5), so manifest-presence IS the harness-build-succeeded
+        # signal. Absent => the in-process agent did not complete its
+        # contract; surface a dispatch error so the engine's
+        # ``_handle_dispatch_failure`` + the ``implementing`` state's
+        # RetryPolicy retry or terminate it, rather than parking the CG
+        # in ``implementing`` with no edge able to fire.
+        if not await ctx.artifact_store.exists(manifest_key):
             return DispatchOutcome(
                 submitted_handles=[],
-                error=f"{type(exc).__name__}: {exc}",
+                error=(
+                    f"harness builder produced no manifest at {manifest_key!r} "
+                    f"(agent outcome: {outcome.kind if outcome is not None else 'unknown'})"
+                ),
             )
-        return DispatchOutcome(submitted_handles=[handle], error=None)
+        return DispatchOutcome(
+            submitted_handles=[JobHandle(plugin="inline", handle=f"inline-{cg_id}")],
+            error=None,
+        )
 
     return _dispatch
 
 
 __all__ = [
-    "DEFAULT_AGENT_IMAGE",
     "DEFAULT_HARNESS_CONTRACT_KEY_TEMPLATE",
     "DEFAULT_HARNESS_MANIFEST_KEY_TEMPLATE",
     "DEFAULT_HARNESS_NUDGE_KEY_TEMPLATE",

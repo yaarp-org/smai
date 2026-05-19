@@ -32,6 +32,7 @@ from typing import Any
 
 import pytest
 import yaml
+from smai_agents import AgentOutcome, AgentSession
 from smai_artifacts_localfs import LocalFsStore
 from smai_cli.runtime import (
     EXPERIMENT_PLAN_KEY_TEMPLATE,
@@ -324,6 +325,40 @@ async def _pre_stage_artifacts(*, artifact_store: LocalFsStore, cg_id: str) -> H
     return manifest
 
 
+async def _harness_inline_runner(session: AgentSession) -> AgentOutcome:
+    """Round-14 test runner for the in-process harness builder. Stages
+    the harness manifest as the runner's own side effect — keyed off
+    ``session.workspace_path`` (``<root>/<cg_id>``) so the dispatch
+    handler's completeness check sees it with no race against the
+    background worker."""
+    cg_id = session.workspace_path.name
+    harness_contract = await _read_harness_contract(session.artifact_store, cg_id)  # type: ignore[arg-type]
+    manifest = _build_smoke_manifest(harness_contract)
+    await session.artifact_store.put(
+        HARNESS_MANIFEST_KEY_TEMPLATE.format(cg_id=cg_id),
+        manifest.model_dump_json().encode("utf-8"),
+    )
+    return AgentOutcome(
+        kind="finished", turn_count=0, usage_total=session.usage_total, finish_success=True
+    )
+
+
+async def _technique_inline_runner(session: AgentSession) -> AgentOutcome:
+    """Round-14 test runner for the in-process technique implementer.
+    Stages ``validation_results.json`` (``session.workspace_path`` is
+    ``<root>/<cg_id>/<entry_id>``) so the completeness check + the
+    entry-spec validation gate pass race-free."""
+    entry_id = session.workspace_path.name
+    cg_id = session.workspace_path.parent.name
+    await session.artifact_store.put(
+        TECHNIQUE_VALIDATION_KEY_TEMPLATE.format(cg_id=cg_id, entry_id=entry_id),
+        json.dumps({"passed": True}).encode("utf-8"),
+    )
+    return AgentOutcome(
+        kind="finished", turn_count=0, usage_total=session.usage_total, finish_success=True
+    )
+
+
 def _build_per_role_stubs() -> dict[str, _StubLlm]:
     role_to_stub: dict[str, _StubLlm] = {}
     for role in DEFAULT_TASK_ROLES:
@@ -393,6 +428,8 @@ async def test_smai_start_drives_cg_to_complete_no_creds(tmp_path: Path) -> None
         worker_id="g3-fixture-matrix-test",
         workspace_root=tmp_path / "workspaces",
         plugin_overrides=overrides,
+        harness_builder_inline_runner=_harness_inline_runner,
+        technique_implementer_inline_runner=_technique_inline_runner,
     ) as runtime:
         # Seed the technique registry so the smoke YAML compiles cleanly.
         runtime.experiments._registries_factory = _make_smoke_registries  # type: ignore[attr-defined]
@@ -429,9 +466,11 @@ async def test_smai_start_drives_cg_to_complete_no_creds(tmp_path: Path) -> None
         assert await artifact_store.exists(EVALUATION_RESULT_KEY_TEMPLATE.format(cg_id=cg_id))
         assert await artifact_store.exists(CONTEXTUAL_VERDICT_KEY_TEMPLATE.format(cg_id=cg_id))
 
-        # The fake Compute observed dispatches; the code-reviewer +
+        # The fake Compute observed the runs dispatch (round 14: the
+        # harness-builder / technique-implementer agents run in-process,
+        # so only the seed runs submit jobs); the code-reviewer +
         # contextual-evaluator stubs were invoked (gate bodies fired).
-        assert len(fake_compute.submitted) >= 3
+        assert len(fake_compute.submitted) >= 2
         assert len(role_stubs["code_reviewer"].calls) >= 1
         assert len(role_stubs["contextual_evaluator"].calls) >= 1
 

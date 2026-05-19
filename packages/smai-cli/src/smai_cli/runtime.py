@@ -1323,6 +1323,8 @@ class Runtime:
         runtime_image: str | None = None,
         runtime_cpu_image: str | None = None,
         paper_fetcher: PaperFetcher | None = None,
+        harness_builder_inline_runner: Any = None,
+        technique_implementer_inline_runner: Any = None,
     ) -> AsyncGenerator[Runtime, None]:
         """Out-of-band production worker (`09` §6 / `05` §7.2 / DEC-024).
 
@@ -1372,6 +1374,8 @@ class Runtime:
             run_worker=True,
             paper_fetcher=paper_fetcher,
             worker_id=worker_id,
+            harness_builder_inline_runner=harness_builder_inline_runner,
+            technique_implementer_inline_runner=technique_implementer_inline_runner,
         ) as runtime:
             yield runtime
 
@@ -1391,6 +1395,8 @@ class Runtime:
         paper_fetcher: PaperFetcher | None = None,
         worker_id: str | None = None,
         proposal_cg_id_for: Callable[[str, str], str] | None = None,
+        harness_builder_inline_runner: Any = None,
+        technique_implementer_inline_runner: Any = None,
     ) -> AsyncGenerator[Runtime, None]:
         """Boot the in-band Runtime; yield a configured instance.
 
@@ -1412,6 +1418,12 @@ class Runtime:
         ``run_worker=False`` is for tests that drive
         :func:`run_worker_cycle` manually; production callers
         (``smai dev``) leave it ``True``.
+
+        ``harness_builder_inline_runner`` / ``technique_implementer_inline_runner``
+        are test-only runner overrides threaded into the two agent
+        dispatch factories (replacing :func:`run_loop`). Production
+        leaves them ``None`` — the agents run their real loops
+        in-process in the worker.
 
         ``worker_id`` is the deployment-stable identity threaded into
         the phase-3 lease wrapper (`05` §3.5 / DEC-035 #2 / Task 3.G1).
@@ -1487,11 +1499,14 @@ class Runtime:
                 llm_for_code_reviewer=llm_for_code_reviewer,
                 llm_for_contextual_evaluator=llm_for_contextual_evaluator,
                 runtime_image=effective_runtime_image,
-                # Round 12: the agent-side container image for the
-                # harness-builder / technique-implementer dispatches.
-                # Unlike the runtime images there is no test-override
-                # parameter — the configured value is the single source.
-                agent_image=config.engine.agent_image,
+                # Round 14: the harness-builder / technique-implementer
+                # agents run in-process in the worker, so no agent
+                # container image is threaded; ``EngineConfig.agent_image``
+                # is currently unconsumed (reserved for future
+                # re-containerization). The ``*_inline_runner`` kwargs
+                # are test-only runner overrides (default None).
+                harness_builder_inline_runner=harness_builder_inline_runner,
+                technique_implementer_inline_runner=technique_implementer_inline_runner,
             )
             # Register the :class:`RunRecord` sub-state-machine spec
             # alongside the Phase-2 specs (per Task 3.E3 / DEC-034 #3).

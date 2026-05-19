@@ -8,9 +8,11 @@ Two surfaces under test:
   ``harness/``, ``techniques/baseline.py``, ``validation_results.json``,
   and ``harness_api_manifest.json``.
 * :func:`make_dispatch_harness_build` — the dispatch handler factory.
-  Exercises the production path via a fake :class:`Compute` (asserts
-  Compute.submit was called with the right shape) and the
-  inline-runner test seam (asserts the agent loop ran in-process).
+  Round 14: the harness builder runs in-process in the worker (no
+  Compute job), so the tests assert the agent loop ran in-process, the
+  synthetic ``inline-<cg_id>`` handle is returned, the manifest
+  completeness check routes a no-manifest run to a dispatch error, and
+  the session runs even with no ``inline_runner`` supplied.
 """
 
 from __future__ import annotations
@@ -242,34 +244,26 @@ async def test_run_harness_builder_session_lays_down_contract_for_agent(
     assert "emit_harness_manifest" in session.tools
 
 
-# === Dispatch handler — production path uses Compute.submit =================
+# === Dispatch handler — runs the session in-process (round 14) ==============
+
+_MANIFEST_KEY = "comparison-groups/cg-1/harness/manifest.json"
 
 
-@pytest.mark.asyncio
-async def test_dispatch_harness_build_submits_through_compute(
-    tmp_path: Path,
-) -> None:
-    """In the production code path the handler reads the contract
-    from ArtifactStore, lays down the workspace, and submits a
-    Compute job. The returned :class:`DispatchOutcome` carries the
-    handle from :meth:`Compute.submit`."""
+async def _stage_contract(artifact_store: StubArtifactStore) -> None:
+    """Stage the HarnessContract the dispatch handler reads."""
     contract = make_harness_contract(factor_type="additive")
-    artifact_store = StubArtifactStore()
-    contract_key = "comparison-groups/cg-1/harness/contract.json"
     await artifact_store.put(
-        contract_key,
+        "comparison-groups/cg-1/harness/contract.json",
         contract.model_dump_json(indent=2).encode("utf-8"),
         content_type="application/json",
     )
 
-    fake_compute = FakeCompute()
-    fake_compute.set_workspace(tmp_path / "cg-1")
 
-    handler = make_dispatch_harness_build(workspace_root=tmp_path)
+def _make_stub_context(artifact_store: StubArtifactStore, compute: FakeCompute) -> object:
+    """A minimal DispatchContext-shaped duck-typed object — the handler
+    accesses only ctx.entity_id, ctx.artifact_store, ctx.compute,
+    ctx.llm, ctx.metadata_store, ctx.config."""
 
-    # Construct a minimal DispatchContext-shaped duck-typed object
-    # rather than importing the engine type — the dispatch handler
-    # accesses only ctx.entity_id, ctx.artifact_store, ctx.compute, ctx.llm.
     class _StubContext:
         def __init__(self) -> None:
             self.entity_id = "cg-1"
@@ -277,53 +271,31 @@ async def test_dispatch_harness_build_submits_through_compute(
             self.entity_state = "implementing"
             self.entity_version = 1
             self.artifact_store = artifact_store
-            self.compute = fake_compute
+            self.compute = compute
             self.llm = StubLlmProvider([])
             self.metadata_store = None
             self.config = None
             self.checkpointer = None
 
-    outcome = await handler(_StubContext())
-
-    assert outcome.error is None
-    assert len(outcome.submitted_handles) == 1
-    handle = outcome.submitted_handles[0]
-    assert handle.handle == "fake-job-1"
-    # Compute.submit was called with the harness-builder entry point.
-    assert len(fake_compute.submit_calls) == 1
-    call = fake_compute.submit_calls[0]
-    assert "smai_agents.agents.harness_builder" in call["command"]
-    assert call["env"]["SMAI_CG_ID"] == "cg-1"
-    # Workspace was materialized before submit so the container's
-    # entrypoint can read contracts/harness_contract.json on start.
-    assert (tmp_path / "cg-1" / "contracts" / "harness_contract.json").is_file()
-
-
-# === Dispatch handler — inline runner exercises the loop in-process =========
+    return _StubContext()
 
 
 @pytest.mark.asyncio
-async def test_dispatch_harness_build_inline_runner_drives_loop(
-    tmp_path: Path,
-) -> None:
-    """The ``inline_runner`` seam lets tests skip Compute.submit and
-    exercise the agent loop in-process; the production-path branch
-    is *not* taken (Compute.submit is never called)."""
-    contract = make_harness_contract(factor_type="additive")
+async def test_dispatch_harness_build_runs_session_in_process(tmp_path: Path) -> None:
+    """The dispatch handler runs the harness-builder loop in-process
+    (no Compute.submit) and synthesizes an ``inline-<cg_id>`` handle.
+    The ``inline_runner`` seam swaps the runner; the manifest the
+    completeness check requires is staged as the runner's side effect."""
     artifact_store = StubArtifactStore()
-    contract_key = "comparison-groups/cg-1/harness/contract.json"
-    await artifact_store.put(
-        contract_key,
-        contract.model_dump_json(indent=2).encode("utf-8"),
-        content_type="application/json",
-    )
-
+    await _stage_contract(artifact_store)
     fake_compute = FakeCompute()
-
     captured: list[AgentSession] = []
 
     async def _capture_runner(session: AgentSession) -> AgentOutcome:
         captured.append(session)
+        # Stand in for the ``emit_harness_manifest`` tool: the dispatch
+        # handler's completeness check requires the manifest artifact.
+        await artifact_store.put(_MANIFEST_KEY, b"{}", content_type="application/json")
         return AgentOutcome(
             kind="finished",
             turn_count=0,
@@ -336,30 +308,71 @@ async def test_dispatch_harness_build_inline_runner_drives_loop(
         workspace_root=tmp_path,
         inline_runner=_capture_runner,
     )
-
-    class _StubContext:
-        def __init__(self) -> None:
-            self.entity_id = "cg-1"
-            self.entity_kind = "cg"
-            self.entity_state = "implementing"
-            self.entity_version = 1
-            self.artifact_store = artifact_store
-            self.compute = fake_compute
-            self.llm = StubLlmProvider([])
-            self.metadata_store = None
-            self.config = None
-            self.checkpointer = None
-
-    outcome = await handler(_StubContext())
+    outcome = await handler(_make_stub_context(artifact_store, fake_compute))
 
     assert outcome.error is None
     assert len(outcome.submitted_handles) == 1
     assert outcome.submitted_handles[0].plugin == "inline"
     assert outcome.submitted_handles[0].handle == "inline-cg-1"
-    # Compute.submit is *not* invoked on the inline-runner path.
+    # The agent loop ran in-process — Compute.submit is never called.
     assert fake_compute.submit_calls == []
-    # The runner saw a fully-assembled session.
     assert len(captured) == 1
+
+
+@pytest.mark.asyncio
+async def test_dispatch_harness_build_no_manifest_is_dispatch_error(tmp_path: Path) -> None:
+    """When the in-process session does not emit a manifest the handler
+    returns a DispatchOutcome error (so the engine's RetryPolicy
+    retries/terminates) rather than parking the CG."""
+    artifact_store = StubArtifactStore()
+    await _stage_contract(artifact_store)
+    fake_compute = FakeCompute()
+
+    async def _noop_runner(session: AgentSession) -> AgentOutcome:
+        return AgentOutcome(kind="exhausted_turns", turn_count=3, usage_total=session.usage_total)
+
+    handler = make_dispatch_harness_build(workspace_root=tmp_path, inline_runner=_noop_runner)
+    outcome = await handler(_make_stub_context(artifact_store, fake_compute))
+
+    assert outcome.submitted_handles == []
+    assert outcome.error is not None
+    assert "no manifest" in outcome.error
+
+
+@pytest.mark.asyncio
+async def test_dispatch_harness_build_runs_session_by_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With no ``inline_runner`` the handler still runs the session
+    in-process — it calls :func:`run_harness_builder_session` with
+    ``runner=None`` (which resolves to :func:`run_loop`) and never
+    submits a Compute job."""
+    import smai_agents.agents.harness_builder as hb_mod
+
+    artifact_store = StubArtifactStore()
+    await _stage_contract(artifact_store)
+    fake_compute = FakeCompute()
+    seen: dict[str, object] = {}
+
+    async def _spy_session(**kwargs: object) -> AgentOutcome:
+        from smai_core.plugins import TokenUsage
+
+        seen.update(kwargs)
+        await artifact_store.put(_MANIFEST_KEY, b"{}", content_type="application/json")
+        return AgentOutcome(
+            kind="finished",
+            turn_count=1,
+            usage_total=TokenUsage(input_tokens=0, output_tokens=0),
+            finish_success=True,
+        )
+
+    monkeypatch.setattr(hb_mod, "run_harness_builder_session", _spy_session)
+    handler = make_dispatch_harness_build(workspace_root=tmp_path)
+    outcome = await handler(_make_stub_context(artifact_store, fake_compute))
+
+    assert outcome.error is None
+    assert seen["runner"] is None  # no inline_runner -> run_harness_builder_session uses run_loop
+    assert fake_compute.submit_calls == []
 
 
 # === Dispatch handler — error paths =========================================

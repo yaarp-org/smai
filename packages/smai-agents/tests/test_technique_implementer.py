@@ -6,8 +6,9 @@ Two surfaces:
   with canned tool calls writing the technique module + validating it +
   finishing.
 * :func:`make_dispatch_technique_implementation` — additive-baseline
-  skip path (DEC-013 / DEC-017), production Compute.submit path,
-  inline-runner test path, and DEC-023 retry-context propagation.
+  skip path (DEC-013 / DEC-017) and the round-14 in-process dispatch
+  (the agent loop runs in the worker, no Compute job; the handler
+  synthesizes an ``inline-<entry_id>`` handle).
 """
 
 from __future__ import annotations
@@ -296,31 +297,59 @@ async def test_dispatch_technique_implementation_skips_additive_baseline(
     assert fake_compute.submit_calls == []
 
 
-# === Substitutive baseline IS dispatched ====================================
+# === Substitutive baseline IS dispatched — runs in-process (round 14) =======
 
 
 @pytest.mark.asyncio
-async def test_dispatch_technique_implementation_dispatches_substitutive_baseline(
+async def test_dispatch_technique_implementation_runs_session_in_process(
     tmp_path: Path,
 ) -> None:
     """Substitutive baselines have real technique modules and ARE
-    dispatched (DEC-017): the handler submits a Compute job and the
-    DispatchOutcome carries the resulting JobHandle."""
+    dispatched (DEC-017): round 14 runs the technique-implementer loop
+    in-process (no Compute.submit) and synthesizes an ``inline-<entry>``
+    handle. The ``inline_runner`` seam swaps the runner; the
+    ``validation_results.json`` the completeness check requires is the
+    runner's side effect."""
     contract = make_harness_contract(factor_type="substitutive")
     technique_contract = make_substitutive_baseline_technique_contract(
         parent_harness_contract_hash=contract.envelope.content_hash,
     )
-
-    artifact_store = StubArtifactStore()
-    contract_key = "comparison-groups/cg-1/entries/entry-vgg/technique_contract.json"
-    await artifact_store.put(
-        contract_key,
-        technique_contract.model_dump_json(indent=2).encode("utf-8"),
+    manifest = make_minimal_manifest(
+        parent_harness_contract_hash=contract.envelope.content_hash,
+        factor_type="substitutive",
     )
 
-    fake_compute = FakeCompute()
+    artifact_store = StubArtifactStore()
+    await artifact_store.put(
+        "comparison-groups/cg-1/entries/entry-vgg/technique_contract.json",
+        technique_contract.model_dump_json(indent=2).encode("utf-8"),
+    )
+    await artifact_store.put(
+        "comparison-groups/cg-1/harness/contract.json",
+        contract.model_dump_json(indent=2).encode("utf-8"),
+    )
+    await artifact_store.put(
+        "comparison-groups/cg-1/harness/manifest.json",
+        manifest.model_dump_json(indent=2).encode("utf-8"),
+    )
 
-    handler = make_dispatch_technique_implementation(workspace_root=tmp_path)
+    validation_key = "comparison-groups/cg-1/entries/entry-vgg/code/validation_results.json"
+
+    async def _capture_runner(session: AgentSession) -> AgentOutcome:
+        # Stand in for the agent's validation run: the completeness
+        # check requires validation_results.json in the store.
+        await artifact_store.put(validation_key, json.dumps({"passed": True}).encode("utf-8"))
+        return AgentOutcome(
+            kind="finished",
+            turn_count=0,
+            usage_total=session.usage_total,
+            finish_success=True,
+        )
+
+    fake_compute = FakeCompute()
+    handler = make_dispatch_technique_implementation(
+        workspace_root=tmp_path, inline_runner=_capture_runner
+    )
 
     class _StubMetadataStore:
         async def get_entry(self, entry_id: str) -> EntryRecord:
@@ -352,10 +381,10 @@ async def test_dispatch_technique_implementation_dispatches_substitutive_baselin
     outcome = await handler(_StubContext())
     assert outcome.error is None
     assert len(outcome.submitted_handles) == 1
-    assert len(fake_compute.submit_calls) == 1
-    call = fake_compute.submit_calls[0]
-    assert "smai_agents.agents.technique_implementer" in call["command"]
-    assert call["env"]["SMAI_ENTRY_ID"] == "entry-vgg"
+    assert outcome.submitted_handles[0].plugin == "inline"
+    assert outcome.submitted_handles[0].handle == "inline-entry-vgg"
+    # The agent loop ran in-process — Compute.submit is never called.
+    assert fake_compute.submit_calls == []
 
 
 # === Missing entry record → error path ======================================

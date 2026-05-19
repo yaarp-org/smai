@@ -363,6 +363,68 @@ async def test_run_one_cycle_drives_every_registered_spec(tmp_path: Path) -> Non
         assert len(stats_per_spec) == 5
 
 
+async def _stage_manifest_for(artifact_store: LocalFsStore, cg_id: str) -> None:
+    """Pre-stage a minimal valid harness manifest — round 14's
+    in-process technique-implementer dispatch reads it before running
+    the agent, and this test elides the harness-build path that would
+    normally produce it."""
+    from smai_core import HarnessContract
+    from smai_orchestrator.specs import HARNESS_MANIFEST_KEY_TEMPLATE
+    from smai_runtime import (
+        MANIFEST_SCHEMA_VERSION,
+        RUNTIME_TEMPLATE_VERSION,
+        HarnessAPIManifest,
+        HarnessExtensionPoint,
+        compute_harness_version_hash,
+        freeze_manifest,
+    )
+
+    raw = await artifact_store.get(HARNESS_CONTRACT_KEY_TEMPLATE.format(cg_id=cg_id))
+    harness_contract = HarnessContract.model_validate_json(raw)
+    manifest = freeze_manifest(
+        HarnessAPIManifest(
+            extension_points=[
+                HarnessExtensionPoint(
+                    key="train_transforms",
+                    type_signature="list[Callable]",
+                    purpose="optional training-set transforms",
+                    optional=True,
+                    integration_pattern="append",
+                )
+            ],
+            integration_pattern_summary="round-14 entry-spec test fixture",
+            harness_version_hash=compute_harness_version_hash({"__init__.py": b""}),
+            parent_harness_contract_hash=harness_contract.envelope.content_hash,
+            manifest_schema_version=MANIFEST_SCHEMA_VERSION,
+            runtime_template_version=RUNTIME_TEMPLATE_VERSION,
+        )
+    )
+    await artifact_store.put(
+        HARNESS_MANIFEST_KEY_TEMPLATE.format(cg_id=cg_id),
+        manifest.model_dump_json().encode("utf-8"),
+    )
+
+
+async def _entry_validation_runner(session: object) -> object:
+    """Round-14 test runner for the in-process technique implementer:
+    stages ``validation_results.json`` as its own side effect so the
+    dispatch handler's completeness check passes."""
+    from smai_agents import AgentOutcome
+    from smai_orchestrator.specs import TECHNIQUE_VALIDATION_KEY_TEMPLATE
+
+    ws = session.workspace_path  # type: ignore[attr-defined]
+    await session.artifact_store.put(  # type: ignore[attr-defined]
+        TECHNIQUE_VALIDATION_KEY_TEMPLATE.format(cg_id=ws.parent.name, entry_id=ws.name),
+        b'{"passed": true}',
+    )
+    return AgentOutcome(
+        kind="finished",
+        turn_count=0,
+        usage_total=session.usage_total,  # type: ignore[attr-defined]
+        finish_success=True,
+    )
+
+
 @pytest.mark.asyncio
 async def test_run_one_cycle_advances_treatment_entry_through_entry_spec(
     tmp_path: Path,
@@ -373,12 +435,13 @@ async def test_run_one_cycle_advances_treatment_entry_through_entry_spec(
 
     Setup elides the harness-build path (which would normally drive
     ``draft → implementing`` on the CG) by transitioning the CG
-    directly to ``implementing``. The treatment entry is then visible
-    to ``get_ready_to_implement_entry``; after one ``run_one_cycle``,
-    the entry-spec's phase-3 dispatch fires, submits a Compute job
-    against :class:`FakeCompute`, and the entry advances ``pending →
-    implementing`` with the resulting :class:`JobHandle` recorded on
-    ``EntryRecord.implementation_job_handle``.
+    directly to ``implementing`` and pre-staging the harness manifest.
+    The treatment entry is then visible to
+    ``get_ready_to_implement_entry``; after one ``run_one_cycle``, the
+    entry-spec's phase-3 dispatch fires, runs the technique-implementer
+    agent in-process (round 14), and the entry advances ``pending →
+    implementing`` with the synthetic ``inline-<entry_id>``
+    :class:`JobHandle` recorded on ``EntryRecord.implementation_job_handle``.
     """
     artifact_store = LocalFsStore(tmp_path / "artifacts")
     overrides = PluginOverrides(
@@ -392,20 +455,23 @@ async def test_run_one_cycle_advances_treatment_entry_through_entry_spec(
         workspace_root=tmp_path / "workspaces",
         plugin_overrides=overrides,
         run_worker=False,
+        technique_implementer_inline_runner=_entry_validation_runner,
     ) as runtime:
         runtime.experiments._registries_factory = make_registries_with_technique  # type: ignore[attr-defined]
         await runtime.experiments.submit_text(EXPERIMENT_YAML)
 
         # Move the CG into ``implementing`` so the entry spec's phase-2
         # query (gated on parent_state=implementing) discovers the
-        # treatment entry. This is the only manual entity transition
-        # the test performs — the entry-spec drive itself is what we
-        # are asserting on.
+        # treatment entry, and pre-stage the harness manifest the
+        # in-process technique-implementer dispatch reads. These are the
+        # only manual setup steps — the entry-spec drive itself is what
+        # we are asserting on.
         cg = await runtime.plugins.metadata_store.get_cg("cg_example")
         assert cg is not None
         await runtime.plugins.metadata_store.transition_cg_state(
             "cg_example", cg.version, "implementing"
         )
+        await _stage_manifest_for(artifact_store, "cg_example")
 
         stats_per_spec = await runtime.run_one_cycle()
         # Five specs after Tasks 3.E1 + 3.E2 + 3.E3: proposal + paper +

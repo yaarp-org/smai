@@ -21,8 +21,10 @@ Two surfaces, mirroring :mod:`smai_agents.agents.harness_builder`:
   :class:`ArtifactStore`; pre-filters additive baselines per DEC-013 /
   DEC-017 (those skip implementation dispatch — the orchestrator marks
   them ``implemented`` directly without calling the agent); for non-
-  baseline / substitutive entries it submits a Compute job and returns
-  the :class:`JobHandle`.
+  baseline / substitutive entries it runs the agent loop **in-process
+  in the worker** (round 14 removed the agent-container path),
+  publishes the per-entry ``code/`` outputs to :class:`ArtifactStore`,
+  and synthesizes an ``inline-<entry_id>`` :class:`JobHandle`.
 
 Per DEC-017's three grounding-context types the rendered initial user
 message branches on ``context_kind``: ``method_description`` (novel-
@@ -66,6 +68,7 @@ from smai_agents.agent_session_telemetry import (
     make_progress_sink,
     open_agent_session,
 )
+from smai_agents.agents.artifact_publish import publish_workspace_outputs
 from smai_agents.agents.harness_builder import SessionRunner
 from smai_agents.loop import (
     AgentLoopConfig,
@@ -84,8 +87,6 @@ from smai_agents.std_tools import build_standard_tool_registry
 from smai_agents.tools import ToolRegistry
 
 _TECHNIQUE_IMPLEMENTER_ROLE: TaskRole = "technique_implementer"
-
-DEFAULT_AGENT_IMAGE = "smai-agent:dev"
 
 # Three grounding-context types per DEC-017 / §2.3 Inputs.
 ContextKind = Literal[
@@ -107,6 +108,14 @@ DEFAULT_PREV_TRACE_KEY_TEMPLATE = (
 )
 DEFAULT_STATUS_KEY_TEMPLATE = "comparison-groups/{cg_id}/entries/{entry_id}/status.json"
 DEFAULT_NUDGE_KEY_TEMPLATE = "comparison-groups/{cg_id}/entries/{entry_id}/nudge.txt"
+# ArtifactStore namespace the in-process technique implementer publishes
+# its workspace outputs under — the per-entry ``code/`` prefix the
+# CG-entries spec's validation gate + the code reviewer read (mirrors
+# ``TECHNIQUE_CODE_KEY_TEMPLATE`` / ``TECHNIQUE_VALIDATION_KEY_TEMPLATE``).
+DEFAULT_ENTRY_CODE_PREFIX_TEMPLATE = "comparison-groups/{cg_id}/entries/{entry_id}/code"
+DEFAULT_ENTRY_VALIDATION_KEY_TEMPLATE = (
+    "comparison-groups/{cg_id}/entries/{entry_id}/code/validation_results.json"
+)
 
 
 # === In-process runner ======================================================
@@ -321,7 +330,6 @@ async def run_technique_implementer_session(
 def make_dispatch_technique_implementation(
     *,
     workspace_root: Path,
-    agent_image: str = DEFAULT_AGENT_IMAGE,
     run_experiment_image: str | None = None,
     run_experiment_gpu: bool = True,
     technique_contract_artifact_path: Callable[[str, str], str] | None = None,
@@ -346,9 +354,15 @@ def make_dispatch_technique_implementation(
     pre-filter the orchestrator's ``implementing`` composite handler
     applies (Task 2.C4 carry-forward).
 
-    Args mirror :func:`make_dispatch_harness_build` — per-CG path
-    callables here take ``(cg_id, entry_id)`` so the keys are
-    parameterized per entry.
+    Like :func:`make_dispatch_harness_build`, the handler runs the
+    technique-implementer agent loop **in-process in the worker**
+    (round 14 removed the abandoned agent-container path); it publishes
+    the agent's per-entry ``code/`` outputs to :class:`ArtifactStore`
+    after the session and synthesizes an ``inline-<entry_id>``
+    :class:`JobHandle`. The ``execute``-tool-host-isolation and
+    worker-blocking costs the harness-builder module docstring records
+    apply identically here. Per-CG path callables take
+    ``(cg_id, entry_id)`` so the keys are parameterized per entry.
     """
 
     def _default_technique_contract_path(cg_id: str, entry_id: str) -> str:
@@ -439,53 +453,10 @@ def make_dispatch_technique_implementation(
         status_key = status_path_fn(cg_id, entry_id)
         nudge_key = nudge_path_fn(cg_id, entry_id)
 
-        if inline_runner is None:
-            # Production path: the agent-side container loads the workspace
-            # and re-derives the session via the same inputs. The dispatch
-            # handler stays light here — it submits the job and returns
-            # the handle. The container's entrypoint module is configured
-            # by the deployment.
-            # TODO(observability): agent_sessions for the container path —
-            # the container has no MetadataStore handle, so the row would
-            # have to be created here at submit-time and closed when the
-            # phase-1 job-succeeded/failed handler observes the terminal
-            # job. That spans two code sites; left for a follow-up. The
-            # inline path (below) and the planner are fully covered.
-            command = [
-                "python",
-                "-m",
-                "smai_agents.agents.technique_implementer",
-                "--cg-id",
-                cg_id,
-                "--entry-id",
-                entry_id,
-                "--manifest-artifact-path",
-                manifest_key,
-                "--technique-contract-key",
-                contract_key,
-            ]
-            env = {
-                "SMAI_CG_ID": cg_id,
-                "SMAI_ENTRY_ID": entry_id,
-                "SMAI_HARNESS_MANIFEST_KEY": manifest_key,
-            }
-            try:
-                handle = await ctx.compute.submit(
-                    image=agent_image,
-                    command=command,
-                    env=env,
-                    gpu=False,
-                )
-            except Exception as exc:  # noqa: BLE001
-                return DispatchOutcome(
-                    submitted_handles=[],
-                    error=f"{type(exc).__name__}: {exc}",
-                )
-            return DispatchOutcome(submitted_handles=[handle], error=None)
-
-        # Test path: run the agent loop in-process. The handler reads
-        # the harness contract + manifest + harness/* + baseline module
-        # so that workspace materialization completes before the loop.
+        # === Run the technique-implementer agent loop in-process ===========
+        # The handler reads the harness contract + manifest + harness/* +
+        # baseline module so workspace materialization completes before
+        # the loop.
         harness_contract_key = harness_contract_path_fn(cg_id)
         try:
             raw_h = await ctx.artifact_store.get(harness_contract_key)
@@ -542,7 +513,7 @@ def make_dispatch_technique_implementation(
         )
         # Round-6 item D: close the ``agent_sessions`` row on EVERY exit
         # path (including a raised session).
-        outcome = None
+        outcome: AgentOutcome | None = None
         try:
             outcome = await run_technique_implementer_session(
                 workspace_path=workspace_path,
@@ -575,10 +546,44 @@ def make_dispatch_technique_implementation(
             )
         finally:
             await close_agent_session(ctx.metadata_store, session_id, outcome)
+
+        # Publish the agent's per-entry ``code/`` outputs to ArtifactStore
+        # (the technique module + validation_results.json) — the agent
+        # ran on the worker's local disk; the entry-spec validation gate
+        # and the code reviewer read these from the store.
+        entry_code_prefix = DEFAULT_ENTRY_CODE_PREFIX_TEMPLATE.format(
+            cg_id=cg_id, entry_id=entry_id
+        )
+        await publish_workspace_outputs(
+            artifact_store=ctx.artifact_store,
+            workspace_path=workspace_path,
+            key_prefix=entry_code_prefix,
+            roots=["techniques", "validation_results.json"],
+        )
+
+        # Completeness check (mirrors the planner's ``buffer.finalized``
+        # check + the harness builder's manifest check): the technique
+        # implementer succeeds iff it produced ``validation_results.json``
+        # — that artifact carries the pass/fail the entry-spec gates
+        # decide on. Absent => the in-process agent did not complete its
+        # contract; surface a dispatch error so the engine's
+        # ``_handle_dispatch_failure`` + the ``implementing`` state's
+        # RetryPolicy retry or terminate the entry, rather than parking
+        # it with no edge able to fire.
+        validation_key = DEFAULT_ENTRY_VALIDATION_KEY_TEMPLATE.format(
+            cg_id=cg_id, entry_id=entry_id
+        )
+        if not await ctx.artifact_store.exists(validation_key):
+            return DispatchOutcome(
+                submitted_handles=[],
+                error=(
+                    f"technique implementer produced no validation_results.json at "
+                    f"{validation_key!r} (agent outcome: "
+                    f"{outcome.kind if outcome is not None else 'unknown'})"
+                ),
+            )
         return DispatchOutcome(
-            submitted_handles=[
-                JobHandle(plugin="inline", handle=f"inline-{entry_id}"),
-            ],
+            submitted_handles=[JobHandle(plugin="inline", handle=f"inline-{entry_id}")],
             error=None,
         )
 
@@ -670,7 +675,8 @@ async def _load_harness_outputs(
 
 __all__ = [
     "ContextKind",
-    "DEFAULT_AGENT_IMAGE",
+    "DEFAULT_ENTRY_CODE_PREFIX_TEMPLATE",
+    "DEFAULT_ENTRY_VALIDATION_KEY_TEMPLATE",
     "DEFAULT_HARNESS_CONTRACT_KEY_TEMPLATE",
     "DEFAULT_HARNESS_MANIFEST_KEY_TEMPLATE",
     "DEFAULT_NUDGE_KEY_TEMPLATE",

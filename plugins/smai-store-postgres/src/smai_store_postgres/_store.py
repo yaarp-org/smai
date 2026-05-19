@@ -650,9 +650,17 @@ def _predicate_ready_to_implement_entry() -> tuple[Table, ColumnElement[bool], t
 
 
 def _predicate_in_flight_entry_implementation() -> tuple[Table, ColumnElement[bool], type[Any]]:
+    # Round 14: the entry ``implementing`` edges fire on ``dispatch_time``
+    # (the technique implementer runs in-process), so phase-1 no longer
+    # clears ``implementation_job_handle`` on the terminal transition.
+    # Filter on the state too so a terminal entry with a stale handle is
+    # not re-discovered (mirrors ``_predicate_in_flight_harness_build``).
     return (
         entries_table,
-        entries_table.c.implementation_job_handle.is_not(None),
+        and_(
+            entries_table.c.state == "implementing",
+            entries_table.c.implementation_job_handle.is_not(None),
+        ),
         EntryRecord,
     )
 

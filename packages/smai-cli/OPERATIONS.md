@@ -392,18 +392,17 @@ Per-plugin credential and environment requirements are tabulated in
 `README.md` "Configuration" (the per-plugin `*_config` key table). A
 few that bite in practice:
 
-- **`localgpu` images + Linux bind-mount UID.** Build all three
-  reference images (`smai-agent:dev`, `smai-runtime:dev`,
-  `smai-runtime-cpu:dev`) from
+- **`localgpu` images + Linux bind-mount UID.** Build the two runtime
+  reference images (`smai-runtime:dev`, `smai-runtime-cpu:dev`) from
   `plugins/smai-compute-localgpu/dockerfiles/` before deploying with
   `compute: localgpu` (SMAI publishes none). The run-record dispatcher
   selects `smai-runtime:dev` for GPU experiment runs and
   `smai-runtime-cpu:dev` for `controlled_conditions.compute.gpu: false`
-  ones; the harness-builder / technique-implementer dispatches use
-  `smai-agent:dev`. Override the names via `engine.runtime_image` /
-  `engine.runtime_cpu_image` / `engine.agent_image`. All three images
-  run as the non-root `smai` user (uid 1000), and `LocalGpuCompute`
-  bind-mounts a per-CG
+  ones; override the names via `engine.runtime_image` /
+  `engine.runtime_cpu_image`. (Round 14: the harness-builder /
+  technique-implementer agents run in-process — no `smai-agent:dev`
+  image is needed; see §7.1.) Both images run as the non-root `smai`
+  user (uid 1000), and `LocalGpuCompute` bind-mounts a per-CG
   workspace dir at `/workspace`; on Linux that dir must be writable by
   uid 1000 (`chmod -R a+rwX` the `workspace_root`, or run `smai` as uid
   1000), or an agent's writes into `/workspace` fail with a permission
@@ -437,37 +436,38 @@ few that bite in practice:
 
 ---
 
-## 7.1 Building and publishing the runtime and agent images
+## 7.1 Building and publishing the runtime images
+
+> **Round 14:** the agent image (`engine.agent_image` / `agent.Dockerfile`)
+> is **currently unused** — all six fleet agents, including the harness
+> builder and technique implementer, run in-process in the worker, so no
+> agent container is ever submitted. The `engine.agent_image` field and
+> `agent.Dockerfile` are retained, reserved for a possible future
+> re-containerization; you do **not** need to build or publish the agent
+> image. This section covers only the two runtime (experiment-seed-run)
+> images.
 
 A registry-pull compute substrate (`modal`, `runpod`) cannot use the
-built-in default `engine.runtime_image` / `engine.runtime_cpu_image` /
-`engine.agent_image` values (`smai-runtime:dev` / `smai-runtime-cpu:dev`
-/ `smai-agent:dev`). Those are local-only Docker tags `localgpu` builds
-on the host; Modal / RunPod pull the job image from a registry, so the
-operator must publish each one and point the config at the published
-reference. `smai verify` and the worker boot pre-flight (`smai dev` /
-`smai start` / `smai ui --with-worker`) hard-fail on the
-unpublished-default combination rather than letting it surface as an
-opaque `RemoteError: Image build ... failed` mid-run.
+built-in default `engine.runtime_image` / `engine.runtime_cpu_image`
+values (`smai-runtime:dev` / `smai-runtime-cpu:dev`). Those are
+local-only Docker tags `localgpu` builds on the host; Modal / RunPod
+pull the job image from a registry, so the operator must publish each
+one and point the config at the published reference. `smai verify` and
+the worker boot pre-flight (`smai dev` / `smai start` /
+`smai ui --with-worker`) hard-fail on the unpublished-default
+combination rather than letting it surface as an opaque
+`RemoteError: Image build ... failed` mid-run.
 
-There are three images, two roles:
-
-- **Runtime images** carry the experiment seed runs (the actual model
-  training/eval). `engine.runtime_image` (GPU) is selected when a CG's
-  `HarnessContract` requests GPU; `engine.runtime_cpu_image` (CPU) when
-  it does not.
-- **Agent image** (`engine.agent_image`) carries the two containerized
-  agents — the harness builder and the technique implementer. (The
-  planner, code reviewer, contextual evaluator, supervisor, and
-  paper-ingestion agents run in-process in the worker and need no
-  image.)
+**Runtime images** carry the experiment seed runs (the actual model
+training/eval). `engine.runtime_image` (GPU) is selected when a CG's
+`HarnessContract` requests GPU; `engine.runtime_cpu_image` (CPU) when
+it does not.
 
 The reference Dockerfiles live at
 `plugins/smai-compute-localgpu/dockerfiles/runtime.Dockerfile` (GPU,
-`nvidia/cuda` base), `runtime-cpu.Dockerfile` (CPU-only, lean
-`python:3.11-slim` base), and `agent.Dockerfile` (CPU-only, lean
-`python:3.11-slim` base, no ML stack — the agents generate code, they
-do not train models).
+`nvidia/cuda` base) and `runtime-cpu.Dockerfile` (CPU-only, lean
+`python:3.11-slim` base). (`agent.Dockerfile` sits alongside them but,
+per the note above, is currently unused.)
 
 1. **Build for the substrate's architecture.** Modal and RunPod run an
    `amd64` (`linux/amd64`) substrate. An Apple-Silicon (or other
@@ -489,16 +489,7 @@ do not train models).
      -f plugins/smai-compute-localgpu/dockerfiles/runtime-cpu.Dockerfile \
      -t "$REGISTRY/smai-runtime-cpu:v2" \
      --push .
-
-   docker buildx build --platform linux/amd64 \
-     -f plugins/smai-compute-localgpu/dockerfiles/agent.Dockerfile \
-     -t "$REGISTRY/smai-agent:v2" \
-     --push .
    ```
-
-   The `--platform linux/amd64` pin is load-bearing for the agent image
-   too: the agents run on the same substrate, so an `arm64` agent image
-   fails to start there just as a wrong-arch runtime image does.
 
    (`docker buildx build --push` builds and pushes in one step. With a
    plain `docker build`, pass `--platform linux/amd64`, then
@@ -516,18 +507,17 @@ do not train models).
    engine:
      runtime_image: registry.example.com/your-org/smai-runtime:v2
      runtime_cpu_image: registry.example.com/your-org/smai-runtime-cpu:v2
-     agent_image: registry.example.com/your-org/smai-agent:v2
    ```
 
 4. **Confirm before booting a worker.** Run `smai verify` for the free,
    always-on config check, or `smai verify --probe-image` to additionally
    submit a real (billed) no-op job per image and confirm the substrate
-   can actually pull each one. The config check and probe cover all
-   three images; the probe dedups by image string, so pointing two
+   can actually pull each one. The config check and probe cover both
+   runtime images; the probe dedups by image string, so pointing both
    fields at the same tag pays for one probe job.
 
-SMAI publishes no default runtime or agent image and does not auto-build
-or auto-publish — image publication is an operator responsibility per
+SMAI publishes no default runtime image and does not auto-build or
+auto-publish — image publication is an operator responsibility per
 `07-plugin-interfaces.md` §7.4.
 
 ---

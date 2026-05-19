@@ -51,7 +51,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 from smai_core.plugins import ArtifactNotFound
 
@@ -95,32 +95,42 @@ def _make_entry_dispatch_ready_gate() -> Callable[[GateContext], Awaitable[GateO
     return _gate
 
 
-def _make_entry_validation_pass_gate() -> Callable[[GateContext], Awaitable[GateOutcome]]:
-    """``implementing → implemented`` job_succeeded gate — entry side.
+async def _read_entry_validation(ctx: GateContext) -> tuple[bool, bool]:
+    """Read the per-entry ``validation_results.json`` from ArtifactStore.
 
-    Reads the per-entry ``validation_results.json`` from ArtifactStore
-    at ``comparison-groups/{cg_id}/entries/{entry_id}/code/validation_results.json``
-    (per `10` §5.4 / Task 2.B3 conventions). Advances on
-    ``{"passed": true}``; otherwise the next edge (failure-terminal)
-    fires.
+    Returns ``(present, passed)``. ``present`` is ``False`` when the
+    artifact is missing — the technique-implementer dispatch publishes
+    it after the in-process session, so absence means the agent never
+    completed (a case the dispatch handler's completeness check already
+    routes to ``_handle_dispatch_failure`` + the RetryPolicy).
+    """
+    entry = await ctx.metadata_store.get_entry(ctx.entity_id)
+    if entry is None:
+        return (False, False)
+    validation_key = TECHNIQUE_VALIDATION_KEY_TEMPLATE.format(cg_id=entry.cg_id, entry_id=entry.id)
+    try:
+        payload = await ctx.artifact_store.get(validation_key)
+    except ArtifactNotFound:
+        return (False, False)
+    return (True, read_validation_results_pass(payload))
+
+
+def _make_entry_validation_pass_gate() -> Callable[[GateContext], Awaitable[GateOutcome]]:
+    """``implementing → implemented`` dispatch_time gate — entry side.
+
+    Round 14: the technique implementer runs in-process (no external
+    Compute job — ``ctx.job_outcome`` is always None), so this is a
+    ``dispatch_time`` gate re-evaluated each worker cycle. Reads the
+    per-entry ``validation_results.json`` the dispatch handler
+    published. Advances on ``{"passed": true}``; otherwise the
+    failure-terminal edge fires.
     """
 
     async def _gate(ctx: GateContext) -> GateOutcome:
-        if ctx.job_outcome is None or ctx.job_outcome.state != "succeeded":
-            return GateOutcome(advance=False, reason="implementer job not succeeded")
-        entry = await ctx.metadata_store.get_entry(ctx.entity_id)
-        if entry is None:
-            return GateOutcome(advance=False, reason="entry not found")
-        validation_key = TECHNIQUE_VALIDATION_KEY_TEMPLATE.format(
-            cg_id=entry.cg_id, entry_id=entry.id
-        )
-        try:
-            payload = await ctx.artifact_store.get(validation_key)
-        except ArtifactNotFound:
-            return GateOutcome(
-                advance=False, reason=f"validation_results.json missing at {validation_key!r}"
-            )
-        if not read_validation_results_pass(payload):
+        present, passed = await _read_entry_validation(ctx)
+        if not present:
+            return GateOutcome(advance=False, reason="validation_results.json not present")
+        if not passed:
             return GateOutcome(advance=False, reason="validation did not pass")
         return GateOutcome(advance=True, reason="validation passed")
 
@@ -128,35 +138,24 @@ def _make_entry_validation_pass_gate() -> Callable[[GateContext], Awaitable[Gate
 
 
 def _make_entry_validation_fail_gate() -> Callable[[GateContext], Awaitable[GateOutcome]]:
-    """``implementing → implementation_failed`` job_succeeded gate — entry side.
+    """``implementing → implementation_failed`` dispatch_time gate — entry side.
 
-    Fires when the implementer job succeeded but validation did NOT
-    pass (or the validation results are missing entirely). Always
-    declared after the success edge so a passing run short-circuits.
+    Fires on a *positive* failure signal: ``validation_results.json`` is
+    present AND reports ``passed != true``. It deliberately does NOT
+    advance on a *missing* artifact — a missing result means the
+    in-process agent did not complete (a hard failure), which the
+    dispatch handler surfaces as a ``DispatchOutcome`` error so the
+    engine's ``_handle_dispatch_failure`` + the ``implementing`` state's
+    RetryPolicy retry/terminate it. Advancing here on absence would
+    pre-empt that retry budget (round-11 ``entry_dispatch_attempt``).
+    Declared after the success edge so a passing run short-circuits.
     """
 
     async def _gate(ctx: GateContext) -> GateOutcome:
-        if ctx.job_outcome is None or ctx.job_outcome.state != "succeeded":
-            return GateOutcome(advance=False)
-        # The success edge already evaluated; if we're here the success
-        # gate returned False. Advance to terminal.
-        return GateOutcome(advance=True, reason="validation did not pass; terminal")
-
-    return _gate
-
-
-def _make_entry_job_failed_terminal() -> Callable[[GateContext], Awaitable[GateOutcome]]:
-    """``implementing → implementation_failed`` job_failed gate — entry side.
-
-    The implementer container exited non-zero. Per DEC-016 the retry-
-    with-feedback flow handles re-implementation through the CG-level
-    code-review-failure edge (which resets entry state to ``pending``);
-    a job-level failure here is terminal at the entry-spec level (the
-    CG re-discovers the entry on the next cycle if a retry fires).
-    """
-
-    async def _gate(ctx: GateContext) -> GateOutcome:
-        return GateOutcome(advance=True, reason="implementer job failed; terminal at entry level")
+        present, passed = await _read_entry_validation(ctx)
+        if present and not passed:
+            return GateOutcome(advance=True, reason="validation did not pass; terminal")
+        return GateOutcome(advance=False, reason="no positive validation-failure signal")
 
     return _gate
 
@@ -165,25 +164,23 @@ def build_cg_entries_spec(
     *,
     workspace_root: Path,
     runtime_image: str = "smai-runtime:dev",
-    agent_image: str = "smai-agent:dev",
     max_entry_dispatch_attempts: int = 2,
+    technique_implementer_inline_runner: Any = None,
 ) -> PipelineSpec:
     """Build the SMAI CG-entries :class:`PipelineSpec`.
 
     Args:
         workspace_root: Filesystem root for per-entry workspaces.
             Threaded into the technique-implementer dispatch handler
-            (Task 2.B3) so the dispatched container materializes
-            ``<workspace_root>/<cg_id>/<entry_id>/`` for the agent.
+            so it materializes ``<workspace_root>/<cg_id>/<entry_id>/``
+            for the in-process agent.
         runtime_image: Container image for ``run_experiment`` validation
             jobs the implementer agent submits during its multi-turn
             loop. v1 default ``smai-runtime:dev`` per Task 2.D1.
-        agent_image: Container image for the *agent-side*
-            technique-implementer dispatch job (round 12). Threaded into
-            :func:`make_dispatch_technique_implementation`. The
-            orchestrator path passes :attr:`EngineConfig.agent_image`;
-            the literal default here keeps direct / Tier-B callers
-            working.
+        technique_implementer_inline_runner: Test-only runner override
+            threaded into :func:`make_dispatch_technique_implementation`
+            as ``inline_runner``. Production leaves it ``None``. Typed
+            ``Any`` to keep this module loadable without smai-agents.
         max_entry_dispatch_attempts: Round-11 retry budget for the
             per-entry technique-implementer dispatch. Each (re-)entry
             into ``implementing`` bumps
@@ -208,8 +205,8 @@ def build_cg_entries_spec(
 
     technique_implementer_dispatch = make_dispatch_technique_implementation(
         workspace_root=workspace_root,
-        agent_image=agent_image,
         run_experiment_image=runtime_image,
+        inline_runner=technique_implementer_inline_runner,
     )
 
     states: list[StateDef] = [
@@ -256,28 +253,29 @@ def build_cg_entries_spec(
             gate_rule=_make_entry_dispatch_ready_gate(),
             fires_on="dispatch_time",
         ),
-        # Phase-1 success path — declared first so passing validation
-        # short-circuits the failure edge.
+        # Round 14: the technique implementer runs in-process (no
+        # external Compute job to poll), so these edges fire on
+        # ``dispatch_time`` — re-evaluated each worker cycle against the
+        # ``validation_results.json`` the dispatch handler published. A
+        # *hard* failure (the agent never produced validation_results)
+        # is surfaced by the dispatch handler as a ``DispatchOutcome``
+        # error and handled by ``_handle_dispatch_failure`` + the
+        # ``implementing`` state's RetryPolicy — there is no separate
+        # ``job failed`` edge. Declared validation-pass first so a
+        # passing run short-circuits the failure edge.
         EdgeDef(
             name="entry.implementing → implemented (validation pass)",
             from_state="implementing",
             target_state="implemented",
             gate_rule=_make_entry_validation_pass_gate(),
-            fires_on="job_succeeded",
+            fires_on="dispatch_time",
         ),
         EdgeDef(
             name="entry.implementing → implementation_failed (validation fail)",
             from_state="implementing",
             target_state="implementation_failed",
             gate_rule=_make_entry_validation_fail_gate(),
-            fires_on="job_succeeded",
-        ),
-        EdgeDef(
-            name="entry.implementing → implementation_failed (job failed)",
-            from_state="implementing",
-            target_state="implementation_failed",
-            gate_rule=_make_entry_job_failed_terminal(),
-            fires_on="job_failed",
+            fires_on="dispatch_time",
         ),
     ]
 

@@ -393,23 +393,20 @@ def _make_gate_draft_ready() -> Callable[[GateContext], Awaitable[GateOutcome]]:
 
 def _make_gate_harness_succeeded_advance() -> Callable[[GateContext], Awaitable[GateOutcome]]:
     async def _gate(ctx: GateContext) -> GateOutcome:
-        # Phase-1 success-path: harness succeeded AND all entries terminal
-        # AND ≥1 implemented AND manifest exists at the expected key.
-        if ctx.job_outcome is None or ctx.job_outcome.state != "succeeded":
-            return GateOutcome(advance=False, reason="harness not succeeded yet")
-        entries = await _list_all_entries_for_cg(ctx.metadata_store, ctx.entity_id)
-        if not _entries_terminal_with_at_least_one_implemented(entries):
-            return GateOutcome(advance=False, reason="entries not all terminal yet")
+        # Round 14: ``dispatch_time`` gate (the harness builder runs
+        # in-process, so ``ctx.job_outcome`` is always None — there is
+        # no external job). Success = the harness builder emitted a
+        # manifest AND every entry is terminal AND ≥1 is implemented.
+        # The ``emit_harness_manifest`` tool only writes the manifest
+        # after a passing in-workspace validation run (manifest_tool §9
+        # step 5), so manifest-presence already encodes "harness
+        # validation passed" — no separate validation-results read.
         manifest_key = HARNESS_MANIFEST_KEY_TEMPLATE.format(cg_id=ctx.entity_id)
         if not await ctx.artifact_store.exists(manifest_key):
             return GateOutcome(advance=False, reason="manifest not yet written")
-        validation_key = HARNESS_VALIDATION_KEY_TEMPLATE.format(cg_id=ctx.entity_id)
-        try:
-            payload = await ctx.artifact_store.get(validation_key)
-        except ArtifactNotFound:
-            return GateOutcome(advance=False, reason="harness validation_results.json missing")
-        if not read_validation_results_pass(payload):
-            return GateOutcome(advance=False, reason="harness validation did not pass")
+        entries = await _list_all_entries_for_cg(ctx.metadata_store, ctx.entity_id)
+        if not _entries_terminal_with_at_least_one_implemented(entries):
+            return GateOutcome(advance=False, reason="entries not all terminal yet")
 
         # DEC-033 #3 manifest-hash fanout: write ``harness_api_manifest_hash``
         # to every entry of the CG atomically before the engine CAS-
@@ -436,21 +433,17 @@ def _make_gate_harness_succeeded_advance() -> Callable[[GateContext], Awaitable[
 
 def _make_gate_harness_succeeded_no_survivors() -> Callable[[GateContext], Awaitable[GateOutcome]]:
     async def _gate(ctx: GateContext) -> GateOutcome:
-        if ctx.job_outcome is None or ctx.job_outcome.state != "succeeded":
-            return GateOutcome(advance=False)
+        # Round 14: ``dispatch_time`` gate (``ctx.job_outcome`` is always
+        # None — in-process dispatch). Fires only when every entry has
+        # reached a terminal implementation state and none is
+        # ``implemented`` — which can only happen once the harness built
+        # (entries cannot run without a manifest), so a harness-build
+        # failure never reaches here (it routes through the dispatch
+        # handler's error path + the RetryPolicy instead).
         entries = await _list_all_entries_for_cg(ctx.metadata_store, ctx.entity_id)
         if _entries_terminal_with_zero_implemented(entries):
             return GateOutcome(advance=True, reason="zero entries implemented")
         return GateOutcome(advance=False)
-
-    return _gate
-
-
-def _make_gate_harness_failed_terminal() -> Callable[[GateContext], Awaitable[GateOutcome]]:
-    async def _gate(ctx: GateContext) -> GateOutcome:
-        # Phase-1 job_failed always advances per ``03-state-machine.md``
-        # §3.3 (no auto-retry on harness build).
-        return GateOutcome(advance=True, reason="harness build failed; terminal")
 
     return _gate
 
@@ -1045,11 +1038,11 @@ def build_cg_execution_spec(
     llm_for_contextual_evaluator: LlmProvider,
     seeds: Sequence[int] = (0,),
     runtime_image: str = "smai-runtime:dev",
-    agent_image: str = "smai-agent:dev",
     max_review_attempts: int = 1,
     max_implementation_phase_attempts: int = 2,
     require_human_approval: bool = False,
     evaluation_dispatch_trace: list[str] | None = None,
+    harness_builder_inline_runner: Any = None,
 ) -> PipelineSpec:
     """Build the SMAI CG-execution :class:`PipelineSpec`.
 
@@ -1070,11 +1063,6 @@ def build_cg_execution_spec(
             iterates. Default ``(0,)`` for fast smoke tests.
         runtime_image: Container image name for the runtime experiment
             jobs the ``running`` dispatch submits.
-        agent_image: Container image for the *agent-side* harness-builder
-            dispatch job (round 12). Threaded into
-            :func:`make_dispatch_harness_build`. The orchestrator path
-            passes :attr:`EngineConfig.agent_image`; the literal default
-            here keeps direct / Tier-B callers working.
         max_review_attempts: DEC-016 retry budget — the number of
             ``implemented → implementing`` retries an entry is allowed
             before being marked ``implementation_failed``.
@@ -1096,6 +1084,11 @@ def build_cg_execution_spec(
         evaluation_dispatch_trace: Optional spy hook for the test
             asserting mechanical-then-contextual ordering per the
             acceptance criteria. Production deployments leave ``None``.
+        harness_builder_inline_runner: Test-only runner override threaded
+            into :func:`make_dispatch_harness_build` as ``inline_runner``
+            — replaces :func:`run_loop` as the harness-builder session
+            runner. Production leaves it ``None``. Typed ``Any`` to keep
+            this module loadable without smai-agents installed.
 
     Per-entity-kind structure: this returns the CG-level spec
     (entity_kind=``"cg"``); the entry-level spec is built by
@@ -1115,8 +1108,8 @@ def build_cg_execution_spec(
 
     harness_builder_dispatch = make_dispatch_harness_build(
         workspace_root=workspace_root,
-        agent_image=agent_image,
         run_experiment_image=runtime_image,
+        inline_runner=harness_builder_inline_runner,
     )
 
     states: list[StateDef] = [
@@ -1186,28 +1179,30 @@ def build_cg_execution_spec(
             gate_rule=_make_gate_draft_ready(),
             fires_on="dispatch_time",
         ),
-        # Phase-1 success path — declared first so success short-circuits
-        # before the no-survivors edge.
+        # Round 14: the harness builder runs in-process (no external
+        # Compute job to poll), so these edges fire on ``dispatch_time``
+        # — the next worker cycle re-evaluates them against the
+        # artifacts the in-process session published, exactly like the
+        # proposal spec's ``designing → designed`` edge. A *harness
+        # build* failure (the agent did not emit a manifest) is surfaced
+        # by the dispatch handler as a ``DispatchOutcome`` error and
+        # handled by the engine's ``_handle_dispatch_failure`` + the
+        # ``implementing`` state's RetryPolicy — there is no separate
+        # ``harness build failed`` edge. Declared success-first so a
+        # passing harness short-circuits before the no-survivors edge.
         EdgeDef(
-            name="cg.implementing → implemented (success)",
+            name="cg.implementing → implemented",
             from_state="implementing",
             target_state="implemented",
             gate_rule=_make_gate_harness_succeeded_advance(),
-            fires_on="job_succeeded",
+            fires_on="dispatch_time",
         ),
         EdgeDef(
             name="cg.implementing → implementation_failed (no survivors)",
             from_state="implementing",
             target_state="implementation_failed",
             gate_rule=_make_gate_harness_succeeded_no_survivors(),
-            fires_on="job_succeeded",
-        ),
-        EdgeDef(
-            name="cg.implementing → implementation_failed (harness build failed)",
-            from_state="implementing",
-            target_state="implementation_failed",
-            gate_rule=_make_gate_harness_failed_terminal(),
-            fires_on="job_failed",
+            fires_on="dispatch_time",
         ),
         # implemented edge trio — success first, retry second, terminal third.
         EdgeDef(

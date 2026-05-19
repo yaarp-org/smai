@@ -46,17 +46,15 @@ from smai_core.plugins import (
 from smai_core.plugins.compute import ComputeUnavailable, JobImageInvalid, JobNotFound
 from smai_core.plugins.metadata_store._capabilities import MetadataStoreCapabilities
 from smai_orchestrator.engine import (
-    DEFAULT_AGENT_IMAGE,
     DEFAULT_RUNTIME_CPU_IMAGE,
     DEFAULT_RUNTIME_IMAGE,
 )
 
-# Published-reference image tags used across the round-11 / round-12
-# image-config tests — any non-default string the registry-pull
-# substrate would be able to pull.
+# Published-reference image tags used across the round-11 image-config
+# tests — any non-default string the registry-pull substrate would be
+# able to pull.
 _PUB_RUNTIME = "registry.example.com/org/smai-runtime:v2"
 _PUB_RUNTIME_CPU = "registry.example.com/org/smai-runtime-cpu:v2"
-_PUB_AGENT = "registry.example.com/org/smai-agent:v2"
 
 # === Stubs scoped to this test module ========================================
 
@@ -677,7 +675,7 @@ def test_verify_runtime_image_config_local_build_passes() -> None:
     ``localgpu``) paired with the default image tags is the intended
     flow — PASS."""
     result = verify_runtime_image_config(
-        FakeCompute(), DEFAULT_RUNTIME_IMAGE, DEFAULT_RUNTIME_CPU_IMAGE, DEFAULT_AGENT_IMAGE
+        FakeCompute(), DEFAULT_RUNTIME_IMAGE, DEFAULT_RUNTIME_CPU_IMAGE
     )
     assert result.ok is True
     assert result.latency_ms is None
@@ -685,28 +683,26 @@ def test_verify_runtime_image_config_local_build_passes() -> None:
 
 def test_verify_runtime_image_config_registry_pull_default_image_fails() -> None:
     """A registry-pull substrate paired with the local-only built-in
-    default image tags is the round-11 / round-12 bug — FAIL with an
-    actionable message naming every offending field and the runbook."""
+    default runtime-image tags is the round-11 bug — FAIL with an
+    actionable message naming every offending field and the runbook.
+    Round 14: the agent image is no longer part of this check."""
     result = verify_runtime_image_config(
         _RegistryPullCompute(),
         DEFAULT_RUNTIME_IMAGE,
         DEFAULT_RUNTIME_CPU_IMAGE,
-        DEFAULT_AGENT_IMAGE,
     )
     assert result.ok is False
     assert "engine.runtime_image" in result.reason
     assert "engine.runtime_cpu_image" in result.reason
-    assert "engine.agent_image" in result.reason
+    assert "engine.agent_image" not in result.reason
     assert "fake-registry-pull" in result.reason
     assert "OPERATIONS.md" in result.reason
 
 
 def test_verify_runtime_image_config_registry_pull_overridden_passes() -> None:
-    """A registry-pull substrate with all three images overridden to
+    """A registry-pull substrate with both runtime images overridden to
     published references — PASS."""
-    result = verify_runtime_image_config(
-        _RegistryPullCompute(), _PUB_RUNTIME, _PUB_RUNTIME_CPU, _PUB_AGENT
-    )
+    result = verify_runtime_image_config(_RegistryPullCompute(), _PUB_RUNTIME, _PUB_RUNTIME_CPU)
     assert result.ok is True
 
 
@@ -714,75 +710,47 @@ def test_verify_runtime_image_config_registry_pull_one_default_fails() -> None:
     """Only one image left at the default still fails — the check names
     just the offending field."""
     result = verify_runtime_image_config(
-        _RegistryPullCompute(), _PUB_RUNTIME, DEFAULT_RUNTIME_CPU_IMAGE, _PUB_AGENT
+        _RegistryPullCompute(), _PUB_RUNTIME, DEFAULT_RUNTIME_CPU_IMAGE
     )
     assert result.ok is False
     assert "engine.runtime_cpu_image" in result.reason
     assert "engine.runtime_image is" not in result.reason
-    assert "engine.agent_image is" not in result.reason
 
 
-def test_verify_runtime_image_config_registry_pull_default_agent_image_fails() -> None:
-    """Round 12: the agent image specifically — runtime images published
-    but ``engine.agent_image`` still the local-only default — FAILs and
-    names only the agent field."""
-    result = verify_runtime_image_config(
-        _RegistryPullCompute(), _PUB_RUNTIME, _PUB_RUNTIME_CPU, DEFAULT_AGENT_IMAGE
-    )
-    assert result.ok is False
-    assert "engine.agent_image" in result.reason
-    assert "engine.runtime_image is" not in result.reason
-    assert "engine.runtime_cpu_image is" not in result.reason
-    assert "OPERATIONS.md" in result.reason
-
-
-def test_verify_runtime_image_config_local_build_default_agent_image_passes() -> None:
-    """Round 12: a local-build substrate building ``smai-agent:dev``
-    locally is exactly the intended flow — PASS even at the default."""
-    result = verify_runtime_image_config(
-        FakeCompute(), _PUB_RUNTIME, _PUB_RUNTIME_CPU, DEFAULT_AGENT_IMAGE
-    )
-    assert result.ok is True
-
-
-# === verify_runtime_image_probe (round 11 / round 12, opt-in) ================
+# === verify_runtime_image_probe (round 11, opt-in) ===========================
 
 
 @pytest.mark.asyncio
 async def test_verify_runtime_image_probe_passes_on_clean_submit() -> None:
-    """The probe submits a no-op job per image (runtime GPU + CPU +
-    agent); a substrate that accepts the submit means the image is
-    reachable — PASS."""
-    result = await verify_runtime_image_probe(
-        FakeCompute(), _PUB_RUNTIME, _PUB_RUNTIME_CPU, _PUB_AGENT
-    )
+    """The probe submits a no-op job per runtime image (GPU + CPU); a
+    substrate that accepts the submit means the image is reachable —
+    PASS."""
+    result = await verify_runtime_image_probe(FakeCompute(), _PUB_RUNTIME, _PUB_RUNTIME_CPU)
     assert result.ok is True
     assert "smai-runtime:v2" in result.reason
     assert "smai-runtime-cpu:v2" in result.reason
-    assert "smai-agent:v2" in result.reason
     assert result.latency_ms is not None
 
 
 @pytest.mark.asyncio
 async def test_verify_runtime_image_probe_dedupes_equal_images() -> None:
-    """When all three image fields point at the same tag the probe
+    """When both runtime image fields point at the same tag the probe
     submits once."""
     compute = FakeCompute()
-    result = await verify_runtime_image_probe(compute, "same:tag", "same:tag", "same:tag")
+    result = await verify_runtime_image_probe(compute, "same:tag", "same:tag")
     assert result.ok is True
     # Only one probe job submitted (counter advanced once).
     assert compute._counter == 1
 
 
 @pytest.mark.asyncio
-async def test_verify_runtime_image_probe_probes_distinct_agent_image() -> None:
-    """Round 12: a distinct agent image is probed as its own job — three
-    distinct tags means three probe submits."""
+async def test_verify_runtime_image_probe_probes_distinct_images() -> None:
+    """Two distinct runtime image tags means two probe submits."""
     compute = FakeCompute()
-    result = await verify_runtime_image_probe(compute, _PUB_RUNTIME, _PUB_RUNTIME_CPU, _PUB_AGENT)
+    result = await verify_runtime_image_probe(compute, _PUB_RUNTIME, _PUB_RUNTIME_CPU)
     assert result.ok is True
-    assert compute._counter == 3
-    assert "agent_image" in result.reason
+    assert compute._counter == 2
+    assert "runtime_cpu_image" in result.reason
 
 
 @pytest.mark.asyncio
@@ -793,7 +761,6 @@ async def test_verify_runtime_image_probe_fails_on_image_invalid() -> None:
         _ImageInvalidCompute(),
         "registry.example.com/org/not-pushed:v2",
         "registry.example.com/org/not-pushed-cpu:v2",
-        "registry.example.com/org/not-pushed-agent:v2",
     )
     assert result.ok is False
     assert "not reachable" in result.reason
@@ -815,8 +782,8 @@ def _run_verify_cli(
 
     ``engine_block`` is spliced into the generated ``smai.yaml`` as-is —
     the default ``engine: {}`` leaves every image field at its built-in
-    default; a caller overriding the runtime images (but not the agent
-    image) exercises the round-12 agent-image-specific failure.
+    default; a caller may override the runtime images to exercise the
+    PASS path.
     """
     from smai_cli.main import app
     from smai_orchestrator import InstantiatedPlugins
@@ -887,32 +854,14 @@ def test_smai_verify_cli_local_build_default_image_passes(
     assert "PASS runtime_image" in result.output  # type: ignore[attr-defined]
 
 
-def test_smai_verify_cli_registry_pull_default_agent_image_exits_one(
+def test_smai_verify_cli_registry_pull_runtime_images_overridden_passes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Round 12: runtime images published but ``engine.agent_image``
-    left at the local-only default — ``smai verify`` still exits 1 and
-    names the agent field."""
+    """A registry-pull substrate with both runtime images overridden to
+    published references — the config check reports PASS (round 14: the
+    agent image is no longer part of the check)."""
     engine_block = (
         f"engine:\n  runtime_image: {_PUB_RUNTIME}\n  runtime_cpu_image: {_PUB_RUNTIME_CPU}\n"
-    )
-    result = _run_verify_cli(monkeypatch, _RegistryPullCompute(), engine_block=engine_block)
-    assert result.exit_code == 1, result.output  # type: ignore[attr-defined]
-    assert "FAIL runtime_image" in result.output  # type: ignore[attr-defined]
-    assert "engine.agent_image" in result.output  # type: ignore[attr-defined]
-
-
-def test_smai_verify_cli_registry_pull_all_overridden_passes(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Round 12: a registry-pull substrate with all three images
-    (including ``engine.agent_image``) overridden — the config check
-    reports PASS."""
-    engine_block = (
-        "engine:\n"
-        f"  runtime_image: {_PUB_RUNTIME}\n"
-        f"  runtime_cpu_image: {_PUB_RUNTIME_CPU}\n"
-        f"  agent_image: {_PUB_AGENT}\n"
     )
     result = _run_verify_cli(monkeypatch, _RegistryPullCompute(), engine_block=engine_block)
     assert result.exit_code == 0, result.output  # type: ignore[attr-defined]
