@@ -34,6 +34,7 @@ from smai_orchestrator.engine import (
 )
 from smai_orchestrator.runtime.spec import PipelineSpec
 from smai_orchestrator.specs.cg_entries import build_cg_entries_spec
+from smai_orchestrator.specs.cg_execution import HARNESS_MANIFEST_KEY_TEMPLATE
 from smai_store_sqlite import SqliteStore
 from sqlalchemy import text
 
@@ -129,6 +130,14 @@ async def test_cg_entries_dispatch_failure_reaches_implementation_failed(
     entry = make_entry("entry-r11", cg_id="cg-r11", state="pending")
     await sqlite_store.create_entry(entry)
     assert entry.entry_dispatch_attempt == 0
+    # Round 15: the ``pending → implementing`` gate now requires the
+    # harness manifest to be committed before an entry dispatches. Stage
+    # it so the dispatch (and its failure-retry machinery) is exercised.
+    await localfs_store.put(
+        HARNESS_MANIFEST_KEY_TEMPLATE.format(cg_id="cg-r11"),
+        b"{}",
+        content_type="application/json",
+    )
 
     final_state: str | None = None
     for _ in range(6):
@@ -191,6 +200,13 @@ async def test_cg_entries_dispatch_failure_bumps_counter_each_entry(
 
     await sqlite_store.create_cg(make_cg("cg-r11b", state="implementing"))
     await sqlite_store.create_entry(make_entry("entry-r11b", cg_id="cg-r11b", state="pending"))
+    # Round 15: stage the harness manifest so the dispatch-ready gate
+    # advances the entry into ``implementing``.
+    await localfs_store.put(
+        HARNESS_MANIFEST_KEY_TEMPLATE.format(cg_id="cg-r11b"),
+        b"{}",
+        content_type="application/json",
+    )
     rec = await sqlite_store.get_entry("entry-r11b")
     assert rec is not None
     await drive_entity_phase3(

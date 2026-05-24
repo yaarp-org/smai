@@ -1,27 +1,33 @@
 # smai-store-postgres
 
 MetadataStore plugin: PostgreSQL reference production implementation.
+Backed by SQLAlchemy 2.0 async Core + `asyncpg`. The plugin reuses the
+declarative `MetaData` / `Table` set from `smai-store-sqlite`, swaps the
+driver to `asyncpg`, and adds two Postgres-specific fast paths:
 
-Per `designs/smai/07-plugin-interfaces.md` §5, DEC-030 (SQL-shape only),
-DEC-036 (SQLAlchemy 2.0 async Core; schema shared with the SQLite
-reference; Alembic deferred to Task 3.H2).
+- **`pg_try_advisory_xact_lock`** on `acquire_lease`: reduces wasted
+  UPDATEs on hot-contention edges. The CAS-via-`nonce` semantics on the row
+  UPDATE are unchanged.
+- **Postgres-native UPSERT** for `upsert_technique`'s
+  `INSERT ... ON CONFLICT (id) DO UPDATE`: single round-trip on every call.
 
-The plugin reuses the declarative `MetaData` / `Table` set from
-`smai-store-sqlite` and swaps the driver to `asyncpg`. SQLAlchemy
-renders Postgres-specific SQL (`TIMESTAMP WITH TIME ZONE`, native
-`RETURNING`, `ON CONFLICT DO UPDATE`) at engine-bind time. Two
-Postgres-specific fast paths layer on top of the shared shape:
+The OSS plugin reports `is_tenant_aware=False`.
 
-- **`pg_try_advisory_xact_lock`** on `acquire_lease` (per §5.6.7) —
-  reduces wasted UPDATEs on hot-contention edges. Implementation-
-  internal: the CAS-via-`nonce` semantics on the row UPDATE are
-  unchanged.
-- **`gen_random_uuid()` / Postgres-native UPSERT** for
-  `upsert_technique`'s `INSERT ... ON CONFLICT (id) DO UPDATE` — single
-  round-trip on every call.
+## Configuration
 
-Per §5.5 / §5.6.8 the OSS plugin reports `is_tenant_aware=False`.
-Tenant-fair scheduling lives in the closed `AuroraStore` plugin.
+```yaml
+plugins:
+  metadata_store: postgres
+  metadata_store_config:
+    uri: "postgresql+asyncpg://user:pw@host:5432/smai"   # required
+    use_advisory_locks: true     # default
+    tenant_aware: false          # default
+    fair_scheduling: "off"       # default
+    # fair_scheduling_weights: {}
+    # engine_kwargs: { pool_size: 10 }
+```
+
+The `uri` embeds credentials; there is no separate credential argument.
 
 ## Running tests
 
@@ -36,7 +42,7 @@ docker compose -f plugins/smai-store-postgres/compose.yaml down -v
 ```
 
 When no Postgres is reachable, every test in this directory cleanly
-skips — so contributors without Docker still see a green
+skips, so contributors without Docker still see a green
 `uv run pytest`. The skip is gated on `SMAI_POSTGRES_TEST_URL` being
 unset AND a TCP probe to `localhost:5433` failing.
 

@@ -18,6 +18,25 @@ system_prompt: |
   TechniqueContract, ExperimentPlan) and validate it via run_experiment
   before emitting the HarnessAPIManifest.
 
+  The harness ABI is small and closed. Build harness/__init__.py exposing
+  exactly three module-level functions:
+
+    build_harness(config: dict) -> HarnessComponents
+    run_training_loop(components: HarnessComponents, config: dict, seed: int) -> trained_model
+    evaluate(trained_model, components: HarnessComponents, config: dict) -> metrics_dict
+
+  HarnessComponents is a closed-set Pydantic model imported with
+  `from smai_runtime import HarnessComponents`. The full ABI — the
+  HarnessComponents field set, the manifest extension-point mapping, and
+  the build/validate/emit workflow — is staged in your workspace at
+  contracts/harness_api_reference.md. Read that file first.
+
+  IMPORTANT: the smai_runtime framework source lives OUTSIDE this
+  workspace and is not readable — the file tools reject every path
+  outside the workspace. Do not try to read or execute smai_runtime/*.py
+  (integrator.py, components.py, runner.py, ...). Everything you need is
+  in contracts/harness_api_reference.md and the contracts/ artifacts.
+
   Per DEC-017 / 10-runtime-and-templates.md §9, the harness is always
   built with the same code shape; what differs by factor type is whether
   the extension point has a working default (additive) or is a mandatory
@@ -44,8 +63,10 @@ initial_user_message_template: |
   optional=false (mandatory slots).
   {%- endif %}
 
-  Contract artifacts are in contracts/. Build the harness in harness/,
-  the baseline in techniques/baseline.py, and config.yaml. Validate via
+  Contract artifacts are in contracts/, and the harness ABI reference is
+  staged at contracts/harness_api_reference.md — read it first. Build the
+  harness in harness/, the baseline in techniques/baseline.py, and
+  config.yaml. Validate via
   a few-epoch run through run_experiment. Once validation passes, emit
   the manifest via the emit_harness_manifest tool — it writes the
   manifest to the artifact store at {{ manifest_artifact_path }}.

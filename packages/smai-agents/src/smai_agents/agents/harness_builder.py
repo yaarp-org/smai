@@ -76,6 +76,10 @@ from smai_agents.agent_session_telemetry import (
     open_agent_session,
 )
 from smai_agents.agents.artifact_publish import publish_workspace_outputs
+from smai_agents.agents.harness_api_reference import (
+    WORKSPACE_HARNESS_API_REFERENCE_PATH,
+    build_harness_api_reference,
+)
 from smai_agents.agents.manifest_tool import make_emit_harness_manifest_tool
 from smai_agents.loop import (
     AgentLoopConfig,
@@ -198,6 +202,16 @@ async def run_harness_builder_session(
     contract_path = workspace_path / WORKSPACE_HARNESS_CONTRACT_PATH
     contract_path.parent.mkdir(parents=True, exist_ok=True)
     contract_path.write_text(harness_contract.model_dump_json(indent=2))
+
+    # Stage the harness-API reference so the agent can learn the ABI it
+    # must implement via ``read_file``. The smai_runtime framework source
+    # is outside the workspace sandbox — the file tools reject every
+    # out-of-workspace path — so without this staged reference the agent
+    # loops trying (and failing) to read ``smai_runtime/*.py``. The
+    # reference is generated from the live framework so it cannot drift.
+    api_reference_path = workspace_path / WORKSPACE_HARNESS_API_REFERENCE_PATH
+    api_reference_path.parent.mkdir(parents=True, exist_ok=True)
+    api_reference_path.write_text(build_harness_api_reference())
 
     # === Prompt config + tool registry ======================================
     cfg = (

@@ -36,11 +36,16 @@ from smai_agents import (
     make_dispatch_harness_build,
     run_harness_builder_session,
 )
+from smai_agents.agents.harness_api_reference import (
+    WORKSPACE_HARNESS_API_REFERENCE_PATH,
+    build_harness_api_reference,
+)
 from smai_core.plugins import JobStatus
 from smai_runtime import (
     HARNESS_API_MANIFEST_FILENAME,
     VALIDATION_RESULTS_FILENAME,
     HarnessAPIManifest,
+    HarnessComponents,
 )
 
 # === In-process runner — happy path =========================================
@@ -242,6 +247,60 @@ async def test_run_harness_builder_session_lays_down_contract_for_agent(
     # The standard inventory + emit_harness_manifest + finish gives 9 tools.
     assert len(session.tools) == 9
     assert "emit_harness_manifest" in session.tools
+
+
+# === Harness-API reference staging (round 15) ===============================
+
+
+def test_harness_api_reference_reflects_real_abi() -> None:
+    """The generated reference tracks the live ``smai_runtime`` ABI — it
+    is introspected, not hand-copied, so every :class:`HarnessComponents`
+    field name and all three ABI functions appear in the rendered text."""
+    text = build_harness_api_reference()
+    for field_name in HarnessComponents.model_fields:
+        assert field_name in text, f"reference omits HarnessComponents.{field_name}"
+    for fn in ("build_harness", "run_training_loop", "evaluate"):
+        assert fn in text, f"reference omits ABI function {fn}"
+    assert "HarnessComponents" in text
+
+
+@pytest.mark.asyncio
+async def test_run_harness_builder_session_stages_api_reference(tmp_path: Path) -> None:
+    """The runner stages the harness-API reference into the workspace so
+    the agent can ``read_file`` it — the ``smai_runtime`` framework source
+    is outside the sandbox and unreadable, so the staged reference is the
+    agent's only view of the ABI it must implement."""
+    contract = make_harness_contract(factor_type="additive")
+    workspace = tmp_path / "ws"
+
+    async def _capture_runner(session: AgentSession) -> AgentOutcome:
+        return AgentOutcome(
+            kind="finished",
+            turn_count=0,
+            usage_total=session.usage_total,
+            finish_success=True,
+            finish_summary="captured",
+        )
+
+    await run_harness_builder_session(
+        workspace_path=workspace,
+        harness_contract=contract,
+        cg_id="cg-ref",
+        llm=StubLlmProvider([]),
+        artifact_store=StubArtifactStore(),
+        compute=FakeCompute(),
+        manifest_artifact_path="cg-ref/harness/manifest.json",
+        config=AgentLoopConfig(status_write_every_turns=0),
+        runner=_capture_runner,
+    )
+
+    ref_path = workspace / WORKSPACE_HARNESS_API_REFERENCE_PATH
+    assert ref_path.is_file()
+    content = ref_path.read_text()
+    # Content reflects the real smai_runtime ABI surface.
+    for field_name in HarnessComponents.model_fields:
+        assert field_name in content
+    assert "build_harness" in content
 
 
 # === Dispatch handler — runs the session in-process (round 14) ==============

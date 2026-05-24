@@ -1,8 +1,9 @@
 # smai-compute-localgpu
 
-Local-Docker reference implementation of the `Compute` plugin. The default substrate for `smai dev` (per `09-cli.md` §5 / Task 2.A4 of the implementation plan).
-
-Substrate is **Docker**. Compatible OCI runtimes — Podman, Apple `container`, containerd via `nerdctl` — that alias the `docker` binary on `$PATH` work without code changes.
+Local-Docker reference implementation of the `Compute` plugin. The default
+substrate for `smai dev`. Substrate is **Docker**; compatible OCI runtimes
+(Podman, Apple `container`, containerd via `nerdctl`) that alias the `docker`
+binary on `$PATH` work without code changes.
 
 ## Install
 
@@ -20,11 +21,11 @@ pip install smai-compute-localgpu
 
 ## Build the reference images
 
-SMAI does NOT publish prebuilt images for the OSS plugin in v1 (commit a9e57bd / `07-plugin-interfaces.md` §7.4). Build the two reference Dockerfiles yourself before first use.
+SMAI does not publish prebuilt images. Build the reference Dockerfiles yourself before first use.
 
 ### Agent image (CPU, ~500 MB)
 
-Used when `LocalGpuCompute.submit(..., gpu=False)` — the agent loop's harness builder, technique implementer, code reviewer, and contextual evaluator.
+Used when `LocalGpuCompute.submit(..., gpu=False)` for agent-side code execution (harness builder, technique implementer, code reviewer, contextual evaluator).
 
 ```bash
 docker build -t smai-agent:dev \
@@ -33,7 +34,7 @@ docker build -t smai-agent:dev \
 
 ### Runtime image (GPU, ~5–8 GB)
 
-Used when `LocalGpuCompute.submit(..., gpu=True)` — the pipeline-runtime substrate that hosts harness pipelines and technique modules per `10-runtime-and-templates.md` §8.5.
+Used when `LocalGpuCompute.submit(..., gpu=True)` for GPU experiment seed runs.
 
 ```bash
 docker build -t smai-runtime:dev \
@@ -54,7 +55,7 @@ Docker Desktop on macOS / Apple Silicon **cannot pass GPU through**. On Darwin:
 * `submit(..., gpu=True)` raises `ComputeUnavailable` immediately with a pointer to `smai-compute-modal` / `smai-compute-runpod` for GPU experiment runs.
 * The plugin's `capabilities.supports_gpu` is reported as `False` on Darwin.
 
-This is a Docker / macOS limitation, not a SMAI policy choice — the plugin fails fast rather than letting a `gpu=True` job silently fall back to CPU mode and produce wrong-looking metrics.
+This is a Docker / macOS limitation, not a SMAI policy choice. The plugin fails fast rather than letting a `gpu=True` job silently fall back to CPU mode and produce wrong-looking metrics.
 
 ## Usage
 
@@ -84,7 +85,7 @@ Tier A integrators (the in-tree `smai` CLI / hosted backend) instantiate the plu
 
 ## Cleanup
 
-The plugin does NOT pass `--rm` to `docker run` — containers persist after exit so `status` and `logs` keep working. Stopped containers carry the `smai-localgpu=1` label so you can prune them with:
+The plugin does NOT pass `--rm` to `docker run`, so containers persist after exit and `status` / `logs` keep working. Stopped containers carry the `smai-localgpu=1` label so you can prune them with:
 
 ```bash
 docker container prune --filter label=smai-localgpu=1
@@ -111,6 +112,6 @@ hadolint plugins/smai-compute-localgpu/dockerfiles/*.Dockerfile
 ## Out of scope
 
 * Multi-host GPU pools (single-host only).
-* Cost accounting (per `07-plugin-interfaces.md` §7.4).
+* Cost accounting.
 * Spot vs on-demand selection.
 * Trust boundaries / IAM (the local plugin runs as the invoking user; no credential surface).

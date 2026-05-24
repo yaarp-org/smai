@@ -29,6 +29,19 @@ gate that decides ``implemented`` vs ``implementation_failed``.
 
 Spec ambiguities resolved:
 
+* **Harness-manifest-committed gate:** an entry must not be dispatched
+  to the technique implementer until the harness builder has committed
+  the harness manifest — otherwise the implementer fails on a missing
+  ``harness/manifest.json``. The scheduling query
+  :meth:`MetadataStore.get_ready_to_implement_entry` only gates on the
+  parent CG being ``implementing`` (a SQL predicate cannot see an
+  :class:`ArtifactStore`), so this precondition is enforced in the
+  ``pending → implementing`` gate body via an
+  :class:`ArtifactStore.exists` check — see
+  :func:`_make_entry_dispatch_ready_gate`. Round 15: the SQL query
+  staying loose is a known perf-only point (an entry whose harness is
+  not ready is discovered and held back each cycle rather than filtered
+  at the query) — left for the backlog.
 * **Additive-baseline pre-filter:** double-enforced (per `03` §3.4).
   The :meth:`MetadataStore.get_ready_to_implement_entry` query
   excludes baselines (``technique_id IS NULL``) at the SQL layer per
@@ -70,6 +83,7 @@ from smai_orchestrator.engine.types import (
 from smai_orchestrator.runtime.spec import PipelineSpec
 from smai_orchestrator.specs.cg_execution import (
     CG_ENTRIES_SPEC_NAME,
+    HARNESS_MANIFEST_KEY_TEMPLATE,
     POOL_AGENTS,
     POOL_INLINE,
     POOL_RUNS,
@@ -83,14 +97,39 @@ def _make_entry_dispatch_ready_gate() -> Callable[[GateContext], Awaitable[GateO
     """``pending → implementing`` dispatch_time gate — entry side.
 
     The scheduling query :meth:`MetadataStore.get_ready_to_implement_entry`
-    (per `07` §5.6.3) already filters to entries whose state is
-    ``pending``, whose parent CG is in ``implementing`` with the harness
-    manifest committed, and which are not additive baselines. The gate
-    rule simply advances — the predicate is materialized by the query.
+    (per `07` §5.6.3) filters to entries whose state is ``pending``, whose
+    parent CG is in ``implementing``, and which are not additive
+    baselines. It does NOT — and cannot — check that the harness manifest
+    exists: a SQL predicate has no view of an :class:`ArtifactStore`. So
+    the "harness manifest committed" precondition is enforced HERE, in the
+    gate body, via an :class:`ArtifactStore` ``exists`` check.
+
+    Round 15: without this check an entry is dispatched while the harness
+    builder is still running, the technique-implementer fails on a missing
+    ``harness/manifest.json``, and the entry burns its round-11
+    ``entry_dispatch_attempt`` budget on a transient precondition —
+    terminally ``implementation_failed`` even though nothing about the
+    entry's implementation actually failed. Returning ``advance=False``
+    holds the entry at ``pending``: it is re-discovered and re-evaluated
+    next worker cycle, and no ``entry_dispatch_attempt`` is consumed —
+    that counter is bumped only by the round-10/11 RetryPolicy machinery
+    on the dispatch CAS into ``implementing``, which an ``advance=False``
+    gate never reaches.
     """
 
     async def _gate(ctx: GateContext) -> GateOutcome:
-        return GateOutcome(advance=True, reason="entry pending → implementing always-fire")
+        entry = await ctx.metadata_store.get_entry(ctx.entity_id)
+        if entry is None:
+            return GateOutcome(advance=False, reason="entry not found")
+        manifest_key = HARNESS_MANIFEST_KEY_TEMPLATE.format(cg_id=entry.cg_id)
+        if not await ctx.artifact_store.exists(manifest_key):
+            return GateOutcome(
+                advance=False,
+                reason=f"harness manifest not yet committed at {manifest_key!r}",
+            )
+        return GateOutcome(
+            advance=True, reason="harness manifest committed; entry pending → implementing"
+        )
 
     return _gate
 

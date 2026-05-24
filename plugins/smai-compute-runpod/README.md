@@ -1,13 +1,10 @@
 # smai-compute-runpod
 
-`Compute` plugin: RunPod REST-API implementation. Per
-`07-plugin-interfaces.md` §7 and `implementation_plan.md` §3.4 Task
-3.F4.
-
-Pairs with `smai-compute-localgpu` (single-host Docker reference) and
-`smai-compute-modal` (Modal Sandboxes) as the third v1 `Compute`
-plugin — RunPod is the GPU-cloud option for operators who want a
-pay-per-pod surface without running their own GPU host.
+`Compute` plugin: RunPod REST-API implementation. Pairs with
+`smai-compute-localgpu` (single-host Docker reference) and
+`smai-compute-modal` (Modal Sandboxes) as the third `Compute` plugin.
+RunPod is the GPU-cloud option for operators who want a pay-per-pod
+surface without running their own GPU host.
 
 ## Use
 
@@ -59,10 +56,10 @@ GPU id pass `plugin_options["gpu_type"]` directly.
 | `a100`      | `NVIDIA A100 80GB PCIe`      | Datacenter tier; capacity-sensitive. |
 | `h100`      | `NVIDIA H100 80GB HBM3`      | Most expensive tier.               |
 
-The id strings are the canonical RunPod identifiers — you can pass
-any RunPod-published id directly via `plugin_options["gpu_type"]`
-without changing the dispatch table. The dispatch table itself is a
-SMAI-side convenience; RunPod's catalog is large and grows over time.
+The id strings are the canonical RunPod identifiers. You can pass any
+RunPod-published id directly via `plugin_options["gpu_type"]` without
+changing the dispatch table. The dispatch table itself is a SMAI-side
+convenience; RunPod's catalog is large and grows over time.
 
 ## Choosing Pods vs Serverless
 
@@ -72,7 +69,7 @@ that boot from an image and accept arbitrary commands) and
 payloads).
 
 This plugin targets **Pods**. The Compute Protocol's contract is
-"submit an image + command, get a handle back" — Pods map onto that
+"submit an image + command, get a handle back"; Pods map onto that
 natively. Serverless requires the operator to build + deploy a
 worker per workload shape, which moves substantial work from the
 Compute layer back to the operator. SMAI's "operator chooses an image
@@ -113,29 +110,27 @@ issues a DELETE and returns `state='timeout'`. Same shape as
 
 RunPod has no eager image-validation surface (no analog to
 `docker pull`). The plugin therefore defers image validation to the
-substrate — bad image references surface as `state='failed'` once the
+substrate: bad image references surface as `state='failed'` once the
 pod tries to pull. The conformance suite's `test_invalid_image_raises`
-test takes its "plugin defers image validation" branch and skips
-cleanly per `07-plugin-interfaces.md` §7.5's allowance for plugins
-without an eager validation surface.
+test takes its "plugin defers image validation" branch and skips cleanly.
 
-A future plugin task could add an opt-in eager check by calling
-Docker Registry's `HEAD /v2/<name>/manifests/<tag>` from `submit()`.
-Per Task 3.F4's "out of scope" list this is deferred.
+A future enhancement could add an opt-in eager check via Docker Registry's
+`HEAD /v2/<name>/manifests/<tag>` from `submit()`; this is currently
+deferred.
 
 ## Tests
 
 The plugin ships three test modes:
 
-1. **Mocked-HTTP conformance** (`tests/test_conformance.py`) — runs
-   the universal `ComputeConformance` suite against an in-process
-   `_FakeRunPodBackend` wired in via `httpx.MockTransport`. No
-   network, no credentials. This is the always-on lane.
-2. **Plugin-internal unit tests** (`tests/test_unit.py`) — covers
-   translation tables and quirks the conformance suite doesn't
-   exercise (status mapping edge cases, GPU dispatch, shell quoter,
-   API-key env-var fallback).
-3. **Real-RunPod round-trip** (`tests/test_real_runpod.py`) — opt-in
+1. **Mocked-HTTP conformance** (`tests/test_conformance.py`): runs the
+   universal `ComputeConformance` suite against an in-process
+   `_FakeRunPodBackend` wired in via `httpx.MockTransport`. No network,
+   no credentials. This is the always-on lane.
+2. **Plugin-internal unit tests** (`tests/test_unit.py`): covers
+   translation tables and quirks the conformance suite does not exercise
+   (status mapping edge cases, GPU dispatch, shell quoter, API-key
+   env-var fallback).
+3. **Real-RunPod round-trip** (`tests/test_real_runpod.py`): opt-in
    production-readiness check. Marked `@pytest.mark.credentialed` and
    `skipif`-on-env. Skipped unless `RUNPOD_API_KEY` is set. Run
    locally with credentials before declaring a RunPod-affecting
