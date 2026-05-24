@@ -36,6 +36,7 @@ from smai_core import (
     freeze_with_hash,
 )
 from smai_core.artifacts._envelope import ArtifactEnvelope
+from smai_core.entities.compute_requirements import ComputeRequirements
 from smai_runtime import (
     MANIFEST_SCHEMA_VERSION,
     RUNTIME_TEMPLATE_VERSION,
@@ -53,8 +54,15 @@ def make_harness_contract(
     parent_experiment_id: str = "exp-1",
     parent_experiment_hash: str = "exp-hash",
     no_go_zones: list[str] | None = None,
+    compute_gpu: bool = True,
 ) -> HarnessContract:
-    """Build a frozen :class:`HarnessContract` with a populated content_hash."""
+    """Build a frozen :class:`HarnessContract` with a populated content_hash.
+
+    ``compute_gpu`` flows into :attr:`HarnessContractBody.compute.gpu` so
+    the session runners can derive the validation tool's GPU flag from
+    the contract (round 16); the default mirrors the pre-round-16
+    hardcoded ``True``.
+    """
     envelope = ArtifactEnvelope(
         artifact_kind="harness_contract",
         artifact_id="hc-1",
@@ -76,6 +84,7 @@ def make_harness_contract(
         required_metrics=[],
         optional_telemetry=[],
         no_go_zones=no_go_zones or ["experiment.py", "techniques/__init__.py"],
+        compute=ComputeRequirements(gpu=compute_gpu),
     )
     contract = HarnessContract(envelope=envelope, body=body)
     return freeze_with_hash(contract)

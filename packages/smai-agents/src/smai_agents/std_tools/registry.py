@@ -81,7 +81,7 @@ def build_standard_tool_registry(
     exclude: frozenset[StandardToolName] | set[StandardToolName] | None = None,
     include_finish: bool = True,
     run_experiment_image: str = DEFAULT_RUN_EXPERIMENT_IMAGE,
-    run_experiment_gpu: bool = True,
+    run_experiment_gpu: bool,
     run_experiment_timeout_seconds: int | None = None,
     run_experiment_extra_env: dict[str, str] | None = None,
 ) -> ToolRegistry:
@@ -97,6 +97,11 @@ def build_standard_tool_registry(
         run_experiment_image: Container image for ``run_experiment``
             jobs. Threaded through to :func:`make_run_experiment_tool`.
         run_experiment_gpu: GPU flag for ``run_experiment`` jobs.
+            Required (no default) because the value comes from the
+            locked :class:`HarnessContract` — the session runners derive
+            it from :attr:`HarnessContractBody.compute.gpu` and pass it
+            here; silently defaulting would let CPU-only experiments
+            dispatch GPU jobs that the substrate refuses.
         run_experiment_timeout_seconds: Optional per-job timeout. ``None``
             uses :data:`run_experiment.RUN_EXPERIMENT_DEFAULT_TIMEOUT_SECONDS`.
         run_experiment_extra_env: Optional environment variables for

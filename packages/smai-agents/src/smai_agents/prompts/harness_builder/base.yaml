@@ -26,10 +26,14 @@ system_prompt: |
     evaluate(trained_model, components: HarnessComponents, config: dict) -> metrics_dict
 
   HarnessComponents is a closed-set Pydantic model imported with
-  `from smai_runtime import HarnessComponents`. The full ABI — the
-  HarnessComponents field set, the manifest extension-point mapping, and
-  the build/validate/emit workflow — is staged in your workspace at
-  contracts/harness_api_reference.md. Read that file first.
+  `from smai_runtime import HarnessComponents`. The full ABI (the
+  HarnessComponents field set, the manifest extension-point mapping)
+  AND the operational workflow (where the locked config lives, the
+  validate-before-emit ordering, the exact runtime_template_version,
+  the harness_version_hash recompute rule, tool input shapes) are
+  staged in your workspace at contracts/harness_api_reference.md.
+  Read that file first; refer to its "Workflow" section before each
+  manifest emission attempt.
 
   IMPORTANT: the smai_runtime framework source lives OUTSIDE this
   workspace and is not readable — the file tools reject every path
@@ -64,12 +68,14 @@ initial_user_message_template: |
   {%- endif %}
 
   Contract artifacts are in contracts/, and the harness ABI reference is
-  staged at contracts/harness_api_reference.md — read it first. Build the
-  harness in harness/, the baseline in techniques/baseline.py, and
-  config.yaml. Validate via
-  a few-epoch run through run_experiment. Once validation passes, emit
-  the manifest via the emit_harness_manifest tool — it writes the
-  manifest to the artifact store at {{ manifest_artifact_path }}.
+  staged at contracts/harness_api_reference.md. Read it first; the
+  "Workflow" section there tells you where the locked config lives, the
+  validate-then-emit ordering, the exact runtime_template_version value,
+  and the harness_version_hash recompute rule. Build the harness in
+  harness/, the baseline in techniques/baseline.py, and config.yaml.
+  Validate via a few-epoch run through run_experiment. Once validation
+  passes, emit the manifest via the emit_harness_manifest tool; it
+  writes the manifest to the artifact store at {{ manifest_artifact_path }}.
 
 tools:
   - name: read_file

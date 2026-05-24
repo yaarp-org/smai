@@ -140,7 +140,6 @@ async def run_harness_builder_session(
     status_artifact_path: str | None = None,
     nudge_artifact_path: str | None = None,
     run_experiment_image: str | None = None,
-    run_experiment_gpu: bool = True,
     prompt_config: PromptConfig | None = None,
     config: AgentLoopConfig | None = None,
     runner: SessionRunner | None = None,
@@ -176,7 +175,6 @@ async def run_harness_builder_session(
             validation jobs. Threaded through to
             :func:`build_standard_tool_registry`. Defaults to
             :data:`smai_agents.std_tools.DEFAULT_RUN_EXPERIMENT_IMAGE`.
-        run_experiment_gpu: GPU flag for validation jobs.
         prompt_config: Optional pre-loaded :class:`PromptConfig`. When
             ``None`` the function calls
             :func:`smai_agents.load_prompt_config` for the
@@ -220,11 +218,18 @@ async def run_harness_builder_session(
         else load_prompt_config(role=_HARNESS_BUILDER_ROLE)
     )
 
+    # Derive the ``run_experiment`` GPU flag from the locked contract
+    # (`02-dsl-and-contracts.md` §7.4). The harness contract's
+    # ``body.compute.gpu`` is the source of truth — the same field the
+    # seed-run dispatcher reads (specs/run_record.py
+    # _load_compute_requirements_gpu). Hardcoding ``gpu=True`` here
+    # wedges every CPU-only experiment on Docker Desktop macOS because
+    # the validation submit fails on ``gpu=True`` eagerly.
     tools: ToolRegistry = build_standard_tool_registry(
         run_experiment_image=run_experiment_image
         if run_experiment_image is not None
         else "smai-runtime:dev",
-        run_experiment_gpu=run_experiment_gpu,
+        run_experiment_gpu=harness_contract.body.compute.gpu,
     )
     tools.register(
         make_emit_harness_manifest_tool(
@@ -283,7 +288,6 @@ def make_dispatch_harness_build(
     *,
     workspace_root: Path,
     run_experiment_image: str | None = None,
-    run_experiment_gpu: bool = True,
     harness_contract_artifact_path: Callable[[str], str] | None = None,
     harness_manifest_artifact_path: Callable[[str], str] | None = None,
     status_artifact_path: Callable[[str], str] | None = None,
@@ -316,8 +320,12 @@ def make_dispatch_harness_build(
             land at ``<workspace_root>/<cg_id>/``.
         run_experiment_image: Container image for ``run_experiment``
             validation jobs *inside* the agent's tool surface. Threaded
-            through to :func:`run_harness_builder_session`.
-        run_experiment_gpu: GPU flag for the validation jobs.
+            through to :func:`run_harness_builder_session`. The GPU flag
+            is NOT a knob on this factory — it is derived from the
+            CG's :class:`HarnessContract` (``body.compute.gpu``) inside
+            the session runner, mirroring the seed-run dispatcher's
+            ``_load_compute_requirements_gpu`` so the agent never needs
+            to think about hardware.
         harness_contract_artifact_path: Callable resolving
             ``cg_id → ArtifactStore key`` for the loaded contract.
             Defaults to
@@ -449,7 +457,6 @@ def make_dispatch_harness_build(
                 status_artifact_path=status_key,
                 nudge_artifact_path=nudge_key,
                 run_experiment_image=run_experiment_image,
-                run_experiment_gpu=run_experiment_gpu,
                 runner=inline_runner,
                 supervisor_llm=llm if supervisor_on else None,
                 config=loop_config,

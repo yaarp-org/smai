@@ -157,7 +157,7 @@ _DefaultWaitHelper = Callable[..., Awaitable[JobStatus]]
 def make_run_experiment_tool(
     *,
     image: str,
-    gpu: bool = True,
+    gpu: bool,
     timeout_seconds: int = RUN_EXPERIMENT_DEFAULT_TIMEOUT_SECONDS,
     poll_interval: float = RUN_EXPERIMENT_POLL_INTERVAL,
     extra_env: dict[str, str] | None = None,
@@ -171,9 +171,15 @@ def make_run_experiment_tool(
             for ``LocalGpuCompute``). The Compute plugin's eager image
             validation surfaces a malformed image as
             :class:`smai_core.plugins.JobImageInvalid`.
-        gpu: Whether the validation run requires a GPU. Defaults to
-            ``True`` (the v1 / DEC-021 setting); a deployment that wants
-            CPU-only validation (Mac dev) can pass ``False``.
+        gpu: Whether the validation run requires a GPU. Required (no
+            default) because picking the wrong value silently —
+            ``gpu=True`` on a CPU-only experiment, ``gpu=False`` on a
+            GPU-bound one — wedges the agent on its first
+            ``run_experiment`` call. The session runners
+            (:func:`run_harness_builder_session` /
+            :func:`run_technique_implementer_session`) derive this from
+            :attr:`HarnessContractBody.compute.gpu` so the agent never
+            needs to reason about it.
         timeout_seconds: Substrate-enforced job timeout. The tool also
             wraps the wait helper with the same value as the wall-clock
             budget so a substrate that fails to enforce its timeout

@@ -121,6 +121,7 @@ async def test_run_experiment_baseline_omits_technique(tmp_path: Path) -> None:
     ctx = make_test_context(session)
     tool = make_run_experiment_tool(
         image="smai-runtime:test",
+        gpu=True,
         wait_helper=_make_immediate_wait_helper(clock),
     )
 
@@ -159,6 +160,7 @@ async def test_run_experiment_caps_epochs_above_max(tmp_path: Path) -> None:
     ctx = make_test_context(session)
     tool = make_run_experiment_tool(
         image="smai-runtime:test",
+        gpu=True,
         wait_helper=_make_immediate_wait_helper(clock),
     )
 
@@ -200,6 +202,7 @@ async def test_run_experiment_caps_subset_above_max(tmp_path: Path) -> None:
     ctx = make_test_context(session)
     tool = make_run_experiment_tool(
         image="smai-runtime:test",
+        gpu=True,
         wait_helper=_make_immediate_wait_helper(clock),
     )
 
@@ -238,6 +241,7 @@ async def test_run_experiment_handles_submit_failure(tmp_path: Path) -> None:
     ctx = make_test_context(session)
     tool = make_run_experiment_tool(
         image="bad",
+        gpu=True,
         wait_helper=_make_immediate_wait_helper(clock),
     )
 
@@ -266,6 +270,7 @@ async def test_run_experiment_handles_compute_unavailable(tmp_path: Path) -> Non
     ctx = make_test_context(session)
     tool = make_run_experiment_tool(
         image="x",
+        gpu=True,
         wait_helper=_make_immediate_wait_helper(clock),
     )
 
@@ -291,6 +296,7 @@ async def test_run_experiment_failed_state_returns_failure(tmp_path: Path) -> No
     ctx = make_test_context(session)
     tool = make_run_experiment_tool(
         image="x",
+        gpu=True,
         wait_helper=_make_immediate_wait_helper(clock),
     )
 
@@ -308,7 +314,7 @@ async def test_run_experiment_no_compute_in_session(tmp_path: Path) -> None:
     """Tool requires Compute on session — explicit error if absent."""
     session = make_test_session(tmp_path)  # no compute
     ctx = make_test_context(session)
-    tool = make_run_experiment_tool(image="x")
+    tool = make_run_experiment_tool(image="x", gpu=True)
 
     result = await tool.handler(RunExperimentInput(technique="t", seed=1), ctx)
 
@@ -333,6 +339,7 @@ async def test_run_experiment_succeeds_but_no_metrics(tmp_path: Path) -> None:
     ctx = make_test_context(session)
     tool = make_run_experiment_tool(
         image="x",
+        gpu=True,
         wait_helper=_make_immediate_wait_helper(clock),
     )
 
@@ -370,6 +377,7 @@ async def test_run_experiment_harvests_validation_results_on_failure(
     ctx = make_test_context(session)
     tool = make_run_experiment_tool(
         image="x",
+        gpu=True,
         wait_helper=_make_immediate_wait_helper(clock),
     )
 
@@ -403,6 +411,7 @@ async def test_run_experiment_metrics_with_invalid_value_treated_as_missing(
     ctx = make_test_context(session)
     tool = make_run_experiment_tool(
         image="x",
+        gpu=True,
         wait_helper=_make_immediate_wait_helper(clock),
     )
 
@@ -414,7 +423,7 @@ async def test_run_experiment_metrics_with_invalid_value_treated_as_missing(
 
 
 def test_run_experiment_tool_name_matches() -> None:
-    tool = make_run_experiment_tool(image="x")
+    tool = make_run_experiment_tool(image="x", gpu=True)
     assert tool.name == RUN_EXPERIMENT_TOOL_NAME
 
 

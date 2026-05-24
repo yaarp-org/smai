@@ -489,7 +489,11 @@ def make_search_tool() -> Tool:
     return Tool(
         name=SEARCH_TOOL_NAME,
         description=(
-            "Regex search across files in the workspace. Returns "
+            "Regex search across files in the workspace. `pattern` is a "
+            "Python regex; `path` (optional) must be a DIRECTORY (the "
+            "tool walks it recursively, not a single file; to grep a "
+            "single file, use read_file and filter the result yourself); "
+            "`include` (optional) is a filename glob like '*.py'. Returns "
             "'<path>:<line_number>:<content>' for each match. "
             f"Capped at {MAX_SEARCH_MATCHES} matches."
         ),
@@ -588,8 +592,12 @@ def make_list_files_tool() -> Tool:
     return Tool(
         name=LIST_FILES_TOOL_NAME,
         description=(
-            "List files in the workspace. Returns paths relative to "
-            "the workspace root, one per line. "
+            "List files in the workspace. Takes `path` (optional "
+            "subdirectory), `glob` (optional filename pattern like "
+            "'*.py'), and `recursive` (bool, default True) as structured "
+            "inputs; it does NOT accept a shell `command` argument, do "
+            "not pass shell argv like 'find ...'. Returns paths relative "
+            "to the workspace root, one per line. "
             f"Capped at {MAX_LIST_ENTRIES} entries."
         ),
         input_schema=ListFilesInput,

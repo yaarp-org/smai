@@ -143,7 +143,6 @@ async def run_technique_implementer_session(
     status_artifact_path: str | None = None,
     nudge_artifact_path: str | None = None,
     run_experiment_image: str | None = None,
-    run_experiment_gpu: bool = True,
     review_feedback: str | None = None,
     prev_conversation_trace_path: str | None = None,
     implementation_attempt: int = 0,
@@ -188,8 +187,11 @@ async def run_technique_implementer_session(
         compute: Where ``run_experiment`` validation jobs go.
         status_artifact_path, nudge_artifact_path: Optional ArtifactStore
             keys for between-turn writes; ``None`` disables.
-        run_experiment_image, run_experiment_gpu: Validation-job knobs
-            threaded through to :func:`build_standard_tool_registry`.
+        run_experiment_image: Container image for ``run_experiment``
+            validation jobs. Threaded through to
+            :func:`build_standard_tool_registry`. The GPU flag is derived
+            from ``harness_contract.body.compute.gpu`` — same source of
+            truth the seed-run dispatcher reads.
         review_feedback: Optional code-review findings to surface in
             the initial user message on retry attempts (§11).
         prev_conversation_trace_path: Optional ArtifactStore key for the
@@ -258,11 +260,14 @@ async def run_technique_implementer_session(
         else load_prompt_config(role=_TECHNIQUE_IMPLEMENTER_ROLE)
     )
 
+    # Derive the ``run_experiment`` GPU flag from the locked harness
+    # contract (`02-dsl-and-contracts.md` §7.4) — same field the seed-run
+    # dispatcher reads. The agent never needs to reason about hardware.
     tools: ToolRegistry = build_standard_tool_registry(
         run_experiment_image=run_experiment_image
         if run_experiment_image is not None
         else "smai-runtime:dev",
-        run_experiment_gpu=run_experiment_gpu,
+        run_experiment_gpu=harness_contract.body.compute.gpu,
     )
     # No emit_harness_manifest tool — that is harness-builder-only per §9.
 
@@ -331,7 +336,6 @@ def make_dispatch_technique_implementation(
     *,
     workspace_root: Path,
     run_experiment_image: str | None = None,
-    run_experiment_gpu: bool = True,
     technique_contract_artifact_path: Callable[[str, str], str] | None = None,
     harness_contract_artifact_path: Callable[[str], str] | None = None,
     harness_manifest_artifact_path: Callable[[str], str] | None = None,
@@ -536,7 +540,6 @@ def make_dispatch_technique_implementation(
                 status_artifact_path=status_key,
                 nudge_artifact_path=nudge_key,
                 run_experiment_image=run_experiment_image,
-                run_experiment_gpu=run_experiment_gpu,
                 prev_conversation_trace_path=prev_trace_key,
                 implementation_attempt=entry_record.implementation_attempt,
                 runner=inline_runner,

@@ -253,7 +253,7 @@ async def test_run_harness_builder_session_lays_down_contract_for_agent(
 
 
 def test_harness_api_reference_reflects_real_abi() -> None:
-    """The generated reference tracks the live ``smai_runtime`` ABI — it
+    """The generated reference tracks the live ``smai_runtime`` ABI; it
     is introspected, not hand-copied, so every :class:`HarnessComponents`
     field name and all three ABI functions appear in the rendered text."""
     text = build_harness_api_reference()
@@ -262,6 +262,47 @@ def test_harness_api_reference_reflects_real_abi() -> None:
     for fn in ("build_harness", "run_training_loop", "evaluate"):
         assert fn in text, f"reference omits ABI function {fn}"
     assert "HarnessComponents" in text
+
+
+def test_harness_api_reference_workflow_section_pins_drift_prone_values() -> None:
+    """Round-16: the Workflow section surfaces the four drift-prone facts
+    the round-15 test-env harness builder got wrong. The reference is
+    generated, so the test pins the live introspected values rather than
+    string-matching hardcoded ones."""
+    from smai_runtime import RUNTIME_TEMPLATE_VERSION
+
+    text = build_harness_api_reference()
+
+    # 1) Locked-config pointer: the agent needs to know the contract file
+    # name AND the dotted path inside it where the per-experiment config
+    # lives.
+    assert "contracts/harness_contract.json" in text
+    assert "body.fixed_variables" in text
+    # The reference must steer the agent away from experiment_plan.json,
+    # which sandbox-rejects and which the round-15 agent kept retrying.
+    assert "experiment_plan.json" in text
+
+    # 2) RUNTIME_TEMPLATE_VERSION pinned to the live value, not a string
+    # constant; a bump in smai_runtime that fails to refresh the reference
+    # would fail this assertion.
+    assert RUNTIME_TEMPLATE_VERSION in text
+
+    # 3) Hash-recompute rule: the round-15 agent reused a stale hash from
+    # a previous turn. The reference must call out the recompute rule.
+    assert "harness_version_hash" in text
+    assert "recomputed" in text or "recompute" in text
+    assert "previous turn" in text
+
+    # 4) Validate-before-emit ordering: the round-15 agent tried to emit
+    # the manifest before a passing run_experiment call.
+    assert "validation_results.json" in text
+    assert "run_experiment" in text
+    # Phrasing pin: the same sentence emit_harness_manifest produces on
+    # the error path appears so the agent recognizes the rule if it sees
+    # the error message. Wrapping inserts a newline between "via" and
+    # "run_experiment"; compare against the whitespace-normalized text.
+    normalized = " ".join(text.split())
+    assert "passing validation via run_experiment before emitting" in normalized
 
 
 @pytest.mark.asyncio
@@ -301,6 +342,89 @@ async def test_run_harness_builder_session_stages_api_reference(tmp_path: Path) 
     for field_name in HarnessComponents.model_fields:
         assert field_name in content
     assert "build_harness" in content
+
+
+# === Round 16: run_experiment gpu derived from HarnessContract ==============
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("compute_gpu", [True, False])
+async def test_run_harness_builder_session_derives_run_experiment_gpu_from_contract(
+    tmp_path: Path,
+    compute_gpu: bool,
+) -> None:
+    """Round 16: the validation tool's ``gpu`` flag is derived from the
+    locked :attr:`HarnessContractBody.compute.gpu`, not a hardcoded
+    default. Pre-round-16 the dispatch factory defaulted ``gpu=True``
+    and Docker Desktop macOS refused the validation submit on every
+    CPU-only experiment.
+
+    Drives the session against a captured runner so the test can invoke
+    the registered ``run_experiment`` tool directly and assert on the
+    ``FakeCompute.submit`` call's ``gpu`` argument.
+    """
+    from smai_agents.std_tools.run_experiment import RUN_EXPERIMENT_TOOL_NAME, RunExperimentInput
+    from smai_agents.tools import ToolContext
+    from smai_core.plugins import JobStatus
+
+    contract = make_harness_contract(factor_type="additive", compute_gpu=compute_gpu)
+    workspace = tmp_path / "ws"
+
+    async def _drop_metrics(ws: Path) -> None:
+        (ws / "metrics.json").write_text(json.dumps({"loss": 0.1}))
+
+    fake_compute = FakeCompute(
+        status_queue=[
+            JobStatus(
+                state="succeeded",
+                exit_code=0,
+                started_at=None,
+                finished_at=None,
+                failure_reason=None,
+            )
+        ],
+        on_submit=_drop_metrics,
+    )
+    fake_compute.set_workspace(workspace)
+
+    captured: list[AgentSession] = []
+
+    async def _capture_runner(session: AgentSession) -> AgentOutcome:
+        captured.append(session)
+        return AgentOutcome(
+            kind="finished",
+            turn_count=0,
+            usage_total=session.usage_total,
+            finish_success=True,
+            finish_summary="captured",
+        )
+
+    await run_harness_builder_session(
+        workspace_path=workspace,
+        harness_contract=contract,
+        cg_id="cg-gpu",
+        llm=StubLlmProvider([]),
+        artifact_store=StubArtifactStore(),
+        compute=fake_compute,
+        manifest_artifact_path="cg-gpu/harness/manifest.json",
+        config=AgentLoopConfig(status_write_every_turns=0),
+        runner=_capture_runner,
+    )
+
+    assert len(captured) == 1
+    session = captured[0]
+    tool = session.tools.get(RUN_EXPERIMENT_TOOL_NAME)
+    assert tool is not None
+    ctx = ToolContext(
+        workspace_path=workspace,
+        session=session,
+        artifact_store=session.artifact_store,
+        compute=session.compute,
+    )
+    await tool.handler(RunExperimentInput(technique=None, seed=0, epochs=1), ctx)
+
+    assert len(fake_compute.submit_calls) == 1
+    assert fake_compute.submit_calls[0]["gpu"] is compute_gpu
 
 
 # === Dispatch handler — runs the session in-process (round 14) ==============

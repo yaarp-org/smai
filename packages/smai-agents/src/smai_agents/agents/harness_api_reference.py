@@ -23,9 +23,13 @@ no-go-zone-hashed, so it is the stable surface to pin against.
 
 from __future__ import annotations
 
+from smai_core import HarnessContract
+from smai_core.artifacts.harness_contract import HarnessContractBody
 from smai_runtime import (
     ADMISSIBLE_PATTERNS_FOR_KEY,
     COMPONENT_FIELD_FOR_KEY,
+    HARNESS_CONTRACT_FILENAME,
+    RUNTIME_TEMPLATE_VERSION,
     HarnessComponents,
 )
 
@@ -33,6 +37,25 @@ from smai_runtime import (
 # ``read_file("contracts/harness_api_reference.md")``.
 HARNESS_API_REFERENCE_FILENAME = "harness_api_reference.md"
 WORKSPACE_HARNESS_API_REFERENCE_PATH = "contracts/" + HARNESS_API_REFERENCE_FILENAME
+
+# Workspace-relative path to the locked HarnessContract — derived from
+# the runtime's canonical filename constant so a rename in
+# smai_runtime.runtime_files cascades here without manual sync.
+WORKSPACE_HARNESS_CONTRACT_PATH = "contracts/" + HARNESS_CONTRACT_FILENAME
+
+# Dotted accessor on the contract for the locked per-experiment config.
+# Derived from the actual HarnessContract model attributes via
+# introspection so renames surface at test time, not at agent time.
+_LOCKED_CONFIG_FIELD = "fixed_variables"
+assert _LOCKED_CONFIG_FIELD in HarnessContractBody.model_fields, (
+    f"HarnessContractBody no longer has a {_LOCKED_CONFIG_FIELD!r} field — "
+    "harness_api_reference.py needs to track the rename."
+)
+assert "body" in HarnessContract.model_fields, (
+    "HarnessContract no longer exposes the body envelope — "
+    "harness_api_reference.py needs to track the rename."
+)
+HARNESS_CONTRACT_LOCKED_CONFIG_PATH = f"body.{_LOCKED_CONFIG_FIELD}"
 
 
 def _clean_type(annotation: object) -> str:
@@ -120,17 +143,78 @@ as-is; declare those manifest extension points `optional=true`. For a
 
 ## Workflow
 
-1. Read the contracts in `contracts/` (`harness_contract.json`).
-2. Write `harness/__init__.py` (the three ABI functions above) plus any
-   helper modules under `harness/`, `techniques/baseline.py`, and
-   `config.yaml`.
-3. Validate with a short capped run via the `run_experiment` tool.
-4. Once validation passes, emit the manifest with `emit_harness_manifest`.
+### 1. Read the locked config from the harness contract
+
+The locked per-experiment config (dataset, architecture, optimization,
+seeds, compute) lives in `{WORKSPACE_HARNESS_CONTRACT_PATH}` at
+`HarnessContract.{HARNESS_CONTRACT_LOCKED_CONFIG_PATH}`, a list of
+`{{ "path": <jsonpath>, "value": <value>, "type_hint": ... }}` entries.
+Read THIS file (not `experiment_plan.json` or any other path); it is
+the locked source of truth. The compiler may also have emitted an
+`experiment_plan.json` for human review somewhere up the pipeline, but
+that file is OUTSIDE this workspace and unreadable; the harness contract
+is the in-workspace authoritative artifact.
+
+### 2. Write the harness
+
+Write `harness/__init__.py` (the three ABI functions above) plus any
+helper modules under `harness/`, `techniques/baseline.py`, and
+`config.yaml`. Use the values from
+`HarnessContract.{HARNESS_CONTRACT_LOCKED_CONFIG_PATH}` to populate
+`config.yaml` (or wherever your `build_harness` reads its defaults
+from); substituting in a guess will be caught when the runtime later
+re-validates the contract.
+
+### 3. Validate, THEN emit the manifest (in that order)
+
+The `emit_harness_manifest` tool refuses to write the manifest unless
+`validation_results.json` (which the `run_experiment` tool drops into
+the workspace after a passing capped run) exists at the workspace root
+and reports `passed: true`. Run `run_experiment` FIRST; only after that
+returns `completed: true` should you call `emit_harness_manifest`.
+Calling `emit_harness_manifest` before a passing validation produces a
+tool error of the form *"the agent must run a passing validation via
+run_experiment before emitting the manifest"*.
+
+### 4. Manifest field values
+
+When you do call `emit_harness_manifest` these three fields are easy to
+get wrong:
+
+- **`runtime_template_version`** must equal exactly
+  `"{RUNTIME_TEMPLATE_VERSION}"` (the current runtime's template
+  version, generated from the installed `smai_runtime` package).
+  Anything else is rejected by the tool BEFORE any artifact write.
+- **`harness_version_hash`** must be recomputed from the CURRENT
+  on-disk `harness/` directory contents on every emission attempt. Do
+  NOT reuse a hash from a previous turn; between turns you may have
+  edited a file. The integrator's `compute_harness_version_hash`
+  function (over the workspace `harness/` directory) is the only way to
+  get the right value, and the tool re-derives the expected hash itself
+  every call, so a stale hash always fails. The validation message tells
+  you the expected value when the input is wrong.
+- **`parent_harness_contract_hash`** must equal
+  `envelope.content_hash` of the harness contract you read in step 1.
+
+### 5. Tool quick reference
+
+The standard file-operation tools take structured Pydantic inputs (NOT
+shell commands). Common confusions:
+
+- `list_files` takes `path` (a directory; optional, defaults to the
+  workspace root) and `glob` (a filename glob, optional). It does NOT
+  take a `command` parameter; do not pass shell argv like
+  `command="find . -name ..."`.
+- `search` takes `pattern` (regex) plus an optional `path` that must be
+  a DIRECTORY (it walks the directory recursively). If you want to grep
+  a single file, use `read_file` followed by your own filtering.
 """
 
 
 __all__ = [
     "HARNESS_API_REFERENCE_FILENAME",
+    "HARNESS_CONTRACT_LOCKED_CONFIG_PATH",
     "WORKSPACE_HARNESS_API_REFERENCE_PATH",
+    "WORKSPACE_HARNESS_CONTRACT_PATH",
     "build_harness_api_reference",
 ]
