@@ -1038,6 +1038,7 @@ def build_cg_execution_spec(
     llm_for_contextual_evaluator: LlmProvider,
     seeds: Sequence[int] = (0,),
     runtime_image: str = "smai-runtime:dev",
+    runtime_cpu_image: str = "smai-runtime-cpu:dev",
     max_review_attempts: int = 1,
     max_implementation_phase_attempts: int = 2,
     require_human_approval: bool = False,
@@ -1061,8 +1062,16 @@ def build_cg_execution_spec(
             state's on-entry handler.
         seeds: Per-entry training seeds the ``running`` dispatch
             iterates. Default ``(0,)`` for fast smoke tests.
-        runtime_image: Container image name for the runtime experiment
-            jobs the ``running`` dispatch submits.
+        runtime_image: GPU container image for the runtime experiment
+            jobs the ``running`` dispatch submits AND the harness
+            builder's ``run_experiment`` validation tool when the
+            CG's :class:`HarnessContract` requests GPU.
+        runtime_cpu_image: CPU container image, used in place of
+            ``runtime_image`` when the CG's harness contract requests
+            CPU. Threaded into the harness-builder session so the
+            round-16 gpu-flag derivation pairs cleanly with the image
+            (silently keeping the GPU image on a CPU-only experiment
+            attempts to pull a tag the operator never built).
         max_review_attempts: DEC-016 retry budget — the number of
             ``implemented → implementing`` retries an entry is allowed
             before being marked ``implementation_failed``.
@@ -1108,7 +1117,8 @@ def build_cg_execution_spec(
 
     harness_builder_dispatch = make_dispatch_harness_build(
         workspace_root=workspace_root,
-        run_experiment_image=runtime_image,
+        runtime_image=runtime_image,
+        runtime_cpu_image=runtime_cpu_image,
         inline_runner=harness_builder_inline_runner,
     )
 

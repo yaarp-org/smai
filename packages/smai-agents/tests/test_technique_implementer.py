@@ -238,6 +238,115 @@ async def test_run_technique_implementer_session_loads_prev_conversation_trace(
     assert len(captured) == 1
 
 
+# === Round 17: run_experiment IMAGE derived from HarnessContract ============
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "compute_gpu,expected_image",
+    [
+        (True, "custom-gpu:tag"),
+        (False, "custom-cpu:tag"),
+    ],
+)
+async def test_run_technique_implementer_session_derives_run_experiment_image_from_contract(
+    tmp_path: Path,
+    compute_gpu: bool,
+    expected_image: str,
+) -> None:
+    """Round 17 (parallel to the harness-builder test): the
+    technique-implementer's validation tool image is selected at
+    session-construction time from
+    :attr:`HarnessContractBody.compute.gpu`. The CPU branch fails
+    pre-round-17 because the session always passed the GPU image.
+    """
+    from smai_agents.std_tools.run_experiment import (
+        RUN_EXPERIMENT_TOOL_NAME,
+        RunExperimentInput,
+    )
+    from smai_agents.tools import ToolContext
+
+    contract = make_harness_contract(factor_type="additive", compute_gpu=compute_gpu)
+    technique_contract = make_technique_contract(
+        parent_harness_contract_hash=contract.envelope.content_hash,
+        entry_id="entry-img",
+        technique_id="tq-img",
+    )
+    manifest = make_minimal_manifest(
+        parent_harness_contract_hash=contract.envelope.content_hash,
+        factor_type="additive",
+    )
+
+    workspace = tmp_path / "ws-img"
+
+    async def _drop_metrics(ws: Path) -> None:
+        (ws / "metrics.json").write_text(json.dumps({"loss": 0.1}))
+
+    fake_compute = FakeCompute(
+        status_queue=[
+            JobStatus(
+                state="succeeded",
+                exit_code=0,
+                started_at=None,
+                finished_at=None,
+                failure_reason=None,
+            )
+        ],
+        on_submit=_drop_metrics,
+    )
+    fake_compute.set_workspace(workspace)
+
+    captured: list[AgentSession] = []
+
+    async def _capture_runner(session: AgentSession) -> AgentOutcome:
+        captured.append(session)
+        return AgentOutcome(
+            kind="finished",
+            turn_count=0,
+            usage_total=session.usage_total,
+            finish_success=True,
+            finish_summary="captured",
+        )
+
+    await run_technique_implementer_session(
+        workspace_path=workspace,
+        cg_id="cg-img",
+        entry_id="entry-img",
+        technique_id="tq-img",
+        technique_name="img",
+        factor_dimension="augmentation",
+        factor_type="additive",
+        context_kind="method_description",
+        grounding_path=None,
+        harness_contract=contract,
+        technique_contract=technique_contract,
+        manifest=manifest,
+        harness_files=SAMPLE_HARNESS_FILES,
+        baseline_module=None,
+        llm=StubLlmProvider([]),
+        artifact_store=StubArtifactStore(),
+        compute=fake_compute,
+        runtime_image="custom-gpu:tag",
+        runtime_cpu_image="custom-cpu:tag",
+        runner=_capture_runner,
+    )
+
+    assert len(captured) == 1
+    session = captured[0]
+    tool = session.tools.get(RUN_EXPERIMENT_TOOL_NAME)
+    assert tool is not None
+    ctx = ToolContext(
+        workspace_path=workspace,
+        session=session,
+        artifact_store=session.artifact_store,
+        compute=session.compute,
+    )
+    await tool.handler(RunExperimentInput(technique="img", seed=0, epochs=1), ctx)
+
+    assert len(fake_compute.submit_calls) == 1
+    assert fake_compute.submit_calls[0]["image"] == expected_image
+
+
 # === Additive baseline skip (DEC-013 / DEC-017) =============================
 
 

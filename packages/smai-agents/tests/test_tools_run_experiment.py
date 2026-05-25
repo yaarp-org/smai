@@ -453,3 +453,18 @@ def _make_immediate_wait_helper(clock: FakeClock):
         )
 
     return _wait
+
+
+# === Round 17: tool-description required-field drift guard ===================
+#
+# See ``test_tools_files.py`` for the cluster note. ``run_experiment`` has
+# one required field, ``seed``; the rest of the input shape (technique /
+# epochs / subset_fraction) has defaults.
+
+
+def test_run_experiment_description_flags_required_seed() -> None:
+    tool = make_run_experiment_tool(image="smai-runtime:test", gpu=True)
+    desc = tool.description
+    assert "REQUIRED" in desc
+    assert "`seed`" in desc
+    assert "Pydantic validation error" in desc

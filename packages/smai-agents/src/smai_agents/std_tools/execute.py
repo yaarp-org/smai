@@ -195,11 +195,14 @@ def make_execute_tool() -> Tool:
     return Tool(
         name=EXECUTE_TOOL_NAME,
         description=(
-            "Run a shell command in the workspace. Returns exit code, "
-            "stdout, and stderr. Output is truncated to the last 200 "
-            "lines / ~5000 tokens. Commands that invoke experiment.py "
-            "are rejected — use the run_experiment tool for GPU "
-            "validation runs."
+            "Run a shell command in the workspace. Takes one REQUIRED "
+            "structured-input field: `command` (the shell command "
+            "string — omitting it surfaces as a Pydantic validation "
+            "error). Optional `timeout_seconds` (default 120, max 600). "
+            "Returns exit code, stdout, and stderr. Output is truncated "
+            "to the last 200 lines / ~5000 tokens. Commands that invoke "
+            "experiment.py are rejected — use the run_experiment tool "
+            "for GPU validation runs."
         ),
         input_schema=ExecuteInput,
         handler=_execute_handler,

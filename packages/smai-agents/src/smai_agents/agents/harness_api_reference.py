@@ -208,6 +208,13 @@ shell commands). Common confusions:
 - `search` takes `pattern` (regex) plus an optional `path` that must be
   a DIRECTORY (it walks the directory recursively). If you want to grep
   a single file, use `read_file` followed by your own filtering.
+- `edit_file` takes three REQUIRED fields: `path` (the file to edit),
+  `old_string` (exact text to find — must occur exactly once;
+  whitespace and indentation count), and `new_string` (the
+  replacement). Omitting any of them — most often `path` — surfaces as
+  a Pydantic validation error and the same call shape will keep
+  failing until corrected. To create a new file use `write_file`, not
+  `edit_file`.
 """
 
 

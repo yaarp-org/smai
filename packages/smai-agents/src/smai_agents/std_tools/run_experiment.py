@@ -286,8 +286,12 @@ def make_run_experiment_tool(
     return Tool(
         name=RUN_EXPERIMENT_TOOL_NAME,
         description=(
-            "Run experiment.py for validation. Submits the job through "
-            "the configured Compute plugin (image + GPU configured at "
+            "Run experiment.py for validation. Takes one REQUIRED "
+            "structured-input field: `seed` (an int — omitting it "
+            "surfaces as a Pydantic validation error). Optional fields: "
+            "`technique` (module name; null for the additive baseline), "
+            "`epochs`, `subset_fraction`. Submits the job through the "
+            "configured Compute plugin (image + GPU configured at "
             f"registration time). Caps epochs at {MAX_VALIDATION_EPOCHS} "
             f"and subset_fraction at {MAX_VALIDATION_SUBSET}. Returns "
             "structured metrics + run_status; failures carry a "

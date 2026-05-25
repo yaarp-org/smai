@@ -186,9 +186,12 @@ def make_read_file_tool() -> Tool:
     return Tool(
         name=READ_FILE_TOOL_NAME,
         description=(
-            "Read a file from the workspace. Path is workspace-relative "
-            "(absolute paths must resolve inside the workspace). Output "
-            "includes line numbers for use in subsequent edit_file calls. "
+            "Read a file from the workspace. Takes one REQUIRED "
+            "structured-input field: `path` (workspace-relative, or "
+            "absolute as long as it resolves inside the workspace — "
+            "omitting `path` surfaces as a Pydantic validation error). "
+            "Output includes line numbers for use in subsequent "
+            "edit_file calls. "
             f"Files longer than {MAX_READ_LINES:,} lines are truncated."
         ),
         input_schema=ReadFileInput,
@@ -265,9 +268,13 @@ def make_write_file_tool() -> Tool:
     return Tool(
         name=WRITE_FILE_TOOL_NAME,
         description=(
-            "Write a file to the workspace. Creates parent directories "
-            "if needed; overwrites any existing file at the path. For "
-            "Python files, ruff check output is appended to the result."
+            "Write a file to the workspace. Takes two REQUIRED "
+            "structured-input fields: `path` (workspace-relative target) "
+            "and `content` (the file body, a string). Omitting either "
+            "surfaces as a Pydantic validation error. Creates parent "
+            "directories; overwrites any existing file at the path. "
+            "For Python files, ruff check output is appended to the "
+            "result."
         ),
         input_schema=WriteFileInput,
         handler=_write_file_handler,
@@ -372,10 +379,16 @@ def make_edit_file_tool() -> Tool:
     return Tool(
         name=EDIT_FILE_TOOL_NAME,
         description=(
-            "Search-and-replace within a workspace file. old_string "
-            "must occur exactly once (the tool fails on zero or "
-            "multiple matches). For Python files, ruff check output "
-            "is appended to the result."
+            "Search-and-replace within a workspace file. Takes three "
+            "REQUIRED structured-input fields: `path` (workspace-relative "
+            "target file, REQUIRED — omitting it surfaces as a Pydantic "
+            "validation error, not a tool error the loop will retry "
+            "automatically), `old_string` (exact text to find — must "
+            "occur exactly once; whitespace and indentation count, add "
+            "surrounding context to disambiguate), and `new_string` "
+            "(the replacement). The tool fails on zero or multiple "
+            "matches. For Python files, ruff check output is appended "
+            "to the result."
         ),
         input_schema=EditFileInput,
         handler=_edit_file_handler,
@@ -489,12 +502,14 @@ def make_search_tool() -> Tool:
     return Tool(
         name=SEARCH_TOOL_NAME,
         description=(
-            "Regex search across files in the workspace. `pattern` is a "
-            "Python regex; `path` (optional) must be a DIRECTORY (the "
-            "tool walks it recursively, not a single file; to grep a "
-            "single file, use read_file and filter the result yourself); "
-            "`include` (optional) is a filename glob like '*.py'. Returns "
-            "'<path>:<line_number>:<content>' for each match. "
+            "Regex search across files in the workspace. Takes one "
+            "REQUIRED structured-input field: `pattern` (a Python "
+            "regex — omitting it surfaces as a Pydantic validation "
+            "error). Two optional fields: `path` must be a DIRECTORY "
+            "(the tool walks it recursively, not a single file; to "
+            "grep a single file, use read_file and filter the result "
+            "yourself); `include` is a filename glob like '*.py'. "
+            "Returns '<path>:<line_number>:<content>' for each match. "
             f"Capped at {MAX_SEARCH_MATCHES} matches."
         ),
         input_schema=SearchInput,

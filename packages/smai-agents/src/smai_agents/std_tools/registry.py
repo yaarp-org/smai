@@ -42,10 +42,16 @@ from smai_agents.std_tools.run_experiment import (
 )
 from smai_agents.tools import ToolRegistry, make_finish_tool
 
-# Default placeholder image for ``run_experiment``. v1's convention was
-# ``smai-runtime:dev`` (DEC-021 / Task 2.A4); deployments override at
-# registration time.
+# Default placeholder images for ``run_experiment``. v1's convention was
+# ``smai-runtime:dev`` / ``smai-runtime-cpu:dev`` (DEC-021 / Task 2.A4 /
+# round 11 image-distribution); deployments override at registration
+# time. These constants live here so the session runners
+# (:func:`run_harness_builder_session` /
+# :func:`run_technique_implementer_session`) can fall back to a sensible
+# pair when callers pass ``None`` — the runners select GPU vs CPU off
+# the locked :class:`HarnessContract` so the agent never picks an image.
 DEFAULT_RUN_EXPERIMENT_IMAGE = "smai-runtime:dev"
+DEFAULT_RUN_EXPERIMENT_CPU_IMAGE = "smai-runtime-cpu:dev"
 
 
 # All tools in the standard inventory (excluding ``finish`` — that's a
@@ -80,7 +86,7 @@ def build_standard_tool_registry(
     *,
     exclude: frozenset[StandardToolName] | set[StandardToolName] | None = None,
     include_finish: bool = True,
-    run_experiment_image: str = DEFAULT_RUN_EXPERIMENT_IMAGE,
+    run_experiment_image: str,
     run_experiment_gpu: bool,
     run_experiment_timeout_seconds: int | None = None,
     run_experiment_extra_env: dict[str, str] | None = None,
@@ -95,13 +101,18 @@ def build_standard_tool_registry(
             tool. ``True`` for multi-turn agents; ``False`` for
             single-call agents that bypass the loop entirely.
         run_experiment_image: Container image for ``run_experiment``
-            jobs. Threaded through to :func:`make_run_experiment_tool`.
+            jobs. Required (no default) because the value depends on
+            :attr:`HarnessContractBody.compute.gpu` — the session
+            runners pick between :data:`DEFAULT_RUN_EXPERIMENT_IMAGE`
+            (GPU) and :data:`DEFAULT_RUN_EXPERIMENT_CPU_IMAGE` (CPU)
+            off the locked contract and pass the result here.
+            Silently defaulting to the GPU image would dispatch a tag
+            the operator never built on every CPU-only experiment.
         run_experiment_gpu: GPU flag for ``run_experiment`` jobs.
-            Required (no default) because the value comes from the
-            locked :class:`HarnessContract` — the session runners derive
-            it from :attr:`HarnessContractBody.compute.gpu` and pass it
-            here; silently defaulting would let CPU-only experiments
-            dispatch GPU jobs that the substrate refuses.
+            Required (no default) for the same reason — the session
+            runners derive it from :attr:`HarnessContractBody.compute.gpu`
+            and pass it here; silently defaulting would let CPU-only
+            experiments dispatch GPU jobs that the substrate refuses.
         run_experiment_timeout_seconds: Optional per-job timeout. ``None``
             uses :data:`run_experiment.RUN_EXPERIMENT_DEFAULT_TIMEOUT_SECONDS`.
         run_experiment_extra_env: Optional environment variables for
@@ -160,6 +171,7 @@ def standard_tool_names() -> frozenset[str]:
 
 
 __all__ = [
+    "DEFAULT_RUN_EXPERIMENT_CPU_IMAGE",
     "DEFAULT_RUN_EXPERIMENT_IMAGE",
     "StandardToolName",
     "build_standard_tool_registry",

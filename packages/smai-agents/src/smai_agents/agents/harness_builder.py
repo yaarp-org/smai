@@ -93,7 +93,11 @@ from smai_agents.prompts import (
     load_prompt_config,
     render_initial_user_message,
 )
-from smai_agents.std_tools import build_standard_tool_registry
+from smai_agents.std_tools import (
+    DEFAULT_RUN_EXPERIMENT_CPU_IMAGE,
+    DEFAULT_RUN_EXPERIMENT_IMAGE,
+    build_standard_tool_registry,
+)
 from smai_agents.tools import ToolRegistry
 
 _HARNESS_BUILDER_ROLE: TaskRole = "harness_builder"
@@ -139,7 +143,8 @@ async def run_harness_builder_session(
     manifest_artifact_path: str,
     status_artifact_path: str | None = None,
     nudge_artifact_path: str | None = None,
-    run_experiment_image: str | None = None,
+    runtime_image: str | None = None,
+    runtime_cpu_image: str | None = None,
     prompt_config: PromptConfig | None = None,
     config: AgentLoopConfig | None = None,
     runner: SessionRunner | None = None,
@@ -171,10 +176,21 @@ async def run_harness_builder_session(
             status writes (§3.2). ``None`` disables.
         nudge_artifact_path: Optional ArtifactStore key for supervisor
             nudges (§2.6 / §3.2).
-        run_experiment_image: Container image for ``run_experiment``
-            validation jobs. Threaded through to
-            :func:`build_standard_tool_registry`. Defaults to
-            :data:`smai_agents.std_tools.DEFAULT_RUN_EXPERIMENT_IMAGE`.
+        runtime_image: GPU container image for ``run_experiment``
+            validation jobs. Selected when
+            :attr:`HarnessContractBody.compute.gpu` is ``True``.
+            Defaults to :data:`smai_agents.std_tools.DEFAULT_RUN_EXPERIMENT_IMAGE`
+            when ``None`` (``smai-runtime:dev``).
+        runtime_cpu_image: CPU container image for ``run_experiment``
+            validation jobs. Selected when
+            :attr:`HarnessContractBody.compute.gpu` is ``False`` —
+            mirrors the seed-run dispatcher's
+            ``image = gpu_image if gpu else cpu_image`` selection in
+            :mod:`smai_orchestrator.specs.run_record` so a CPU-only
+            experiment cannot dispatch a GPU-only image the operator
+            never built. Defaults to
+            :data:`smai_agents.std_tools.DEFAULT_RUN_EXPERIMENT_CPU_IMAGE`
+            when ``None`` (``smai-runtime-cpu:dev``).
         prompt_config: Optional pre-loaded :class:`PromptConfig`. When
             ``None`` the function calls
             :func:`smai_agents.load_prompt_config` for the
@@ -218,18 +234,29 @@ async def run_harness_builder_session(
         else load_prompt_config(role=_HARNESS_BUILDER_ROLE)
     )
 
-    # Derive the ``run_experiment`` GPU flag from the locked contract
-    # (`02-dsl-and-contracts.md` §7.4). The harness contract's
-    # ``body.compute.gpu`` is the source of truth — the same field the
-    # seed-run dispatcher reads (specs/run_record.py
-    # _load_compute_requirements_gpu). Hardcoding ``gpu=True`` here
-    # wedges every CPU-only experiment on Docker Desktop macOS because
-    # the validation submit fails on ``gpu=True`` eagerly.
+    # Derive the ``run_experiment`` GPU flag AND the matching image from
+    # the locked contract (`02-dsl-and-contracts.md` §7.4). The harness
+    # contract's ``body.compute.gpu`` is the source of truth — the same
+    # field the seed-run dispatcher reads (specs/run_record.py
+    # _load_compute_requirements_gpu) and uses to pick between the GPU
+    # and CPU images (``image = gpu_image if gpu else cpu_image``). The
+    # selection lives here at the session boundary, NOT inside the tool
+    # factory, so the gpu flag and the chosen image cannot drift apart;
+    # round 16 fixed the gpu flag but left the image hardcoded, which
+    # made CPU-only experiments on Docker Desktop macOS attempt to pull
+    # ``smai-runtime:dev`` (a GPU image the operator never built) and
+    # fail with ``JobImageInvalid``.
+    gpu = harness_contract.body.compute.gpu
+    selected_run_experiment_image = (
+        (runtime_image if runtime_image is not None else DEFAULT_RUN_EXPERIMENT_IMAGE)
+        if gpu
+        else (
+            runtime_cpu_image if runtime_cpu_image is not None else DEFAULT_RUN_EXPERIMENT_CPU_IMAGE
+        )
+    )
     tools: ToolRegistry = build_standard_tool_registry(
-        run_experiment_image=run_experiment_image
-        if run_experiment_image is not None
-        else "smai-runtime:dev",
-        run_experiment_gpu=harness_contract.body.compute.gpu,
+        run_experiment_image=selected_run_experiment_image,
+        run_experiment_gpu=gpu,
     )
     tools.register(
         make_emit_harness_manifest_tool(
@@ -287,7 +314,8 @@ async def run_harness_builder_session(
 def make_dispatch_harness_build(
     *,
     workspace_root: Path,
-    run_experiment_image: str | None = None,
+    runtime_image: str | None = None,
+    runtime_cpu_image: str | None = None,
     harness_contract_artifact_path: Callable[[str], str] | None = None,
     harness_manifest_artifact_path: Callable[[str], str] | None = None,
     status_artifact_path: Callable[[str], str] | None = None,
@@ -318,14 +346,18 @@ def make_dispatch_harness_build(
     Args:
         workspace_root: Filesystem root under which per-CG workspaces
             land at ``<workspace_root>/<cg_id>/``.
-        run_experiment_image: Container image for ``run_experiment``
-            validation jobs *inside* the agent's tool surface. Threaded
-            through to :func:`run_harness_builder_session`. The GPU flag
-            is NOT a knob on this factory — it is derived from the
-            CG's :class:`HarnessContract` (``body.compute.gpu``) inside
-            the session runner, mirroring the seed-run dispatcher's
-            ``_load_compute_requirements_gpu`` so the agent never needs
-            to think about hardware.
+        runtime_image: GPU container image for ``run_experiment``
+            validation jobs *inside* the agent's tool surface.
+        runtime_cpu_image: CPU container image for ``run_experiment``
+            validation jobs. Both images are threaded to
+            :func:`run_harness_builder_session`; neither the GPU flag
+            nor the image is a knob on this factory — both are derived
+            from the CG's :class:`HarnessContract` (``body.compute.gpu``)
+            inside the session runner, mirroring the seed-run dispatcher's
+            ``_load_compute_requirements_gpu`` + ``image = gpu_image
+            if gpu else cpu_image`` so the agent never needs to think
+            about hardware and the gpu flag and chosen image cannot
+            drift apart.
         harness_contract_artifact_path: Callable resolving
             ``cg_id → ArtifactStore key`` for the loaded contract.
             Defaults to
@@ -456,7 +488,8 @@ def make_dispatch_harness_build(
                 manifest_artifact_path=manifest_key,
                 status_artifact_path=status_key,
                 nudge_artifact_path=nudge_key,
-                run_experiment_image=run_experiment_image,
+                runtime_image=runtime_image,
+                runtime_cpu_image=runtime_cpu_image,
                 runner=inline_runner,
                 supervisor_llm=llm if supervisor_on else None,
                 config=loop_config,

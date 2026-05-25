@@ -203,6 +203,7 @@ def build_cg_entries_spec(
     *,
     workspace_root: Path,
     runtime_image: str = "smai-runtime:dev",
+    runtime_cpu_image: str = "smai-runtime-cpu:dev",
     max_entry_dispatch_attempts: int = 2,
     technique_implementer_inline_runner: Any = None,
 ) -> PipelineSpec:
@@ -213,9 +214,16 @@ def build_cg_entries_spec(
             Threaded into the technique-implementer dispatch handler
             so it materializes ``<workspace_root>/<cg_id>/<entry_id>/``
             for the in-process agent.
-        runtime_image: Container image for ``run_experiment`` validation
-            jobs the implementer agent submits during its multi-turn
-            loop. v1 default ``smai-runtime:dev`` per Task 2.D1.
+        runtime_image: GPU container image for ``run_experiment``
+            validation jobs the implementer agent submits during its
+            multi-turn loop. v1 default ``smai-runtime:dev`` per Task
+            2.D1.
+        runtime_cpu_image: CPU container image, used in place of
+            ``runtime_image`` when the CG's harness contract requests
+            CPU (``compute.gpu=false``). Threaded into the
+            technique-implementer session so the round-16 gpu-flag
+            derivation pairs cleanly with the image; v1 default
+            ``smai-runtime-cpu:dev``.
         technique_implementer_inline_runner: Test-only runner override
             threaded into :func:`make_dispatch_technique_implementation`
             as ``inline_runner``. Production leaves it ``None``. Typed
@@ -244,7 +252,8 @@ def build_cg_entries_spec(
 
     technique_implementer_dispatch = make_dispatch_technique_implementation(
         workspace_root=workspace_root,
-        run_experiment_image=runtime_image,
+        runtime_image=runtime_image,
+        runtime_cpu_image=runtime_cpu_image,
         inline_runner=technique_implementer_inline_runner,
     )
 

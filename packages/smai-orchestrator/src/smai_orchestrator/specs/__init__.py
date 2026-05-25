@@ -105,6 +105,7 @@ def register_smai_specs(
     llm_for_contextual_evaluator: LlmProvider,
     seeds: Sequence[int] = (0,),
     runtime_image: str = "smai-runtime:dev",
+    runtime_cpu_image: str = "smai-runtime-cpu:dev",
     max_review_attempts: int = 1,
     require_human_approval: bool = False,
     evaluation_dispatch_trace: list[str] | None = None,
@@ -120,9 +121,10 @@ def register_smai_specs(
     (e.g., to project to :class:`EngineSpec` for the worker loop).
 
     Args mirror :func:`build_cg_execution_spec`; the entry spec
-    inherits ``workspace_root`` and ``runtime_image`` only (it doesn't
-    use the LlmProviders — the worker resolves the per-role provider
-    when it drives the in-process technique-implementer dispatch). The
+    inherits ``workspace_root``, ``runtime_image``, and
+    ``runtime_cpu_image`` only (it doesn't use the LlmProviders —
+    the worker resolves the per-role provider when it drives the
+    in-process technique-implementer dispatch). The
     ``*_inline_runner`` kwargs are test-only runner overrides threaded
     into the two agent dispatch factories.
 
@@ -147,6 +149,7 @@ def register_smai_specs(
         llm_for_contextual_evaluator=llm_for_contextual_evaluator,
         seeds=seeds,
         runtime_image=runtime_image,
+        runtime_cpu_image=runtime_cpu_image,
         max_review_attempts=max_review_attempts,
         require_human_approval=require_human_approval,
         evaluation_dispatch_trace=evaluation_dispatch_trace,
@@ -155,6 +158,7 @@ def register_smai_specs(
     entry_spec = build_cg_entries_spec(
         workspace_root=workspace_root,
         runtime_image=runtime_image,
+        runtime_cpu_image=runtime_cpu_image,
         technique_implementer_inline_runner=technique_implementer_inline_runner,
     )
     register_pipeline_spec(cg_spec)

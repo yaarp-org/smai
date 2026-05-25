@@ -55,6 +55,7 @@ from smai_agents.std_tools.files import (
     make_write_file_tool,
 )
 from smai_agents.std_tools.registry import (
+    DEFAULT_RUN_EXPERIMENT_CPU_IMAGE,
     DEFAULT_RUN_EXPERIMENT_IMAGE,
     StandardToolName,
     build_standard_tool_registry,
@@ -70,6 +71,7 @@ from smai_agents.std_tools.run_experiment import (
 )
 
 __all__ = [
+    "DEFAULT_RUN_EXPERIMENT_CPU_IMAGE",
     "DEFAULT_RUN_EXPERIMENT_IMAGE",
     "EDIT_FILE_TOOL_NAME",
     "EXECUTE_DEFAULT_TIMEOUT_SECONDS",

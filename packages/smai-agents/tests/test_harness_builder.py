@@ -304,6 +304,17 @@ def test_harness_api_reference_workflow_section_pins_drift_prone_values() -> Non
     normalized = " ".join(text.split())
     assert "passing validation via run_experiment before emitting" in normalized
 
+    # 5) Round-17: the tool quick-reference covers ``edit_file``. The
+    # round-16 re-test agent burned 4 supervisor nudges calling
+    # ``edit_file`` without ``path``; the reference must spell out the
+    # required-field shape so the agent has a single place to look.
+    assert "edit_file" in text
+    # The quick-ref line names all three required fields and the
+    # ``write_file``-for-new-files escape hatch.
+    assert "old_string" in text
+    assert "new_string" in text
+    assert "write_file" in text
+
 
 @pytest.mark.asyncio
 async def test_run_harness_builder_session_stages_api_reference(tmp_path: Path) -> None:
@@ -425,6 +436,100 @@ async def test_run_harness_builder_session_derives_run_experiment_gpu_from_contr
 
     assert len(fake_compute.submit_calls) == 1
     assert fake_compute.submit_calls[0]["gpu"] is compute_gpu
+
+
+# === Round 17: run_experiment IMAGE derived from HarnessContract ============
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "compute_gpu,expected_image",
+    [
+        (True, "custom-gpu:tag"),
+        (False, "custom-cpu:tag"),
+    ],
+)
+async def test_run_harness_builder_session_derives_run_experiment_image_from_contract(
+    tmp_path: Path,
+    compute_gpu: bool,
+    expected_image: str,
+) -> None:
+    """Round 17: the validation tool's container image is selected at
+    session-construction time from the locked
+    :attr:`HarnessContractBody.compute.gpu`, mirroring the seed-run
+    dispatcher's ``image = gpu_image if gpu else cpu_image``. Round 16
+    fixed the GPU flag but left the image hardcoded to the GPU image,
+    so a CPU-only experiment still pulled ``smai-runtime:dev`` (a tag
+    the operator never built on a CPU-only host) and failed with
+    ``JobImageInvalid``.
+    """
+    from smai_agents.std_tools.run_experiment import (
+        RUN_EXPERIMENT_TOOL_NAME,
+        RunExperimentInput,
+    )
+    from smai_agents.tools import ToolContext
+    from smai_core.plugins import JobStatus
+
+    contract = make_harness_contract(factor_type="additive", compute_gpu=compute_gpu)
+    workspace = tmp_path / "ws"
+
+    async def _drop_metrics(ws: Path) -> None:
+        (ws / "metrics.json").write_text(json.dumps({"loss": 0.1}))
+
+    fake_compute = FakeCompute(
+        status_queue=[
+            JobStatus(
+                state="succeeded",
+                exit_code=0,
+                started_at=None,
+                finished_at=None,
+                failure_reason=None,
+            )
+        ],
+        on_submit=_drop_metrics,
+    )
+    fake_compute.set_workspace(workspace)
+
+    captured: list[AgentSession] = []
+
+    async def _capture_runner(session: AgentSession) -> AgentOutcome:
+        captured.append(session)
+        return AgentOutcome(
+            kind="finished",
+            turn_count=0,
+            usage_total=session.usage_total,
+            finish_success=True,
+            finish_summary="captured",
+        )
+
+    await run_harness_builder_session(
+        workspace_path=workspace,
+        harness_contract=contract,
+        cg_id="cg-img",
+        llm=StubLlmProvider([]),
+        artifact_store=StubArtifactStore(),
+        compute=fake_compute,
+        manifest_artifact_path="cg-img/harness/manifest.json",
+        runtime_image="custom-gpu:tag",
+        runtime_cpu_image="custom-cpu:tag",
+        config=AgentLoopConfig(status_write_every_turns=0),
+        runner=_capture_runner,
+    )
+
+    assert len(captured) == 1
+    session = captured[0]
+    tool = session.tools.get(RUN_EXPERIMENT_TOOL_NAME)
+    assert tool is not None
+    ctx = ToolContext(
+        workspace_path=workspace,
+        session=session,
+        artifact_store=session.artifact_store,
+        compute=session.compute,
+    )
+    await tool.handler(RunExperimentInput(technique=None, seed=0, epochs=1), ctx)
+
+    assert len(fake_compute.submit_calls) == 1
+    assert fake_compute.submit_calls[0]["image"] == expected_image
 
 
 # === Dispatch handler — runs the session in-process (round 14) ==============

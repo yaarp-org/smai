@@ -158,3 +158,13 @@ async def test_execute_default_timeout_is_120s() -> None:
 def test_execute_tool_name_constant_matches() -> None:
     tool = make_execute_tool()
     assert tool.name == EXECUTE_TOOL_NAME
+
+
+# Round 17: required-field drift guard — see test_tools_files.py for the
+# cluster note. ``execute`` carries one required field, ``command``.
+def test_execute_description_flags_required_command() -> None:
+    tool = make_execute_tool()
+    desc = tool.description
+    assert "REQUIRED" in desc
+    assert "`command`" in desc
+    assert "Pydantic validation error" in desc

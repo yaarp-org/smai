@@ -1499,6 +1499,7 @@ class Runtime:
                 llm_for_code_reviewer=llm_for_code_reviewer,
                 llm_for_contextual_evaluator=llm_for_contextual_evaluator,
                 runtime_image=effective_runtime_image,
+                runtime_cpu_image=effective_runtime_cpu_image,
                 # Round 14: the harness-builder / technique-implementer
                 # agents run in-process in the worker, so no agent
                 # container image is threaded; ``EngineConfig.agent_image``

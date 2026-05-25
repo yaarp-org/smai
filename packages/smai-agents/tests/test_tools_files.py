@@ -380,3 +380,45 @@ async def test_list_files_non_recursive(tmp_path: Path) -> None:
     assert result.is_error is False
     assert "a.txt" in result.content
     assert "sub/b.txt" not in result.content
+
+
+# ---------- Round 17: tool-description required-field drift guards ----------
+#
+# The round-16 re-test agent burned 4 supervisor nudges (turns 8-11) calling
+# ``edit_file`` without the required ``path`` field. The error message alone
+# was not enough to recover; the descriptions now preemptively flag the
+# required fields. These drift-guard tests pin the call-out so a future
+# terseness regression fails loudly here rather than burning agent turns.
+
+
+def test_edit_file_description_flags_required_path() -> None:
+    tool = make_edit_file_tool()
+    desc = tool.description
+    assert "REQUIRED" in desc
+    assert "`path`" in desc
+    assert "Pydantic validation error" in desc
+
+
+def test_read_file_description_flags_required_path() -> None:
+    tool = make_read_file_tool()
+    desc = tool.description
+    assert "REQUIRED" in desc
+    assert "`path`" in desc
+    assert "Pydantic validation error" in desc
+
+
+def test_write_file_description_flags_required_fields() -> None:
+    tool = make_write_file_tool()
+    desc = tool.description
+    assert "REQUIRED" in desc
+    assert "`path`" in desc
+    assert "`content`" in desc
+    assert "Pydantic validation error" in desc
+
+
+def test_search_description_flags_required_pattern() -> None:
+    tool = make_search_tool()
+    desc = tool.description
+    assert "REQUIRED" in desc
+    assert "`pattern`" in desc
+    assert "Pydantic validation error" in desc
