@@ -168,12 +168,13 @@ re-validates the contract.
 ### 3. Validate, THEN emit the manifest (in that order)
 
 The `emit_harness_manifest` tool refuses to write the manifest unless
-`validation_results.json` (which the `run_experiment` tool drops into
-the workspace after a passing capped run) exists at the workspace root
-and reports `passed: true`. Run `run_experiment` FIRST; only after that
-returns `completed: true` should you call `emit_harness_manifest`.
-Calling `emit_harness_manifest` before a passing validation produces a
-tool error of the form *"the agent must run a passing validation via
+`validation_results.json` (which the runtime writes at the workspace
+root on the success path of a `--mode validation` run — the
+`run_experiment` tool always passes that flag) exists and reports
+`passed: true`. Run `run_experiment` FIRST; only after that returns
+`completed: true` should you call `emit_harness_manifest`. Calling
+`emit_harness_manifest` before a passing validation produces a tool
+error of the form *"the agent must run a passing validation via
 run_experiment before emitting the manifest"*.
 
 ### 4. Manifest field values

@@ -548,3 +548,86 @@ async def test_run_experiment_workspace_not_overridable_by_plugin_options(
     submitted = fake_compute.submit_calls[0]["plugin_options"]
     assert submitted["workspace"] == str(tmp_path)
     assert submitted["workspace"] != "/some/wrong/path"
+
+
+# === Round 20: --mode validation always present ==============================
+#
+# The runtime defaults --mode to "full"; full mode requires the
+# HarnessAPIManifest at contracts/harness_api_manifest.json. But the
+# harness builder runs validation BEFORE emitting the manifest (manifest
+# is the OUTCOME of a passing validation per 04-agents.md §9 step 5), so
+# the only way the agent's run_experiment call can succeed against the
+# runtime's contract loader is with --mode validation, which lets the
+# runtime synthesize a stub manifest. The tool always passes the flag
+# (the agent has no business overriding it — this tool's whole job is
+# the in-loop validation check, never the orchestrator's seed-run path).
+
+
+@pytest.mark.asyncio
+async def test_run_experiment_command_includes_mode_validation(
+    tmp_path: Path,
+) -> None:
+    async def drop_metrics(workspace: Path) -> None:
+        (workspace / "metrics.json").write_text(json.dumps({"accuracy": 0.5}))
+
+    fake_compute = FakeCompute(
+        status_queue=[_terminal_succeeded()],
+        on_submit=drop_metrics,
+    )
+    fake_compute.set_workspace(tmp_path)
+    clock = FakeClock()
+    session = make_test_session(
+        tmp_path,
+        compute=fake_compute,
+        time_provider=clock.now,
+    )
+    ctx = make_test_context(session)
+    tool = make_run_experiment_tool(
+        image="smai-runtime:test",
+        gpu=False,
+        wait_helper=_make_immediate_wait_helper(clock),
+    )
+
+    await tool.handler(RunExperimentInput(technique="cutout", seed=7), ctx)
+
+    cmd = fake_compute.submit_calls[0]["command"]
+    assert "--mode" in cmd
+    mode_idx = cmd.index("--mode")
+    assert cmd[mode_idx + 1] == "validation"
+
+
+@pytest.mark.asyncio
+async def test_run_experiment_command_includes_mode_validation_for_baseline(
+    tmp_path: Path,
+) -> None:
+    """Baseline (``technique=None``) still carries --mode validation —
+    the flag is unconditional, NOT tied to the --technique branch.
+    """
+
+    async def drop_metrics(workspace: Path) -> None:
+        (workspace / "metrics.json").write_text(json.dumps({"accuracy": 0.5}))
+
+    fake_compute = FakeCompute(
+        status_queue=[_terminal_succeeded()],
+        on_submit=drop_metrics,
+    )
+    fake_compute.set_workspace(tmp_path)
+    clock = FakeClock()
+    session = make_test_session(
+        tmp_path,
+        compute=fake_compute,
+        time_provider=clock.now,
+    )
+    ctx = make_test_context(session)
+    tool = make_run_experiment_tool(
+        image="smai-runtime:test",
+        gpu=False,
+        wait_helper=_make_immediate_wait_helper(clock),
+    )
+
+    await tool.handler(RunExperimentInput(technique=None, seed=1), ctx)
+
+    cmd = fake_compute.submit_calls[0]["command"]
+    assert "--mode" in cmd
+    assert cmd[cmd.index("--mode") + 1] == "validation"
+    assert "--technique" not in cmd

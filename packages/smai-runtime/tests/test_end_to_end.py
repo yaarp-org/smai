@@ -25,11 +25,17 @@ from smai_runtime import (
     EXIT_OK,
     EXIT_RUNTIME_FAILURE,
     EXIT_USAGE_ERROR,
+    HARNESS_API_MANIFEST_FILENAME,
+    HARNESS_CONTRACT_FILENAME,
     METRICS_FILENAME,
+    TECHNIQUE_CONTRACT_FILENAME,
+    VALIDATION_RESULTS_FILENAME,
     HarnessAPIManifest,
     build_seed_run_outcome,
+    create_workspace_skeleton,
     materialize_workspace,
     run,
+    write_template_files,
 )
 
 
@@ -334,3 +340,127 @@ def test_runner_factor_aware_additive_baseline_runs(
     metrics = json.loads((workspace / METRICS_FILENAME).read_text())
     # No technique contribution: only the harness's default single transform.
     assert metrics["accuracy"] == pytest.approx(0.81, rel=1e-9)
+
+
+def _materialize_partial_workspace(
+    workspace_root: Path,
+    *,
+    harness_contract: HarnessContract,
+    technique_contract: TechniqueContract,
+) -> Path:
+    """Lay down workspace skeleton + templates + the two contracts the
+    harness-builder validation flow stages (harness + baseline technique),
+    WITHOUT the manifest (it is the OUTPUT of a passing validation per
+    04-agents.md §9 step 5 — the catch-22 round 20 fixes).
+    """
+    workspace = create_workspace_skeleton(workspace_root)
+    write_template_files(workspace)
+    contracts_dir = workspace / "contracts"
+    (contracts_dir / HARNESS_CONTRACT_FILENAME).write_text(harness_contract.model_dump_json())
+    (contracts_dir / TECHNIQUE_CONTRACT_FILENAME).write_text(technique_contract.model_dump_json())
+    return workspace
+
+
+def test_validation_mode_runs_with_no_manifest_and_writes_validation_results(
+    tmp_path: Path,
+    additive_harness_contract: HarnessContract,
+    additive_baseline_technique_contract: TechniqueContract,
+) -> None:
+    """Round 20 — validation mode tolerates a missing manifest (the agent
+    runs validation before emitting it) and writes
+    ``validation_results.json`` on the success path so the manifest tool's
+    ``passed: true`` check sees it.
+    """
+    workspace = _materialize_partial_workspace(
+        tmp_path / "ws",
+        harness_contract=additive_harness_contract,
+        technique_contract=additive_baseline_technique_contract,
+    )
+    assert not (workspace / "contracts" / HARNESS_API_MANIFEST_FILENAME).exists()
+    _write_harness(workspace)
+    _write_technique(workspace, "baseline", "def apply(config): return {}\n")
+
+    code = run(
+        [
+            "--technique",
+            "baseline",
+            "--seed",
+            "1",
+            "--mode",
+            "validation",
+            "--workspace",
+            str(workspace),
+        ]
+    )
+    assert code == EXIT_OK
+
+    validation_path = workspace / VALIDATION_RESULTS_FILENAME
+    assert validation_path.is_file(), "validation mode must write validation_results.json"
+    payload = json.loads(validation_path.read_text())
+    assert payload["passed"] is True
+    assert payload["mode"] == "validation"
+    assert payload["technique"] == "baseline"
+    assert payload["seed"] == 1
+    assert "metrics" in payload
+
+
+def test_full_mode_still_rejects_missing_manifest(
+    tmp_path: Path,
+    additive_harness_contract: HarnessContract,
+    additive_baseline_technique_contract: TechniqueContract,
+) -> None:
+    """Full mode is the orchestrator's seed-run path; the dispatcher
+    materializes all three contracts before invoking the runtime, so a
+    missing manifest there IS genuine corruption — unchanged by round 20.
+    """
+    workspace = _materialize_partial_workspace(
+        tmp_path / "ws",
+        harness_contract=additive_harness_contract,
+        technique_contract=additive_baseline_technique_contract,
+    )
+    _write_harness(workspace)
+    _write_technique(workspace, "baseline", "def apply(config): return {}\n")
+
+    code = run(["--technique", "baseline", "--seed", "1", "--workspace", str(workspace)])
+    assert code == EXIT_USAGE_ERROR
+
+
+def test_validation_mode_clear_error_when_technique_contract_absent(
+    tmp_path: Path,
+    additive_harness_contract: HarnessContract,
+    additive_baseline_technique_contract: TechniqueContract,
+    additive_manifest: HarnessAPIManifest,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The technique contract stays REQUIRED in validation mode —
+    ``build_runtime_config`` reads its params + level_value. The error
+    message points at the staging gap so the agent (or the dispatch
+    handler) sees what's missing.
+    """
+    workspace = materialize_workspace(
+        tmp_path / "ws",
+        harness_contract=additive_harness_contract,
+        technique_contract=additive_baseline_technique_contract,
+        manifest=additive_manifest,
+    )
+    # Delete the technique contract that materialize_workspace just wrote.
+    (workspace / "contracts" / TECHNIQUE_CONTRACT_FILENAME).unlink()
+    _write_harness(workspace)
+    _write_technique(workspace, "baseline", "def apply(config): return {}\n")
+
+    code = run(
+        [
+            "--technique",
+            "baseline",
+            "--seed",
+            "1",
+            "--mode",
+            "validation",
+            "--workspace",
+            str(workspace),
+        ]
+    )
+    assert code == EXIT_USAGE_ERROR
+    err_text = capsys.readouterr().err
+    assert TECHNIQUE_CONTRACT_FILENAME in err_text
+    assert "baseline entry" in err_text or "stage" in err_text

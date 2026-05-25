@@ -200,9 +200,12 @@ def make_execute_tool() -> Tool:
             "string — omitting it surfaces as a Pydantic validation "
             "error). Optional `timeout_seconds` (default 120, max 600). "
             "Returns exit code, stdout, and stderr. Output is truncated "
-            "to the last 200 lines / ~5000 tokens. Commands that invoke "
-            "experiment.py are rejected — use the run_experiment tool "
-            "for GPU validation runs."
+            "to the last 200 lines / ~5000 tokens. Do NOT use this tool "
+            "to run experiment.py — use the run_experiment tool instead "
+            "(commands invoking experiment.py are rejected with the "
+            "exact text 'execute does not run experiment.py — use the "
+            "run_experiment tool instead', so retrying the same command "
+            "shape will keep failing)."
         ),
         input_schema=ExecuteInput,
         handler=_execute_handler,

@@ -26,6 +26,7 @@ from _agent_helpers import model_response  # type: ignore[import-not-found]
 from _b2_fakes import FakeCompute  # type: ignore[import-not-found]
 from _b3_fakes import (  # type: ignore[import-not-found]
     SAMPLE_HARNESS_FILES,
+    make_additive_baseline_technique_contract,
     make_harness_contract,
     make_minimal_manifest,
 )
@@ -169,6 +170,9 @@ async def test_run_harness_builder_session_produces_all_four_artifacts(
     outcome = await run_harness_builder_session(
         workspace_path=workspace,
         harness_contract=contract,
+        baseline_technique_contract=make_additive_baseline_technique_contract(
+            parent_harness_contract_hash=contract.envelope.content_hash,
+        ),
         cg_id="cg-fixture",
         llm=llm,
         artifact_store=artifact_store,
@@ -228,6 +232,9 @@ async def test_run_harness_builder_session_lays_down_contract_for_agent(
     await run_harness_builder_session(
         workspace_path=workspace,
         harness_contract=contract,
+        baseline_technique_contract=make_additive_baseline_technique_contract(
+            parent_harness_contract_hash=contract.envelope.content_hash,
+        ),
         cg_id="cg-substitutive",
         llm=llm,
         artifact_store=artifact_store,
@@ -240,6 +247,10 @@ async def test_run_harness_builder_session_lays_down_contract_for_agent(
     assert (workspace / "experiment.py").is_file()
     assert (workspace / "techniques" / "__init__.py").is_file()
     assert (workspace / "contracts" / "harness_contract.json").is_file()
+    # Round 20: the baseline technique contract is staged at the canonical
+    # workspace path so the runtime's load_contracts succeeds during the
+    # agent's run_experiment validation.
+    assert (workspace / "contracts" / "technique_contract.json").is_file()
 
     assert len(captured) == 1
     session = captured[0]
@@ -337,6 +348,9 @@ async def test_run_harness_builder_session_stages_api_reference(tmp_path: Path) 
     await run_harness_builder_session(
         workspace_path=workspace,
         harness_contract=contract,
+        baseline_technique_contract=make_additive_baseline_technique_contract(
+            parent_harness_contract_hash=contract.envelope.content_hash,
+        ),
         cg_id="cg-ref",
         llm=StubLlmProvider([]),
         artifact_store=StubArtifactStore(),
@@ -413,6 +427,9 @@ async def test_run_harness_builder_session_derives_run_experiment_gpu_from_contr
     await run_harness_builder_session(
         workspace_path=workspace,
         harness_contract=contract,
+        baseline_technique_contract=make_additive_baseline_technique_contract(
+            parent_harness_contract_hash=contract.envelope.content_hash,
+        ),
         cg_id="cg-gpu",
         llm=StubLlmProvider([]),
         artifact_store=StubArtifactStore(),
@@ -505,6 +522,9 @@ async def test_run_harness_builder_session_derives_run_experiment_image_from_con
     await run_harness_builder_session(
         workspace_path=workspace,
         harness_contract=contract,
+        baseline_technique_contract=make_additive_baseline_technique_contract(
+            parent_harness_contract_hash=contract.envelope.content_hash,
+        ),
         cg_id="cg-img",
         llm=StubLlmProvider([]),
         artifact_store=StubArtifactStore(),
@@ -538,19 +558,82 @@ _MANIFEST_KEY = "comparison-groups/cg-1/harness/manifest.json"
 
 
 async def _stage_contract(artifact_store: StubArtifactStore) -> None:
-    """Stage the HarnessContract the dispatch handler reads."""
+    """Stage the HarnessContract + baseline TechniqueContract the dispatch
+    handler reads.
+
+    Round 20: the dispatch handler resolves the baseline entry via
+    ``MetadataStore.list_entries_for_cg`` and stages its
+    ``technique_contract.json`` into the agent workspace at
+    ``contracts/technique_contract.json`` so the runtime's
+    ``load_contracts`` succeeds during ``run_experiment`` validation.
+    Tests with the round-19 ``_StubContext`` (no metadata_store) keep
+    using :func:`_make_stub_context` here, which carries a stub
+    metadata_store + the baseline entry.
+    """
     contract = make_harness_contract(factor_type="additive")
     await artifact_store.put(
         "comparison-groups/cg-1/harness/contract.json",
         contract.model_dump_json(indent=2).encode("utf-8"),
         content_type="application/json",
     )
+    # Stage the baseline technique contract at the canonical per-entry key
+    # the dispatch handler reads after resolving the baseline entry id.
+    baseline_tc = make_additive_baseline_technique_contract(
+        parent_harness_contract_hash=contract.envelope.content_hash,
+    )
+    await artifact_store.put(
+        f"comparison-groups/cg-1/entries/{baseline_tc.body.entry_id}/technique_contract.json",
+        baseline_tc.model_dump_json(indent=2).encode("utf-8"),
+        content_type="application/json",
+    )
 
 
-def _make_stub_context(artifact_store: StubArtifactStore, compute: FakeCompute) -> object:
+class _StubEntryRecord:
+    """Minimal EntryRecord shape the dispatch handler reads (id, is_baseline)."""
+
+    def __init__(self, *, id: str, is_baseline: bool) -> None:  # noqa: A002
+        self.id = id
+        self.is_baseline = is_baseline
+
+
+class _StubEntryPage:
+    def __init__(self, items: list[_StubEntryRecord], next_cursor: str | None = None) -> None:
+        self.items = items
+        self.next_cursor = next_cursor
+
+
+class _StubMetadataStore:
+    """Tiny MetadataStore surface: ``list_entries_for_cg`` returning a
+    fixed entry list (one baseline + optional treatments)."""
+
+    def __init__(self, entries: list[_StubEntryRecord]) -> None:
+        self._entries = entries
+
+    async def list_entries_for_cg(
+        self,
+        cg_id: str,  # noqa: ARG002
+        *,
+        limit: int = 100,  # noqa: ARG002
+        cursor: str | None = None,  # noqa: ARG002
+    ) -> _StubEntryPage:
+        return _StubEntryPage(list(self._entries), next_cursor=None)
+
+
+def _default_baseline_entries() -> list[_StubEntryRecord]:
+    """A minimal entry set: one baseline (``entry-baseline`` — matches
+    :func:`make_additive_baseline_technique_contract`'s entry id)."""
+    return [_StubEntryRecord(id="entry-baseline", is_baseline=True)]
+
+
+def _make_stub_context(
+    artifact_store: StubArtifactStore,
+    compute: FakeCompute,
+    *,
+    entries: list[_StubEntryRecord] | None = None,
+) -> object:
     """A minimal DispatchContext-shaped duck-typed object — the handler
-    accesses only ctx.entity_id, ctx.artifact_store, ctx.compute,
-    ctx.llm, ctx.metadata_store, ctx.config."""
+    accesses ctx.entity_id, ctx.artifact_store, ctx.compute, ctx.llm,
+    ctx.metadata_store, ctx.config."""
 
     class _StubContext:
         def __init__(self) -> None:
@@ -561,7 +644,7 @@ def _make_stub_context(artifact_store: StubArtifactStore, compute: FakeCompute) 
             self.artifact_store = artifact_store
             self.compute = compute
             self.llm = StubLlmProvider([])
-            self.metadata_store = None
+            self.metadata_store = _StubMetadataStore(entries or _default_baseline_entries())
             self.config = None
             self.checkpointer = None
 
@@ -698,13 +781,8 @@ async def test_dispatch_harness_build_returns_error_when_llm_missing(
     tmp_path: Path,
 ) -> None:
     """ctx.llm is None → DispatchOutcome carries the error string."""
-    contract = make_harness_contract(factor_type="additive")
     artifact_store = StubArtifactStore()
-    await artifact_store.put(
-        "comparison-groups/cg-1/harness/contract.json",
-        contract.model_dump_json(indent=2).encode("utf-8"),
-        content_type="application/json",
-    )
+    await _stage_contract(artifact_store)
 
     handler = make_dispatch_harness_build(workspace_root=tmp_path)
 
@@ -717,7 +795,7 @@ async def test_dispatch_harness_build_returns_error_when_llm_missing(
             self.artifact_store = artifact_store
             self.compute = FakeCompute()
             self.llm = None
-            self.metadata_store = None
+            self.metadata_store = _StubMetadataStore(_default_baseline_entries())
             self.config = None
             self.checkpointer = None
 
@@ -725,3 +803,123 @@ async def test_dispatch_harness_build_returns_error_when_llm_missing(
     assert outcome.error is not None
     assert "LlmProvider" in outcome.error
     assert outcome.submitted_handles == []
+
+
+# === Round 20: baseline-contract staging ====================================
+#
+# The harness builder's in-loop ``run_experiment`` validation invokes the
+# runtime, which loads ``contracts/technique_contract.json`` even in
+# validation mode (``build_runtime_config`` reads ``technique_params`` /
+# ``level_value``). The dispatch handler is responsible for finding the
+# baseline entry via :meth:`MetadataStore.list_entries_for_cg` and
+# staging its technique contract into the agent workspace at the
+# canonical path. Tests pin: (1) the baseline-entry resolution + ArtifactStore
+# fetch + workspace write; (2) the error path when the metadata_store has
+# no baseline entry; (3) the error path when the baseline's contract is
+# absent from ArtifactStore.
+
+
+@pytest.mark.asyncio
+async def test_dispatch_harness_build_stages_baseline_technique_contract(
+    tmp_path: Path,
+) -> None:
+    """The dispatch handler resolves the baseline entry from
+    MetadataStore, fetches its technique_contract.json from ArtifactStore,
+    and threads it through to ``run_harness_builder_session`` so the
+    session writes it at ``contracts/technique_contract.json``."""
+    artifact_store = StubArtifactStore()
+    await _stage_contract(artifact_store)
+    fake_compute = FakeCompute()
+
+    captured: list[AgentSession] = []
+
+    async def _capture_runner(session: AgentSession) -> AgentOutcome:
+        captured.append(session)
+        # Stand in for the emit_harness_manifest tool so the completeness
+        # check passes.
+        await artifact_store.put(_MANIFEST_KEY, b"{}", content_type="application/json")
+        return AgentOutcome(
+            kind="finished",
+            turn_count=0,
+            usage_total=session.usage_total,
+            finish_success=True,
+            finish_summary="inline",
+        )
+
+    handler = make_dispatch_harness_build(
+        workspace_root=tmp_path,
+        inline_runner=_capture_runner,
+    )
+    outcome = await handler(_make_stub_context(artifact_store, fake_compute))
+    assert outcome.error is None
+
+    # The session's workspace ended up with the baseline technique contract
+    # at the canonical path the runtime's load_contracts reads.
+    workspace = tmp_path / "cg-1"
+    technique_path = workspace / "contracts" / "technique_contract.json"
+    assert technique_path.is_file()
+
+    # And the staged file round-trips to the canonical TechniqueContract.
+    from smai_core import TechniqueContract
+
+    staged = TechniqueContract.model_validate_json(technique_path.read_text())
+    assert staged.body.is_baseline is True
+    assert staged.body.entry_id == "entry-baseline"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_harness_build_errors_when_no_baseline_entry(
+    tmp_path: Path,
+) -> None:
+    """Empty entry list — no baseline at all — surfaces as a DispatchOutcome
+    error rather than parking the CG or crashing inside the session."""
+    artifact_store = StubArtifactStore()
+    # Stage the harness contract but no per-entry technique contract.
+    contract = make_harness_contract(factor_type="additive")
+    await artifact_store.put(
+        "comparison-groups/cg-1/harness/contract.json",
+        contract.model_dump_json(indent=2).encode("utf-8"),
+        content_type="application/json",
+    )
+
+    handler = make_dispatch_harness_build(workspace_root=tmp_path)
+    ctx = _make_stub_context(
+        artifact_store,
+        FakeCompute(),
+        entries=[],  # no baseline entry
+    )
+    outcome = await handler(ctx)
+
+    assert outcome.submitted_handles == []
+    assert outcome.error is not None
+    assert "baseline" in outcome.error.lower()
+
+
+@pytest.mark.asyncio
+async def test_dispatch_harness_build_errors_when_baseline_contract_missing(
+    tmp_path: Path,
+) -> None:
+    """The metadata_store reports a baseline entry but its
+    technique_contract.json is absent from the ArtifactStore — the
+    handler returns a clear DispatchOutcome error."""
+    artifact_store = StubArtifactStore()
+    contract = make_harness_contract(factor_type="additive")
+    await artifact_store.put(
+        "comparison-groups/cg-1/harness/contract.json",
+        contract.model_dump_json(indent=2).encode("utf-8"),
+        content_type="application/json",
+    )
+    # Note: NOT staging the baseline's technique_contract.json.
+
+    handler = make_dispatch_harness_build(workspace_root=tmp_path)
+    # Provide a stub entry list with a baseline entry whose contract is absent.
+    ctx = _make_stub_context(
+        artifact_store,
+        FakeCompute(),
+        entries=[_StubEntryRecord(id="entry-baseline", is_baseline=True)],
+    )
+    outcome = await handler(ctx)
+
+    assert outcome.submitted_handles == []
+    assert outcome.error is not None
+    assert "baseline TechniqueContract" in outcome.error

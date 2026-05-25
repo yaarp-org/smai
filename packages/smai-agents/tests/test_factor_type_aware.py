@@ -18,6 +18,7 @@ import pytest
 from _agent_fakes import StubArtifactStore, StubLlmProvider  # type: ignore[import-not-found]
 from _b2_fakes import FakeCompute  # type: ignore[import-not-found]
 from _b3_fakes import (  # type: ignore[import-not-found]
+    make_additive_baseline_technique_contract,
     make_harness_contract,
 )
 from smai_agents import (
@@ -101,6 +102,9 @@ async def test_run_harness_builder_session_threads_factor_type_into_initial_mess
     await run_harness_builder_session(
         workspace_path=workspace,
         harness_contract=contract,
+        baseline_technique_contract=make_additive_baseline_technique_contract(
+            parent_harness_contract_hash=contract.envelope.content_hash,
+        ),
         cg_id="cg-substitutive",
         llm=StubLlmProvider([]),
         artifact_store=StubArtifactStore(),
@@ -149,6 +153,9 @@ async def test_run_harness_builder_session_additive_threading(
     await run_harness_builder_session(
         workspace_path=workspace,
         harness_contract=contract,
+        baseline_technique_contract=make_additive_baseline_technique_contract(
+            parent_harness_contract_hash=contract.envelope.content_hash,
+        ),
         cg_id="cg-additive",
         llm=StubLlmProvider([]),
         artifact_store=StubArtifactStore(),

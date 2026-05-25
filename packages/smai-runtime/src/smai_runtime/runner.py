@@ -30,6 +30,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, cast
 
+from smai_core import HarnessContract, TechniqueContract
+
 from smai_runtime.errors import (
     NoGoZoneHashError,
     TechniqueOutputContractError,
@@ -37,11 +39,21 @@ from smai_runtime.errors import (
     write_no_go_zone_error,
 )
 from smai_runtime.integrator import integrate_technique_output
+from smai_runtime.manifest import (
+    MANIFEST_SCHEMA_VERSION,
+    HarnessAPIManifest,
+)
 from smai_runtime.metrics import write_metrics
-from smai_runtime.no_go_zone import check_no_go_zones
+from smai_runtime.no_go_zone import RUNTIME_TEMPLATE_VERSION, check_no_go_zones
 from smai_runtime.seed import seed_everything
 from smai_runtime.type_check import check_technique_output
-from smai_runtime.workspace import build_runtime_config, load_contracts
+from smai_runtime.workspace import (
+    HARNESS_API_MANIFEST_FILENAME,
+    HARNESS_CONTRACT_FILENAME,
+    TECHNIQUE_CONTRACT_FILENAME,
+    build_runtime_config,
+    write_validation_results,
+)
 
 RunMode = Literal["validation", "full"]
 
@@ -102,8 +114,23 @@ def run(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     workspace = args.workspace.resolve()
 
+    # Mode-specific contract loading. ``full`` mode requires the full
+    # contract triple (the orchestrator's seed-run dispatcher materializes
+    # all three before invoking the runtime). ``validation`` mode is the
+    # harness-builder / technique-implementer in-loop check that runs
+    # BEFORE the manifest exists — the agent is validating their harness
+    # against the locked contract pair, then emits the manifest as the
+    # outcome of a passing validation. So in validation mode the manifest
+    # is optional; if absent the runtime synthesizes a minimal stub with
+    # the current ``RUNTIME_TEMPLATE_VERSION`` and the loaded contract's
+    # hash, and ``extension_points=[]`` (no splice / type-check work). The
+    # technique contract stays required either way — ``build_runtime_config``
+    # reads its ``technique_params`` / ``level_value`` to produce the
+    # ``config`` dict the harness consumes.
     try:
-        harness_contract, technique_contract, manifest = load_contracts(workspace)
+        harness_contract, technique_contract, manifest = _load_contracts_by_mode(
+            workspace, mode=args.mode
+        )
     except FileNotFoundError as exc:
         print(f"contract artifact missing: {exc}", file=sys.stderr)
         return EXIT_USAGE_ERROR
@@ -235,4 +262,90 @@ def run(argv: list[str] | None = None) -> int:
     metrics = evaluate_fn(trained_model, spliced, config)
     write_metrics(workspace, metrics, harness_contract)
 
+    # Step 11 — validation-mode structured output (§10.4). Written ONLY on
+    # the success path so the manifest tool's ``passed: true`` check (per
+    # 04-agents.md §9 step 3) cannot mistake an aborted run for a passing
+    # validation. Full-mode runs skip this — they're real seed runs, the
+    # verdict path consumes metrics.json directly.
+    if args.mode == "validation":
+        write_validation_results(
+            workspace,
+            {
+                "passed": True,
+                "mode": "validation",
+                "technique": args.technique,
+                "seed": args.seed,
+                "epochs": args.epochs,
+                "subset": args.subset,
+                "metrics": metrics,
+            },
+        )
+
     return EXIT_OK
+
+
+# === Mode-dispatched contract loading =======================================
+
+
+def _load_contracts_by_mode(
+    workspace: Path,
+    *,
+    mode: RunMode,
+) -> tuple[HarnessContract, TechniqueContract, HarnessAPIManifest]:
+    """Load contract artifacts with mode-specific manifest handling.
+
+    Full mode delegates to :func:`load_contracts` — both per-entry seed-run
+    dispatchers materialize all three artifacts before invoking the runtime,
+    so a missing one is genuine corruption.
+
+    Validation mode is the agents' in-loop check. The harness builder
+    validates BEFORE emitting the manifest (manifest is the OUTPUT of a
+    passing validation per 04-agents.md §9 step 5 — running validation
+    before manifest emission is the only way to get a passing validation
+    in the first place). So validation mode tolerates an absent manifest
+    and synthesizes a minimal stub: extension_points=[] (no splice work,
+    no required keys), runtime_template_version = current runtime's
+    constant, parent_harness_contract_hash = loaded contract's hash,
+    schema version = current. The technique contract stays required —
+    :func:`build_runtime_config` needs ``technique_params`` /
+    ``level_value`` to assemble the config dict; the harness builder's
+    workspace setup is responsible for staging the baseline's contract
+    (see :func:`smai_agents.agents.harness_builder.run_harness_builder_session`).
+    """
+    contracts_dir = workspace / "contracts"
+    harness_path = contracts_dir / HARNESS_CONTRACT_FILENAME
+    technique_path = contracts_dir / TECHNIQUE_CONTRACT_FILENAME
+    manifest_path = contracts_dir / HARNESS_API_MANIFEST_FILENAME
+
+    if not harness_path.is_file():
+        raise FileNotFoundError(str(harness_path))
+    harness_contract = HarnessContract.model_validate_json(harness_path.read_text())
+
+    if not technique_path.is_file():
+        raise FileNotFoundError(
+            f"{technique_path} (stage the per-entry technique_contract.json before "
+            "invoking the runtime; in validation mode the harness builder must stage "
+            "the baseline entry's contract from ArtifactStore)"
+        )
+    technique_contract = TechniqueContract.model_validate_json(technique_path.read_text())
+
+    if manifest_path.is_file():
+        manifest = HarnessAPIManifest.model_validate_json(manifest_path.read_text())
+    elif mode == "validation":
+        # Empty extension_points = no-op splice + no required keys; safe for
+        # additive baselines (return {}) but a substitutive baseline returning
+        # a non-empty dict will surface as type_check `unknown_key` inside the
+        # agent's validation loop with no breadcrumb pointing here. Out of
+        # scope for round 20 (cutout dogfooding is additive); future round.
+        manifest = HarnessAPIManifest(
+            extension_points=[],
+            integration_pattern_summary="validation-mode stub (no extension points)",
+            harness_version_hash="",
+            parent_harness_contract_hash=harness_contract.envelope.content_hash,
+            manifest_schema_version=MANIFEST_SCHEMA_VERSION,
+            runtime_template_version=RUNTIME_TEMPLATE_VERSION,
+        )
+    else:
+        raise FileNotFoundError(str(manifest_path))
+
+    return harness_contract, technique_contract, manifest

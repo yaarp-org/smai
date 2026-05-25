@@ -56,7 +56,7 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
-from smai_core import HarnessContract
+from smai_core import HarnessContract, TechniqueContract
 from smai_core.plugins import (
     ArtifactNotFound,
     ArtifactStore,
@@ -66,6 +66,7 @@ from smai_core.plugins import (
 )
 from smai_runtime import (
     HARNESS_CONTRACT_FILENAME,
+    TECHNIQUE_CONTRACT_FILENAME,
     create_workspace_skeleton,
     write_template_files,
 )
@@ -119,6 +120,23 @@ DEFAULT_HARNESS_STATUS_KEY_TEMPLATE = "comparison-groups/{cg_id}/harness/status.
 DEFAULT_HARNESS_NUDGE_KEY_TEMPLATE = "comparison-groups/{cg_id}/harness/nudge.txt"
 DEFAULT_HARNESS_TRACE_KEY_TEMPLATE = "comparison-groups/{cg_id}/harness/conversation-trace.json"
 
+# Per-entry technique-contract key — same template the technique implementer
+# (and the orchestrator's cg_execution / proposal specs) use. Re-stated
+# here as a literal rather than imported from ``smai_agents.agents.technique_implementer``
+# because that module imports from this one (SessionRunner), and an
+# import-back-edge would create a cycle.
+DEFAULT_TECHNIQUE_CONTRACT_KEY_TEMPLATE = (
+    "comparison-groups/{cg_id}/entries/{entry_id}/technique_contract.json"
+)
+
+# Workspace-relative path the runtime's ``load_contracts`` reads when the
+# runner starts. The harness builder stages the BASELINE entry's contract
+# here so the in-loop ``run_experiment`` validation has the
+# ``technique_params`` / ``level_value`` ``build_runtime_config`` needs
+# (the manifest stays absent — the runtime's validation mode synthesizes a
+# stub; the agent emits the real manifest after a passing validation).
+WORKSPACE_TECHNIQUE_CONTRACT_PATH = "contracts/" + TECHNIQUE_CONTRACT_FILENAME
+
 
 # Test-only seam: a ``runner`` callable that takes the assembled
 # :class:`AgentSession` and returns an :class:`AgentOutcome`. Production
@@ -136,6 +154,7 @@ async def run_harness_builder_session(
     *,
     workspace_path: Path,
     harness_contract: HarnessContract,
+    baseline_technique_contract: TechniqueContract,
     cg_id: str,
     llm: LlmProvider,
     artifact_store: ArtifactStore,
@@ -165,6 +184,15 @@ async def run_harness_builder_session(
         harness_contract: The loaded contract (already round-tripped
             from :class:`ArtifactStore`); referenced by the manifest
             tool's hash check + factor-type-aware framing.
+        baseline_technique_contract: The CG's baseline-entry technique
+            contract (``is_baseline=True``). Staged at
+            ``contracts/technique_contract.json`` so the runtime's
+            ``load_contracts`` finds it during the agent's in-loop
+            ``run_experiment`` validation — ``build_runtime_config``
+            reads ``technique_params`` / ``level_value`` off it to
+            assemble the harness config dict. The dispatch handler
+            fetches it from :class:`ArtifactStore` (see
+            :func:`make_dispatch_harness_build`).
         cg_id: The CG identity, threaded into the rendered initial
             user message.
         llm: :class:`LlmProvider` for the harness-builder role.
@@ -216,6 +244,19 @@ async def run_harness_builder_session(
     contract_path = workspace_path / WORKSPACE_HARNESS_CONTRACT_PATH
     contract_path.parent.mkdir(parents=True, exist_ok=True)
     contract_path.write_text(harness_contract.model_dump_json(indent=2))
+
+    # Stage the baseline entry's technique contract so the runtime's
+    # ``load_contracts`` succeeds during the agent's ``run_experiment``
+    # validation. The runtime's validation mode tolerates a missing
+    # ``harness_api_manifest.json`` (synthesizes a stub — manifest is the
+    # OUTCOME of a passing validation per ``04-agents.md`` §9 step 5), but
+    # the technique contract stays required: ``build_runtime_config`` reads
+    # ``technique_params`` / ``level_value`` off it. The agent runs
+    # ``run_experiment(technique="baseline", ...)`` so the baseline entry's
+    # contract is the right one to stage.
+    technique_contract_path = workspace_path / WORKSPACE_TECHNIQUE_CONTRACT_PATH
+    technique_contract_path.parent.mkdir(parents=True, exist_ok=True)
+    technique_contract_path.write_text(baseline_technique_contract.model_dump_json(indent=2))
 
     # Stage the harness-API reference so the agent can learn the ABI it
     # must implement via ``read_file``. The smai_runtime framework source
@@ -318,6 +359,7 @@ def make_dispatch_harness_build(
     runtime_cpu_image: str | None = None,
     harness_contract_artifact_path: Callable[[str], str] | None = None,
     harness_manifest_artifact_path: Callable[[str], str] | None = None,
+    technique_contract_artifact_path: Callable[[str, str], str] | None = None,
     status_artifact_path: Callable[[str], str] | None = None,
     nudge_artifact_path: Callable[[str], str] | None = None,
     inline_runner: SessionRunner | None = None,
@@ -394,10 +436,16 @@ def make_dispatch_harness_build(
     def _default_nudge_path(cg_id: str) -> str:
         return DEFAULT_HARNESS_NUDGE_KEY_TEMPLATE.format(cg_id=cg_id)
 
+    def _default_technique_contract_path(cg_id: str, entry_id: str) -> str:
+        return DEFAULT_TECHNIQUE_CONTRACT_KEY_TEMPLATE.format(cg_id=cg_id, entry_id=entry_id)
+
     contract_path_fn = harness_contract_artifact_path or _default_contract_path
     manifest_path_fn = harness_manifest_artifact_path or _default_manifest_path
     status_path_fn = status_artifact_path or _default_status_path
     nudge_path_fn = nudge_artifact_path or _default_nudge_path
+    technique_contract_path_fn = (
+        technique_contract_artifact_path or _default_technique_contract_path
+    )
 
     async def _dispatch(ctx: Any) -> Any:  # ctx: DispatchContext, returns DispatchOutcome
         from smai_orchestrator.engine.types import DispatchOutcome  # noqa: PLC0415
@@ -423,6 +471,47 @@ def make_dispatch_harness_build(
             return DispatchOutcome(
                 submitted_handles=[],
                 error=(f"HarnessContract at {contract_key!r} failed Pydantic validation: {exc}"),
+            )
+
+        # Find the baseline entry and fetch its technique contract — the
+        # runtime's ``load_contracts`` (called every ``run_experiment``
+        # validation) needs ``contracts/technique_contract.json`` even in
+        # validation mode (``build_runtime_config`` reads ``technique_params``
+        # / ``level_value`` off it). The baseline is the technique the
+        # harness builder validates against.
+        baseline_entry = await _find_baseline_entry(ctx.metadata_store, cg_id)
+        if baseline_entry is None:
+            return DispatchOutcome(
+                submitted_handles=[],
+                error=(
+                    f"No baseline entry (is_baseline=True) found for CG {cg_id!r}; "
+                    "every CG materialized via the planner / orchestrator should have "
+                    "exactly one — the harness builder needs its technique_contract.json "
+                    "staged for the runtime's load_contracts to succeed in validation mode."
+                ),
+            )
+        baseline_contract_key = technique_contract_path_fn(cg_id, baseline_entry.id)
+        try:
+            raw_t = await ctx.artifact_store.get(baseline_contract_key)
+        except ArtifactNotFound:
+            return DispatchOutcome(
+                submitted_handles=[],
+                error=(
+                    f"baseline TechniqueContract not found at ArtifactStore key "
+                    f"{baseline_contract_key!r}; the CG-registration transaction must "
+                    "have written every entry's technique_contract.json before the "
+                    "implementing state was entered."
+                ),
+            )
+        try:
+            baseline_technique_contract = TechniqueContract.model_validate_json(raw_t)
+        except ValueError as exc:
+            return DispatchOutcome(
+                submitted_handles=[],
+                error=(
+                    f"baseline TechniqueContract at {baseline_contract_key!r} "
+                    f"failed Pydantic validation: {exc}"
+                ),
             )
 
         manifest_key = manifest_path_fn(cg_id)
@@ -481,6 +570,7 @@ def make_dispatch_harness_build(
             outcome = await run_harness_builder_session(
                 workspace_path=workspace_path,
                 harness_contract=harness_contract,
+                baseline_technique_contract=baseline_technique_contract,
                 cg_id=cg_id,
                 llm=llm,
                 artifact_store=ctx.artifact_store,
@@ -539,13 +629,43 @@ def make_dispatch_harness_build(
     return _dispatch
 
 
+async def _find_baseline_entry(metadata_store: Any, cg_id: str) -> Any:
+    """Return the ``is_baseline=True`` :class:`EntryRecord` for ``cg_id`` (or
+    ``None`` if no such entry exists).
+
+    The runtime's ``load_contracts`` needs the baseline's
+    ``technique_contract.json`` staged at ``contracts/technique_contract.json``
+    so the harness builder's in-loop ``run_experiment`` validation can read
+    its ``technique_params`` / ``level_value``. Every CG materialized via
+    the planner / orchestrator carries exactly one baseline entry by
+    construction; returning ``None`` here surfaces the corruption rather
+    than failing later inside the runtime.
+
+    Drains all pages of :meth:`MetadataStore.list_entries_for_cg` —
+    matches the orchestrator's
+    :func:`smai_orchestrator.specs.cg_execution._list_all_entries_for_cg`
+    drain pattern.
+    """
+    cursor: str | None = None
+    while True:
+        page = await metadata_store.list_entries_for_cg(cg_id, limit=100, cursor=cursor)
+        for entry in page.items:
+            if entry.is_baseline:
+                return entry
+        if page.next_cursor is None:
+            return None
+        cursor = page.next_cursor
+
+
 __all__ = [
     "DEFAULT_HARNESS_CONTRACT_KEY_TEMPLATE",
     "DEFAULT_HARNESS_MANIFEST_KEY_TEMPLATE",
     "DEFAULT_HARNESS_NUDGE_KEY_TEMPLATE",
     "DEFAULT_HARNESS_STATUS_KEY_TEMPLATE",
     "DEFAULT_HARNESS_TRACE_KEY_TEMPLATE",
+    "DEFAULT_TECHNIQUE_CONTRACT_KEY_TEMPLATE",
     "WORKSPACE_HARNESS_CONTRACT_PATH",
+    "WORKSPACE_TECHNIQUE_CONTRACT_PATH",
     "SessionRunner",
     "make_dispatch_harness_build",
     "run_harness_builder_session",

@@ -340,8 +340,29 @@ def _build_command(
     ``--technique``, ``--seed``, optional ``--epochs`` / ``--subset``.
     The additive-baseline case (``technique is None``) omits
     ``--technique`` so the runtime branches into the no-op default.
+
+    ``--mode validation`` is always passed: this tool is the agents'
+    in-loop check, never the orchestrator's seed-run dispatcher (that
+    path goes through :mod:`smai_orchestrator.specs.run_record`). The
+    runtime's full-mode contract requires the
+    :class:`HarnessAPIManifest` to be present at
+    ``contracts/harness_api_manifest.json`` — but the harness builder
+    runs validation BEFORE emitting the manifest (manifest is the
+    outcome of a passing validation per ``04-agents.md`` §9 step 5),
+    so without ``--mode validation`` the run aborts with
+    ``contract artifact missing``. Validation mode also tells the runtime
+    to write ``validation_results.json`` on success, which
+    :func:`smai_agents.agents.manifest_tool` reads to decide whether
+    the manifest may be emitted (§9 step 3).
     """
-    argv: list[str] = ["python", "experiment.py", "--seed", str(seed)]
+    argv: list[str] = [
+        "python",
+        "experiment.py",
+        "--mode",
+        "validation",
+        "--seed",
+        str(seed),
+    ]
     if technique is not None:
         argv.extend(["--technique", technique])
     argv.extend(["--epochs", str(epochs)])

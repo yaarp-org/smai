@@ -168,3 +168,18 @@ def test_execute_description_flags_required_command() -> None:
     assert "REQUIRED" in desc
     assert "`command`" in desc
     assert "Pydantic validation error" in desc
+
+
+# Round 20: anti-misuse hint. The round-19 re-test agent burned ~15
+# nudges retrying ``execute(command="python experiment.py ...")`` after
+# every guard rejection. The description must call out the
+# experiment.py prohibition AND quote the exact rejection text so the
+# agent recognizes the loop and reaches for ``run_experiment`` instead.
+def test_execute_description_calls_out_experiment_py_prohibition() -> None:
+    tool = make_execute_tool()
+    desc = tool.description
+    assert "experiment.py" in desc
+    assert "run_experiment" in desc
+    # The exact guard rejection text from _execute_handler appears so the
+    # agent can match the message it sees against the description.
+    assert "execute does not run experiment.py" in desc
