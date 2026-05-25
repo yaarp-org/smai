@@ -468,3 +468,83 @@ def test_run_experiment_description_flags_required_seed() -> None:
     assert "REQUIRED" in desc
     assert "`seed`" in desc
     assert "Pydantic validation error" in desc
+
+
+# === Round 18: workspace mount always flows to compute.submit ================
+#
+# The agent writes experiment.py / harness/ / techniques/ to the host
+# workspace; the container that runs experiment.py must see the same
+# path under /workspace via a bind-mount. The tool always forwards
+# ``workspace=str(context.workspace_path)`` to ``Compute.submit`` via
+# plugin_options, and that value cannot be overridden by anything the
+# factory-time caller (or, by extension, the agent) supplies in
+# ``plugin_options``.
+
+
+@pytest.mark.asyncio
+async def test_run_experiment_forwards_workspace_to_compute_submit(
+    tmp_path: Path,
+) -> None:
+    async def drop_metrics(workspace: Path) -> None:
+        (workspace / "metrics.json").write_text(json.dumps({"accuracy": 0.5}))
+
+    fake_compute = FakeCompute(
+        status_queue=[_terminal_succeeded()],
+        on_submit=drop_metrics,
+    )
+    fake_compute.set_workspace(tmp_path)
+    clock = FakeClock()
+    session = make_test_session(
+        tmp_path,
+        compute=fake_compute,
+        time_provider=clock.now,
+    )
+    ctx = make_test_context(session)
+    tool = make_run_experiment_tool(
+        image="smai-runtime:test",
+        gpu=True,
+        wait_helper=_make_immediate_wait_helper(clock),
+    )
+
+    await tool.handler(RunExperimentInput(technique=None, seed=1), ctx)
+
+    assert len(fake_compute.submit_calls) == 1
+    submitted = fake_compute.submit_calls[0]["plugin_options"]
+    assert submitted["workspace"] == str(tmp_path)
+
+
+@pytest.mark.asyncio
+async def test_run_experiment_workspace_not_overridable_by_plugin_options(
+    tmp_path: Path,
+) -> None:
+    """A caller-supplied ``workspace`` in plugin_options cannot redirect
+    the container's bind-mount away from the agent's workspace. The
+    tool's ``context.workspace_path`` always wins."""
+
+    async def drop_metrics(workspace: Path) -> None:
+        (workspace / "metrics.json").write_text(json.dumps({"accuracy": 0.5}))
+
+    fake_compute = FakeCompute(
+        status_queue=[_terminal_succeeded()],
+        on_submit=drop_metrics,
+    )
+    fake_compute.set_workspace(tmp_path)
+    clock = FakeClock()
+    session = make_test_session(
+        tmp_path,
+        compute=fake_compute,
+        time_provider=clock.now,
+    )
+    ctx = make_test_context(session)
+    tool = make_run_experiment_tool(
+        image="smai-runtime:test",
+        gpu=True,
+        plugin_options={"workspace": "/some/wrong/path"},
+        wait_helper=_make_immediate_wait_helper(clock),
+    )
+
+    await tool.handler(RunExperimentInput(technique=None, seed=1), ctx)
+
+    submitted = fake_compute.submit_calls[0]["plugin_options"]
+    assert submitted["workspace"] == str(tmp_path)
+    assert submitted["workspace"] != "/some/wrong/path"

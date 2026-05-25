@@ -239,6 +239,26 @@ def make_run_experiment_tool(
             subset_fraction=subset,
         )
 
+        # The workspace mount is a session-internal concern, not an
+        # agent-tunable option: the container must see the SAME workspace
+        # the agent is writing experiment.py / harness/ / techniques/ into,
+        # so ``_harvest_result`` can read back metrics.json /
+        # validation_results.json from the same host path. Without this,
+        # LocalGpuCompute's container has no bind-mount and the run fails
+        # with "can't open file '/workspace/experiment.py'". The
+        # tool-controlled value must win over anything in ``options`` so a
+        # caller / agent cannot redirect the mount to a different
+        # directory.
+        #
+        # ModalCompute.submit silently ignores unknown ``plugin_options``
+        # keys (it reads only gpu_type / cpu / memory_mb; confirmed at
+        # plugins/smai-compute-modal/src/smai_compute_modal/_compute.py
+        # ~line 171-173), so passing ``workspace=...`` is a no-op on
+        # Modal. TODO: Modal-substrate ``run_experiment`` needs a separate
+        # workspace-distribution mechanism (Modal volumes, or runtime
+        # fetch from ArtifactStore) before validation runs there can see
+        # the agent's workspace.
+        merged_options = {**options, "workspace": str(context.workspace_path)}
         try:
             handle = await compute.submit(
                 image=image,
@@ -246,7 +266,7 @@ def make_run_experiment_tool(
                 env=base_env,
                 gpu=gpu,
                 timeout_seconds=timeout_seconds,
-                **options,
+                **merged_options,
             )
         except ComputeError as exc:
             return _failed_dispatch_result(
