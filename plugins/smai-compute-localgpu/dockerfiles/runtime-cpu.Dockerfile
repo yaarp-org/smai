@@ -31,6 +31,13 @@
 # workspace directory bind-mounted at ``/workspace`` must be writable by
 # uid 1000 (``chmod -R a+rwX`` it, or run smai as uid 1000); on macOS /
 # Docker Desktop the virtiofs mount is writable regardless of host uid.
+#
+# Round 19: smai-core + smai-runtime are baked into the image. The
+# fixed-template ``experiment.py`` (the agent's ``run_experiment`` tool
+# entrypoint, hash-checked and locked) and the seed-run dispatcher's
+# ``python -m smai_runtime.runner`` both import ``smai_runtime``, so the
+# image must carry it. Rebuild this image when either package changes;
+# see ``packages/smai-cli/OPERATIONS.md`` §7.1.
 
 FROM python:3.11-slim-bookworm
 
@@ -65,6 +72,25 @@ RUN pip install --no-cache-dir \
         scipy==1.14.1 \
         einops==0.8.0 \
         timm==1.0.12
+
+# smai-core + smai-runtime per Round 19. Required because the locked
+# fixed-template ``experiment.py`` (smai-runtime/templates/_files/) does
+# ``from smai_runtime.runner import run`` at module top, and the seed-run
+# dispatcher submits ``python -m smai_runtime.runner ...`` against this
+# image. Both consumers run inside this image, not on the host, so the
+# image must carry the packages. Order matters: smai-core is
+# smai-runtime's only first-party dependency (see
+# ``tools/check_deps.py``); install it first so pip resolves the dep
+# locally rather than reaching for PyPI (where these workspace packages
+# are not published). Non-editable install (smaller layer, no
+# ``__editable__`` indirection). Source is removed in the same RUN so it
+# does not survive in the image layer. Build context is the repo root
+# (see header build command).
+COPY packages/smai-core/ /tmp/smai-core/
+COPY packages/smai-runtime/ /tmp/smai-runtime/
+RUN pip install --no-cache-dir /tmp/smai-core \
+    && pip install --no-cache-dir /tmp/smai-runtime \
+    && rm -rf /tmp/smai-core /tmp/smai-runtime
 
 # Workspace mount-point per ``10-runtime-and-templates.md`` §8.5.
 WORKDIR /workspace

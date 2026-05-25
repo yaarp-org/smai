@@ -469,6 +469,13 @@ The reference Dockerfiles live at
 `python:3.11-slim` base). (`agent.Dockerfile` sits alongside them but,
 per the note above, is currently unused.)
 
+> **Round 19:** both runtime Dockerfiles now `COPY` and `pip install`
+> `packages/smai-core/` and `packages/smai-runtime/` (smai-core first,
+> non-editable). Rebuild the image when this Dockerfile changes or
+> when either of those packages changes, otherwise the image's baked
+> smai install will drift from the host's. The repo-root
+> `.dockerignore` (also Round 19) keeps the build context lean.
+
 1. **Build for the substrate's architecture.** Modal and RunPod run an
    `amd64` (`linux/amd64`) substrate. An Apple-Silicon (or other
    `arm64`) operator who builds without an explicit platform pin will

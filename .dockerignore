@@ -1,0 +1,73 @@
+# Repo-root .dockerignore — applied to every `docker build ... .` from
+# this directory. The two runtime Dockerfiles
+# (plugins/smai-compute-localgpu/dockerfiles/runtime{,-cpu}.Dockerfile)
+# COPY packages/smai-core/ and packages/smai-runtime/ into the image
+# (Round 19); without an ignore the daemon receives the whole repo
+# (~hundreds of MB) as build context on every rebuild.
+#
+# This is an exclude-list, not an allowlist. The Dockerfiles only COPY
+# the two paths they need, so anything not COPY-referenced is dropped
+# from the image regardless of what's in context; this file's job is
+# purely to keep the *sent* context small (and incidentally to keep
+# bind-mounted dev-machine cruft from invalidating the build cache).
+
+# Python build/runtime cruft
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+build/
+dist/
+
+# Tooling caches (lots of small files, churn the cache for no reason)
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyright/
+.hypothesis/
+
+# Git + GitHub (the CI workflow ships outside the image)
+.git/
+.github/
+
+# Frontend assets — the runtime images do not serve the SPA
+node_modules/
+apps/ui/dist/
+apps/ui/.turbo/
+apps/ui/.tanstack/
+pnpm-lock.yaml
+
+# Tests. The runtime images run `python -m smai_runtime.runner` and
+# the locked experiment.py template; they do not run pytest. The
+# tests/ trees under each package + the top-level tests/ would
+# otherwise be carried inside the COPY-ed package sources (per-package
+# trees) or as a wasted top-level send. The per-package
+# `tests/_<task>_<purpose>.py` fakes also import sibling-plugin paths
+# that aren't installed in the image, which would just be dead weight.
+tests/
+**/tests/
+
+# Editor / OS noise
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*~
+
+# Local Claude Code workspace state
+.claude/
+CLAUDE.md
+
+# Runtime artifacts written by `smai dev` etc.
+.smai/
+
+# uv lock (the image installs from the package pyproject.toml, not the
+# workspace lock — and the lock changes on every `uv lock` regardless of
+# whether anything the runtime image cares about moved)
+uv.lock
+
+# smai-ui staged SPA bundle (build artifact, never relevant to runtime)
+packages/smai-ui/src/smai_ui/static_spa/
