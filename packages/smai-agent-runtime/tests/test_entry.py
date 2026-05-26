@@ -59,10 +59,12 @@ def test_harness_builder_runs_workflow_with_workspace(
     capsys: pytest.CaptureFixture[str],
     tmp_path: Path,
 ) -> None:
-    """Sub-PR B: with a properly-staged workspace the mini-orchestrator
-    iterates the generated workflow and exits :data:`EXIT_OK`. Fake
-    handlers write canned outputs; sub-PR C replaces them with real
-    PydanticAI agent calls.
+    """Sub-PR C2: with a properly-staged workspace the mini-orchestrator
+    iterates the generated workflow and exits :data:`EXIT_OK`. The
+    body-generation steps run via fake LLM stubs, the validation step
+    runs the staged shim's ``experiment.py`` via real subprocess, the
+    diagnose step passes through (validation succeeded), and the
+    manifest emit step writes ``manifest.json``.
     """
     write_minimal_harness_workspace(tmp_path)
     rc = main(
@@ -82,17 +84,22 @@ def test_harness_builder_runs_workflow_with_workspace(
     assert status_payload["succeeded"] is True
     assert status_payload["cg_id"] == "cg-test-001"
     # 3 body + baseline + validation + diagnose + manifest = 7
-    assert len(status_payload["step_outcomes"]) >= 5
-    # session_start status line surfaces on stdout
-    assert "session_start" in captured.out
-    assert "session_end_success" in captured.out
+    assert len(status_payload["step_outcomes"]) == 7
+    # D10 session.start + session.end status lines surface on stdout.
+    assert '"event_type":"session.start"' in captured.out
+    assert '"event_type":"session.end"' in captured.out
+    assert '"outcome":"success"' in captured.out
 
 
 def test_harness_builder_workflow_writes_canned_artifacts(
     tmp_path: Path,
 ) -> None:
-    """Sub-PR B fake handlers materialize canned files into the
-    workspace so the post-terminal harvest has something to publish."""
+    """Sub-PR C2: the workflow materializes the per-step artifacts:
+    fake-LLM body source under ``harness/__init__.py`` + baseline
+    source under ``techniques/baseline.py``; the real ValidationStep
+    drives the experiment-shim to produce ``validation_results.json``;
+    the real ManifestEmitStep writes ``manifest.json`` against the
+    recomputed harness_version_hash."""
     write_minimal_harness_workspace(tmp_path)
     rc = main(
         [
@@ -113,12 +120,16 @@ def test_harness_builder_workflow_writes_canned_artifacts(
     # baseline step wrote to techniques/baseline.py
     baseline_body = (tmp_path / "techniques" / "baseline.py").read_text()
     assert "baseline" in baseline_body
-    # validation step wrote a passing payload at the workspace root
+    # validation step's real subprocess invocation drove the shim's
+    # experiment.py, which wrote a passing payload at the workspace root.
     validation_payload = json.loads((tmp_path / "validation_results.json").read_text())
-    assert validation_payload["succeeded"] is True
-    # manifest step wrote manifest.json
+    assert validation_payload["passed"] is True
+    # manifest step wrote manifest.json with a recomputed
+    # harness_version_hash from the on-disk harness/ contents.
     manifest_payload = json.loads((tmp_path / "manifest.json").read_text())
     assert "runtime_template_version" in manifest_payload
+    assert manifest_payload["harness_version_hash"]  # non-empty
+    assert manifest_payload["content_hash"]  # freeze_manifest populated
 
 
 def test_harness_builder_resume_flag_is_no_op_stub(
@@ -247,8 +258,11 @@ def test_python_m_subprocess_runs_workflow(tmp_path: Path) -> None:
     # No Python traceback survives — the entry point catches and prints
     # a clean diagnostic instead.
     assert "Traceback" not in proc.stderr
-    # status emit lines visible on stdout
-    assert "session_end_success" in proc.stdout
+    # D10 session.end line visible on stdout (sub-PR C2 replaced the
+    # placeholder "session_end_success" event_type with the structured
+    # event-discriminator catalog).
+    assert '"event_type":"session.end"' in proc.stdout
+    assert '"outcome":"success"' in proc.stdout
 
 
 # === Internal-error fallthrough ==============================================

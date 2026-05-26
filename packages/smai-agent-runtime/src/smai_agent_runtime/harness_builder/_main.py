@@ -1,35 +1,26 @@
 """Harness-builder sandbox-side mini-orchestrator.
 
-Agent-refactor Step 4 sub-PR C1 replaces sub-PR B's fake handlers for
-the two body-generation step types with real PydanticAI
-``Agent(output_type=...)`` calls. The remaining three fake handlers
-(ValidationStep, DiagnoseOnFailureStep, ManifestEmitStep) stay until
-sub-PR C2.
+Agent-refactor Step 4 sub-PR C2 replaces sub-PR B's remaining three
+fake handlers (ValidationStep, DiagnoseOnFailureStep, ManifestEmitStep)
+with real implementations:
 
-Workflow shape:
+* ``ValidationStep`` runs ``python experiment.py --mode validation``
+  via real ``subprocess.run`` and captures the stderr tail.
+* ``DiagnoseOnFailureStep`` builds a D7c :class:`DiagnoseBundle`, calls
+  a PydanticAI Agent bound to :class:`Diagnosis`, and applies the
+  ``fix_payload`` to the named ``fix_target``. ``read_file`` is the
+  only tool exposed and is workspace-scoped per architectural_decisions
+  §12 #1.
+* ``ManifestEmitStep`` recomputes ``harness_version_hash`` from the
+  current on-disk ``harness/`` contents (round-15 discipline; never
+  reuse a stale hash from a prior turn), builds the
+  :class:`HarnessAPIManifest`, freezes it, and writes ``manifest.json``
+  to the workspace.
 
-1. Parse ``--cg-id`` / ``--workspace`` / ``--resume`` argv.
-2. Read :class:`HarnessContract` from ``contracts/harness_contract.json``.
-3. Call :func:`smai_agent_runtime.workflow.generate_workflow` (sub-PR A).
-4. Iterate the resulting :class:`WorkflowStep` list. Body-generation
-   steps invoke PydanticAI Agents bound to the D7a / D7b output schemas;
-   scripted-and-fake steps run the sub-PR B canned-output path.
-5. Write a placeholder ``status.json`` to ``outputs/`` on exit.
-
-The ``--resume <prior_session_id>`` flag is accepted at argparse and
-routed to a no-op stub that exits with "resume not yet implemented in
-workflow shape" — sub-PR D's resume-mode wiring lands on top.
-
-Workspace layout assumed:
-
-    /workspace/contracts/harness_contract.json
-    /workspace/contracts/technique_contract.json    (optional — used by baseline step)
-    /workspace/harness_api_reference.md             (optional — used by body-gen steps)
-    /workspace/harness_api_manifest.json            (optional — used by baseline step)
-    /workspace/grounding/baseline_grounding.json    (optional — used by baseline step)
-    /workspace/harness/ (placeholder from create_workspace_skeleton)
-    /workspace/techniques/ (placeholder from create_workspace_skeleton)
-    /workspace/outputs/ (created here; status.json + validation_results.json land here)
+D10's stdout-JSON status emit lands on the workflow's step iteration:
+``session.start`` / ``step.start`` / ``step.end`` / ``session.cost`` /
+``session.end`` events stream to stdout and to
+``status/events.jsonl`` per architectural_decisions §7.
 """
 
 from __future__ import annotations
@@ -39,15 +30,25 @@ import json
 import os
 import subprocess
 import sys
-from dataclasses import dataclass
+import time
+import uuid
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 from jinja2 import UndefinedError
 from pydantic import BaseModel, ValidationError
 from smai_core.artifacts.harness_contract import HarnessContract
 from smai_core.artifacts.technique_contract import TechniqueContract
 from smai_runtime.components import ADMISSIBLE_PATTERNS_FOR_KEY, COMPONENT_FIELD_FOR_KEY
+from smai_runtime.manifest import (
+    MANIFEST_SCHEMA_VERSION,
+    HarnessAPIManifest,
+    HarnessExtensionPoint,
+    compute_harness_version_hash,
+    freeze_manifest,
+)
+from smai_runtime.no_go_zone import RUNTIME_TEMPLATE_VERSION
 
 from smai_agent_runtime.agent_reasoning import build_agent, get_model_for_step
 from smai_agent_runtime.agent_reasoning.model_selection import (
@@ -57,14 +58,23 @@ from smai_agent_runtime.agent_reasoning.model_selection import (
 from smai_agent_runtime.prompts import load_step_prompt
 from smai_agent_runtime.prompts._loader import render_user_message
 from smai_agent_runtime.schemas import (
+    READ_FILE_BUDGET_PER_ATTEMPT,
+    READ_FILE_MAX_BYTES,
+    STDERR_TAIL_BYTES,
+    STDERR_TAIL_LINES,
+    DiagnoseBundle,
+    Diagnosis,
     ExtensionPointSpec,
     FunctionSignature,
     GroundingContext,
     HarnessBuilderBodyGenerationInput,
     HarnessBuilderBodyGenerationOutput,
+    HarnessOriginalBundleRef,
     LintFailure,
     NoOpBaselineGrounding,
+    OriginalInputBundleRef,
     PaperExtractGrounding,
+    PriorDiagnosis,
     PriorFailedAttempt,
     PriorTechniqueAttempt,
     ProposalGrounding,
@@ -72,6 +82,12 @@ from smai_agent_runtime.schemas import (
     StandardLibraryGrounding,
     TechniqueBodyGenerationBundle,
     TechniqueBodyOutput,
+)
+from smai_agent_runtime.status import (
+    StatusEmitter,
+    WorkflowPlanItem,
+    WorkflowStepKind,
+    _step_label_for_kind,
 )
 from smai_agent_runtime.workflow.generator import TaskRole, generate_workflow
 from smai_agent_runtime.workflow.step_types import (
@@ -83,8 +99,8 @@ from smai_agent_runtime.workflow.step_types import (
     WorkflowStep,
 )
 
-# Sandbox-side exit codes. The host's
-# ``Compute.status(handle).exit_code`` reads these.
+# Sandbox-side exit codes. The host's ``Compute.status(handle).exit_code``
+# reads these.
 EXIT_OK = 0
 EXIT_STEP_FAILED = 1
 EXIT_RESUME_NOT_IMPLEMENTED = 64
@@ -100,19 +116,25 @@ _MAX_LINT_RETRIES: int = 3
 
 # Cap the lint output the agent sees so retry bundles stay below the
 # 50KB-token budget. ~3KB head+tail matches the D7a schema's docstring
-# convention; we hand back the tail (which carries the actionable
-# diagnostic) plus the count of dropped lines if the linter spewed
-# heavily.
+# convention.
 _LINT_OUTPUT_CAP_CHARS: int = 3000
 
-# Test-substitution env var. When set to a truthy value, _run_agent_sync
-# returns a deterministic conforming output for the requested
-# output_type rather than calling the configured LLM. This is the only
-# way the cross-process subprocess test (test_python_m_subprocess_runs_workflow
-# in sub-PR B's test_entry.py) can drive the workflow end-to-end without
-# real Bedrock credentials. In-process tests prefer the per-step
-# monkeypatch-on-_run_agent_sync pattern because it captures the bundle
-# the dispatcher built (the assertion surface the brief calls for).
+# Validation subprocess timeout. CPU-smoke validation in the sandbox is
+# expected to land in seconds; the cap is for safety, not throughput.
+_VALIDATION_TIMEOUT_SECONDS: int = 300
+
+# Default seed if the contract carries no seeds (defensive — the generator
+# already defaults to 0 in that case).
+_DEFAULT_SEED: int = 0
+
+# Validation runner CLI: the in-container ``python experiment.py`` driver
+# with ``--mode validation`` per round-20.
+_VALIDATION_TECHNIQUE_NAME: str = "baseline"
+
+# Test-substitution env var. When set to a truthy value,
+# :func:`_run_agent_sync` returns a deterministic conforming output for
+# the requested output_type rather than calling the configured LLM.
+# In-process tests prefer monkeypatching this callable directly.
 _FAKE_LLM_ENV_VAR: str = "SMAI_AGENT_RUNTIME_FAKE_LLM"
 
 
@@ -124,6 +146,10 @@ class _StepOutcome:
     step_type: str
     succeeded: bool
     error: str | None = None
+    # ValidationStep populates this on failure so the diagnose step's
+    # bundle assembler has the canonical stderr-tail without re-reading
+    # the workspace.
+    captured_stderr: str | None = None
 
 
 @dataclass
@@ -135,24 +161,26 @@ class _DispatchContext:
     contract: HarnessContract
     technique_contract: TechniqueContract | None
     overrides: OverrideMap | None
+    # Populated lazily in :func:`main` once the workspace is resolved.
+    # Held on context so step handlers can emit lifecycle events without
+    # passing the emitter through every helper signature.
+    status: StatusEmitter | None = None
+    # Records the workflow step shape so D7c bundle assembly can
+    # back-reference the body-generation step that produced the failing
+    # code. Filled by :func:`_dispatch_step` before each step runs.
+    body_step_kinds: dict[int, str] = field(default_factory=dict[int, str])
 
 
 def main(args: argparse.Namespace) -> int:
-    """Entry point invoked by :mod:`smai_agent_runtime.__main__`.
-
-    Sub-PR B (Step 4) replaced the Step 3 "not yet implemented" stub
-    with the mini-orchestrator skeleton; sub-PR C1 wires real PydanticAI
-    Agent calls in place of the body-generation fake handlers below.
-    """
+    """Entry point invoked by :mod:`smai_agent_runtime.__main__`."""
     if args.cg_id is None:
         _emit_status_line("error", reason="harness_builder requires --cg-id")
         return EXIT_BAD_WORKSPACE
 
     if args.resume is not None:
-        # Sub-PR D wires resume-mode workflow logic. Sub-PR B's
-        # contract: the flag is accepted at argparse and routes to a
-        # no-op stub so the entry signature is pinned (per arch §12
-        # item 4 — the resume-prep architectural hedge).
+        # Sub-PR D wires resume-mode workflow logic. Sub-PR B's contract:
+        # the flag is accepted at argparse and routes to a no-op stub so
+        # the entry signature is pinned (per arch §12 item 4).
         _emit_status_line(
             "resume_not_implemented",
             cg_id=args.cg_id,
@@ -187,11 +215,26 @@ def main(args: argparse.Namespace) -> int:
         return EXIT_BAD_WORKSPACE
 
     workflow = generate_workflow(contract, TaskRole.HARNESS_BUILDER)
-    _emit_status_line(
-        "session_start",
-        cg_id=args.cg_id,
-        step_count=len(workflow),
-        step_types=[s.step_type for s in workflow],
+
+    # Construct the status emitter once the workspace is resolved so
+    # subsequent emits land in ``status/events.jsonl`` next to the agent
+    # workspace's outputs (host harvests both per Step 1's
+    # ``harvest_workspace``).
+    session_id = f"agent-session-{args.cg_id}-{uuid.uuid4().hex[:8]}"
+    emitter = StatusEmitter(session_id=session_id, workspace=workspace)
+    workflow_plan = [
+        WorkflowPlanItem(
+            step_index=idx,
+            step_kind=step.step_type,
+            step_label=_label_for_step(step),
+        )
+        for idx, step in enumerate(workflow)
+    ]
+    emitter.emit_session_start(
+        agent_role="harness_builder",
+        parent_kind="cg",
+        parent_id=args.cg_id,
+        workflow_plan=workflow_plan,
     )
 
     context = _DispatchContext(
@@ -199,28 +242,75 @@ def main(args: argparse.Namespace) -> int:
         workspace=workspace,
         contract=contract,
         technique_contract=_load_technique_contract(workspace),
-        overrides=None,  # sub-PR D wires the host-side override map; for now env-only.
+        overrides=None,  # sub-PR D wires the host-side override map.
+        status=emitter,
     )
 
     outcomes: list[_StepOutcome] = []
+    last_succeeded_index: int | None = None
     for index, step in enumerate(workflow):
-        _emit_status_line("step_start", step_index=index, step_type=step.step_type)
+        step_kind: WorkflowStepKind = step.step_type
+        # Capture per-index step kind for downstream D7c bundle assembly
+        # so DiagnoseOnFailureStep can resolve the body-generation step
+        # that produced the failing code (used by
+        # ``_resolve_original_bundle_ref``).
+        context.body_step_kinds[index] = step.step_type
+
+        emitter.emit_step_start(
+            step_index=index,
+            step_kind=step_kind,
+            step_label=_label_for_step(step),
+            input_summary=_input_summary_for(step),
+        )
+        start_t = time.monotonic()
         outcome = _dispatch_step(step, index, context, outcomes)
+        elapsed = time.monotonic() - start_t
         outcomes.append(outcome)
+
+        emitter.emit_step_end(
+            step_index=index,
+            step_kind=step_kind,
+            outcome="success" if outcome.succeeded else "failure",
+            duration_seconds=elapsed,
+            failure_reason=outcome.error if not outcome.succeeded else None,
+        )
+
         if outcome.succeeded:
-            _emit_status_line("step_success", step_index=index, step_type=step.step_type)
+            last_succeeded_index = index
         else:
-            _emit_status_line(
-                "step_failure",
-                step_index=index,
-                step_type=step.step_type,
-                reason=outcome.error or "unknown",
+            # Always cap the run with a session.cost (zero-counts here;
+            # the agent loop's real cost surfacing is sub-PR D's host-
+            # side parser surface) plus a session.end carrying the
+            # failure reason.
+            emitter.emit_session_cost(
+                input_tokens=0,
+                output_tokens=0,
+                cache_read_tokens=0,
+                cache_write_tokens=0,
+                turn_count=0,
+                tool_errors_fired=0,
+            )
+            emitter.emit_session_end(
+                outcome="failure",
+                last_completed_step_index=last_succeeded_index,
+                failure_reason=outcome.error or "unknown",
             )
             _write_status_summary(workspace, args.cg_id, outcomes, succeeded=False)
             return EXIT_STEP_FAILED
 
+    emitter.emit_session_cost(
+        input_tokens=0,
+        output_tokens=0,
+        cache_read_tokens=0,
+        cache_write_tokens=0,
+        turn_count=0,
+        tool_errors_fired=0,
+    )
+    emitter.emit_session_end(
+        outcome="success",
+        last_completed_step_index=last_succeeded_index,
+    )
     _write_status_summary(workspace, args.cg_id, outcomes, succeeded=True)
-    _emit_status_line("session_end_success", step_count=len(workflow))
     return EXIT_OK
 
 
@@ -228,13 +318,7 @@ def main(args: argparse.Namespace) -> int:
 
 
 def _resolve_workspace(workspace_arg: object) -> Path | None:
-    """Resolve and validate the ``--workspace`` argv.
-
-    Returns ``None`` if the path does not exist or is not a directory.
-    The :mod:`__main__` entry point's argparse may pass a ``str`` or a
-    pre-parsed ``Path`` depending on how ``type=`` was wired; this
-    helper handles both.
-    """
+    """Resolve and validate the ``--workspace`` argv."""
     if workspace_arg is None:
         return None
     path = Path(str(workspace_arg))
@@ -255,13 +339,7 @@ def _load_contract(workspace: Path) -> HarnessContract | None:
 
 
 def _load_technique_contract(workspace: Path) -> TechniqueContract | None:
-    """Read the staged :class:`TechniqueContract` if the host materialized one.
-
-    Optional: sub-PR B's tests stage only the harness contract. Sub-PR C1's
-    baseline-generation handler uses this when present to drive the
-    grounding lookup; absent, it falls back to a no-op-baseline shape
-    plus a workflow-level warning.
-    """
+    """Read the staged :class:`TechniqueContract` if the host materialized one."""
     contract_path = workspace / "contracts" / "technique_contract.json"
     if not contract_path.exists():
         return None
@@ -275,16 +353,12 @@ def _load_technique_contract(workspace: Path) -> TechniqueContract | None:
 
 
 def _emit_status_line(event_type: str, **fields: Any) -> None:
-    """Write one JSON line to stdout per D10's status-emit schema (placeholder).
+    """Write one JSON line to stdout for pre-emitter / error-path events.
 
-    Sub-PR B's status-emit is the placeholder shape — the full schema
-    (D10 envelope) lands in sub-PR C2 alongside the real status emit.
-    The fields here are intentionally minimal so the host's
-    ``Compute.logs(handle)`` tail surfaces enough to read what
-    happened, without committing to the full schema.
-
-    Flush eagerly so a host worker tailing logs sees progress
-    incrementally (matters for the long-running real-agent path).
+    Used for the narrow set of pre-session-construction errors (bad
+    workspace, missing cg-id, resume stub) that fire before the
+    :class:`StatusEmitter` is wired. After session.start lands, all
+    transitions go through :class:`StatusEmitter`.
     """
     line = json.dumps({"event_type": event_type, **fields}, separators=(",", ":"))
     sys.stdout.write(line + "\n")
@@ -300,9 +374,10 @@ def _write_status_summary(
 ) -> None:
     """Drop a ``status.json`` under ``outputs/`` summarizing the workflow run.
 
-    Placeholder shape; the real D10 stdout-JSON status emit lands in
-    sub-PR C2. The host's post-terminal harvest pulls this back so the
-    operator can read what ran without scraping stdout.
+    Companion summary file to ``status/events.jsonl`` per D10's design
+    (the events.jsonl is the per-emit stream; status.json is the single
+    "what happened" summary the host's post-terminal harvest is most
+    likely to surface in ``smai status <cg_id>``).
     """
     outputs_dir = workspace / "outputs"
     outputs_dir.mkdir(parents=True, exist_ok=True)
@@ -318,9 +393,52 @@ def _write_status_summary(
             }
             for o in outcomes
         ],
-        "note": "sub-PR B/C1 placeholder; real D10 schema lands in sub-PR C2",
     }
     (outputs_dir / "status.json").write_text(json.dumps(payload, indent=2))
+
+
+def _label_for_step(step: WorkflowStep) -> str:
+    """Human-readable step label for status emit + operator surface."""
+    if isinstance(step, HarnessBuilderBodyGenerationStep):
+        return _step_label_for_kind(step.step_type, function_name=step.function_name)
+    return _step_label_for_kind(step.step_type)
+
+
+def _input_summary_for(step: WorkflowStep) -> dict[str, str]:
+    """Build the ``step.start`` ``input_summary`` payload.
+
+    Capped at the load-bearing identification fields per the D10 design
+    note (~10 keys total across step types).
+    """
+    if isinstance(step, HarnessBuilderBodyGenerationStep):
+        return {
+            "function_name": step.function_name,
+            "function_index": str(step.function_index),
+            "write_to_path": step.write_to_path,
+        }
+    if isinstance(step, BaselineGenerationStep):
+        return {
+            "factor_type": step.factor_type,
+            "baseline_technique_id": step.baseline_technique_id,
+            "write_to_path": step.write_to_path,
+        }
+    if isinstance(step, ValidationStep):
+        return {
+            "technique_id": step.technique_id,
+            "seed": str(step.seed),
+            "dispatch_target": step.dispatch_target,
+        }
+    if isinstance(step, DiagnoseOnFailureStep):
+        return {
+            "anchor_step_index": str(step.anchor_step_index),
+            "max_retries": str(step.max_retries),
+        }
+    if isinstance(step, ManifestEmitStep):
+        return {
+            "runtime_template_version": step.runtime_template_version,
+            "parent_harness_contract_hash": step.parent_harness_contract_hash,
+        }
+    return {}
 
 
 # === Per-step dispatcher =====================================================
@@ -332,23 +450,17 @@ def _dispatch_step(
     context: _DispatchContext,
     prior_outcomes: list[_StepOutcome],
 ) -> _StepOutcome:
-    """Sub-PR C1 dispatcher: real handlers for body-generation, fakes elsewhere.
-
-    Sub-PR C2 replaces the ValidationStep / DiagnoseOnFailureStep /
-    ManifestEmitStep fakes with real implementations.
-    """
+    """Per-step dispatcher: every handler is a real implementation."""
     if isinstance(step, HarnessBuilderBodyGenerationStep):
         return _run_body_generation_step(step, index, context)
     if isinstance(step, BaselineGenerationStep):
         return _run_baseline_step(step, index, context)
     if isinstance(step, ValidationStep):
-        return _fake_validation_step(step, index, context.workspace)
+        return _run_validation_step(step, index, context)
     if isinstance(step, DiagnoseOnFailureStep):
-        return _fake_diagnose_step(step, index, prior_outcomes)
+        return _run_diagnose_step(step, index, context, prior_outcomes)
     if isinstance(step, ManifestEmitStep):
-        return _fake_manifest_emit_step(step, index, context.workspace)
-    # Unknown / not-yet-handled step types: explicit failure so the
-    # workflow surfaces them rather than silently advancing.
+        return _run_manifest_emit_step(step, index, context, prior_outcomes)
     return _StepOutcome(
         step_index=index,
         step_type=step.step_type,
@@ -365,19 +477,7 @@ def _run_body_generation_step(
     index: int,
     context: _DispatchContext,
 ) -> _StepOutcome:
-    """Real handler for :class:`HarnessBuilderBodyGenerationStep`.
-
-    Builds the D7a input bundle from workspace artifacts, calls the
-    PydanticAI Agent bound to :class:`HarnessBuilderBodyGenerationOutput`,
-    writes the agent's ``module_source`` to ``write_to_path``, runs
-    ``ruff check`` for syntax, and re-prompts on lint failure with
-    ``prior_failed_attempts`` populated (bounded retries, 3).
-
-    Body-generation steps register no tools per architectural_decisions
-    §12 #1 "Design discipline." If the agent appears to need more
-    information, the fix is to extend the D7a bundle, not to add a
-    ``read_file`` tool.
-    """
+    """Real handler for :class:`HarnessBuilderBodyGenerationStep`."""
     try:
         prompt = load_step_prompt(_ROLE, "step_2_fill_init_py.yaml")
     except (FileNotFoundError, ValueError) as exc:
@@ -476,13 +576,6 @@ def _run_body_generation_step(
                 failure=LintFailure(linter="ruff", output=lint_outcome),
             )
         )
-        _emit_status_line(
-            "lint_retry",
-            step_index=index,
-            step_type=step.step_type,
-            attempt_index=attempt_index,
-            output_tail=lint_outcome[-200:],
-        )
 
     return _StepOutcome(
         step_index=index,
@@ -500,14 +593,7 @@ def _run_baseline_step(
     index: int,
     context: _DispatchContext,
 ) -> _StepOutcome:
-    """Real handler for :class:`BaselineGenerationStep`.
-
-    Builds the D7b input bundle with ``step_kind="baseline"``, resolves
-    the :class:`GroundingContext` from the staged technique-contract +
-    optional grounding artifact, calls the PydanticAI Agent bound to
-    :class:`TechniqueBodyOutput`, writes ``techniques/baseline.py``, and
-    runs the lint-retry loop (bounded retries, 3).
-    """
+    """Real handler for :class:`BaselineGenerationStep`."""
     try:
         prompt = load_step_prompt(_ROLE, "step_4_fill_baseline.yaml")
     except (FileNotFoundError, ValueError) as exc:
@@ -610,13 +696,6 @@ def _run_baseline_step(
                 failure_excerpt=lint_outcome,
             )
         )
-        _emit_status_line(
-            "lint_retry",
-            step_index=index,
-            step_type=step.step_type,
-            attempt_index=attempt_index,
-            output_tail=lint_outcome[-200:],
-        )
 
     return _StepOutcome(
         step_index=index,
@@ -626,19 +705,433 @@ def _run_baseline_step(
     )
 
 
+# === Validation step =========================================================
+
+
+def _run_validation_step(
+    step: ValidationStep,
+    index: int,
+    context: _DispatchContext,
+) -> _StepOutcome:
+    """Real handler for :class:`ValidationStep`.
+
+    Runs ``python experiment.py --mode validation`` via real
+    ``subprocess.run`` inside the sandbox. On success (exit 0 +
+    ``validation_results.json`` written by the runner), the step
+    succeeds and the workflow advances to the diagnose step (which
+    passes through as a no-op when the anchor succeeded) and then to
+    the manifest emit step.
+
+    On failure (non-zero exit OR missing/malformed
+    ``validation_results.json``), the step records the captured stderr
+    tail onto :attr:`_StepOutcome.captured_stderr` so the diagnose step
+    can build a D7c :class:`DiagnoseBundle` without re-running
+    validation.
+
+    ``dispatch_target == "compute_submit"`` is the architectural §1
+    escape hatch (GPU validation via callback to the host Compute
+    Protocol). Not implemented in sub-PR C2; surfaces as an error so
+    the workflow doesn't silently skip validation.
+    """
+    if step.dispatch_target == "compute_submit":
+        return _StepOutcome(
+            step_index=index,
+            step_type=step.step_type,
+            succeeded=False,
+            error=(
+                "dispatch_target='compute_submit' (GPU-validation escape hatch per "
+                "architectural_decisions §1) is not implemented in sub-PR C2; "
+                "the workflow generator currently emits dispatch_target='subprocess' "
+                "and the substrate escape lands in a follow-up."
+            ),
+        )
+
+    experiment_path = context.workspace / "experiment.py"
+    if not experiment_path.exists():
+        return _StepOutcome(
+            step_index=index,
+            step_type=step.step_type,
+            succeeded=False,
+            error=(
+                f"validation requires experiment.py at the workspace root, but "
+                f"{experiment_path} does not exist; the host-side workspace stager "
+                "must materialize the runtime template before sandbox dispatch"
+            ),
+        )
+
+    cmd = [
+        sys.executable,
+        str(experiment_path),
+        "--technique",
+        step.technique_id or _VALIDATION_TECHNIQUE_NAME,
+        "--seed",
+        str(step.seed),
+        "--mode",
+        "validation",
+        "--workspace",
+        str(context.workspace),
+    ]
+    try:
+        proc = subprocess.run(  # noqa: S603
+            cmd,
+            cwd=str(context.workspace),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=_VALIDATION_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        # text=True above means exc.stderr is str when populated; pyright
+        # doesn't narrow the Optional[str | bytes] union, so coerce here.
+        raw_stderr = exc.stderr
+        if isinstance(raw_stderr, bytes):
+            raw_stderr = raw_stderr.decode("utf-8", errors="replace")
+        tail = _tail_text(raw_stderr or "", STDERR_TAIL_LINES, STDERR_TAIL_BYTES)
+        return _StepOutcome(
+            step_index=index,
+            step_type=step.step_type,
+            succeeded=False,
+            error=(
+                f"validation subprocess timed out after {_VALIDATION_TIMEOUT_SECONDS}s; "
+                "the experiment-runner did not return within the configured ceiling"
+            ),
+            captured_stderr=tail,
+        )
+    except FileNotFoundError as exc:
+        return _StepOutcome(
+            step_index=index,
+            step_type=step.step_type,
+            succeeded=False,
+            error=f"validation subprocess could not start: {exc}",
+        )
+
+    stderr_tail = _tail_text(proc.stderr, STDERR_TAIL_LINES, STDERR_TAIL_BYTES)
+
+    if proc.returncode != 0:
+        return _StepOutcome(
+            step_index=index,
+            step_type=step.step_type,
+            succeeded=False,
+            error=(
+                f"validation subprocess exited with code {proc.returncode}; see "
+                "captured stderr for the runner diagnostic"
+            ),
+            captured_stderr=stderr_tail,
+        )
+
+    # Runner exit code is 0 but the runner must have written
+    # ``validation_results.json`` on the success path (round-20 contract).
+    # Missing or malformed JSON => failure, hand off to diagnose.
+    results_path = context.workspace / "validation_results.json"
+    if not results_path.exists():
+        return _StepOutcome(
+            step_index=index,
+            step_type=step.step_type,
+            succeeded=False,
+            error=(
+                "validation exited 0 but did not produce validation_results.json; "
+                "the runner's success-path writer (write_validation_results) did "
+                "not fire — likely a mode-routing or workspace-path bug"
+            ),
+            captured_stderr=stderr_tail,
+        )
+    try:
+        results = json.loads(results_path.read_text())
+    except (ValueError, OSError) as exc:
+        return _StepOutcome(
+            step_index=index,
+            step_type=step.step_type,
+            succeeded=False,
+            error=f"validation_results.json is malformed: {exc}",
+            captured_stderr=stderr_tail,
+        )
+    if not isinstance(results, dict) or cast(dict[str, object], results).get("passed") is not True:
+        return _StepOutcome(
+            step_index=index,
+            step_type=step.step_type,
+            succeeded=False,
+            error=(
+                "validation_results.json does not report passed=True; the runner "
+                "wrote the file but the structured outcome reflects a soft fail"
+            ),
+            captured_stderr=stderr_tail,
+        )
+
+    return _StepOutcome(
+        step_index=index,
+        step_type=step.step_type,
+        succeeded=True,
+    )
+
+
+# === Diagnose-on-failure step (D7c) =========================================
+
+
+def _run_diagnose_step(
+    step: DiagnoseOnFailureStep,
+    index: int,
+    context: _DispatchContext,
+    prior_outcomes: list[_StepOutcome],
+) -> _StepOutcome:
+    """Real handler for :class:`DiagnoseOnFailureStep`.
+
+    Passes through as a no-op when the anchor step succeeded. On anchor
+    failure, builds a D7c :class:`DiagnoseBundle`, calls a PydanticAI
+    Agent bound to :class:`Diagnosis`, applies the ``fix_payload`` to
+    the ``fix_target``, and loops back to revalidate. The agent has
+    one tool — ``read_file`` — workspace-scoped per architectural_decisions
+    §12 #1.
+
+    Bounded retries per :attr:`DiagnoseOnFailureStep.max_retries`. On
+    budget exhaustion, the step returns a clear failure error so the
+    outer orchestrator surfaces "we tried N diagnoses and validation
+    still doesn't pass".
+    """
+    if step.anchor_step_index >= len(prior_outcomes):
+        return _StepOutcome(
+            step_index=index,
+            step_type=step.step_type,
+            succeeded=False,
+            error=(
+                f"anchor_step_index {step.anchor_step_index} out of range "
+                f"(only {len(prior_outcomes)} prior steps)"
+            ),
+        )
+    anchor = prior_outcomes[step.anchor_step_index]
+    if anchor.succeeded:
+        # Pass-through: validation succeeded, no diagnose needed.
+        return _StepOutcome(step_index=index, step_type=step.step_type, succeeded=True)
+
+    try:
+        prompt = load_step_prompt(_ROLE, "step_7_diagnose.yaml")
+    except (FileNotFoundError, ValueError) as exc:
+        return _StepOutcome(
+            step_index=index,
+            step_type=step.step_type,
+            succeeded=False,
+            error=f"failed to load harness_builder/step_7_diagnose.yaml: {exc}",
+        )
+
+    provider, model_id = get_model_for_step(
+        _ROLE,
+        step.step_type,
+        overrides=context.overrides,
+    )
+
+    prior_diagnoses: list[PriorDiagnosis] = []
+    last_anchor = anchor
+    for attempt_index in range(step.max_retries):
+        bundle = _build_diagnose_bundle(
+            anchor=last_anchor,
+            context=context,
+            prior_diagnoses=prior_diagnoses,
+        )
+
+        try:
+            user_message = render_user_message(
+                prompt.initial_user_message_template,
+                bundle.model_dump(mode="json"),
+            )
+        except UndefinedError as exc:
+            return _StepOutcome(
+                step_index=index,
+                step_type=step.step_type,
+                succeeded=False,
+                error=f"prompt template missing variable: {exc}",
+            )
+
+        agent = build_agent(
+            provider=provider,
+            model_id=model_id,
+            output_type=Diagnosis,
+            system_prompt=prompt.system_prompt,
+        )
+        _register_read_file_tool(agent, context.workspace)
+
+        try:
+            diagnosis = _run_agent_sync(agent, user_message, Diagnosis)
+        except _AgentRunError as exc:
+            return _StepOutcome(
+                step_index=index,
+                step_type=step.step_type,
+                succeeded=False,
+                error=f"diagnose agent call failed: {exc}",
+            )
+
+        apply_outcome = _apply_diagnosis(diagnosis, context)
+        if not apply_outcome.applied:
+            # fix_target / kind mismatch or target write failed; record
+            # as did_not_apply and loop (gives the agent another shot
+            # with the corrected context).
+            prior_diagnoses.append(
+                PriorDiagnosis(
+                    attempt_index=attempt_index,
+                    diagnosis_summary=_first_line(diagnosis.diagnosis),
+                    fix_target=diagnosis.fix_target,
+                    fix_payload_preview=diagnosis.fix_payload[:200],
+                    outcome="did_not_apply",
+                )
+            )
+            continue
+
+        # Re-validate by running a fresh ValidationStep against the
+        # anchor's substrate config. If it now passes, the diagnose step
+        # succeeds and the workflow advances to manifest emit.
+        revalidation = _run_validation_step(
+            _validation_step_from_anchor(step.anchor_step_index, context),
+            step.anchor_step_index,  # re-use anchor index for symmetry; outcome is not appended
+            context,
+        )
+        if revalidation.succeeded:
+            # Patch the original anchor outcome so manifest emit's
+            # validation-precondition check passes; this is a deliberate
+            # mutation that reflects the "we fixed it and revalidated"
+            # reality the workflow needs.
+            prior_outcomes[step.anchor_step_index] = _StepOutcome(
+                step_index=step.anchor_step_index,
+                step_type=anchor.step_type,
+                succeeded=True,
+            )
+            return _StepOutcome(
+                step_index=index,
+                step_type=step.step_type,
+                succeeded=True,
+            )
+
+        # Revalidation still failed; record the outcome and loop.
+        last_anchor = revalidation
+        prior_diagnoses.append(
+            PriorDiagnosis(
+                attempt_index=attempt_index,
+                diagnosis_summary=_first_line(diagnosis.diagnosis),
+                fix_target=diagnosis.fix_target,
+                fix_payload_preview=diagnosis.fix_payload[:200],
+                outcome="applied_but_validation_failed_again",
+            )
+        )
+
+    return _StepOutcome(
+        step_index=index,
+        step_type=step.step_type,
+        succeeded=False,
+        error=(
+            f"diagnose-retry budget exhausted ({step.max_retries} attempts); "
+            "validation did not pass after applying the agent's diagnoses"
+        ),
+    )
+
+
+# === Manifest-emit step ======================================================
+
+
+def _run_manifest_emit_step(
+    step: ManifestEmitStep,
+    index: int,
+    context: _DispatchContext,
+    prior_outcomes: list[_StepOutcome],
+) -> _StepOutcome:
+    """Real handler for :class:`ManifestEmitStep`.
+
+    Validation-precondition: a passing :class:`ValidationStep` must
+    exist in the prior outcomes (round-15 / round-20 discipline). On
+    success, recomputes ``harness_version_hash`` from the current
+    on-disk ``harness/`` contents (never reuses a stale hash from a
+    prior turn), builds the :class:`HarnessAPIManifest`, freezes it,
+    and writes ``manifest.json`` to the workspace root.
+
+    Per architectural_decisions.md §12 sub-step 4.8 "all deterministic":
+    the agent does not call a tool to emit the manifest; the workflow
+    runs the emit deterministically.
+    """
+    # Validation precondition: at least one prior step is a successful
+    # ValidationStep. The workflow generator always emits the validation
+    # step before manifest emit, so this also surfaces an out-of-order
+    # workflow as a hard failure rather than silently emitting a
+    # manifest against unvalidated harness code.
+    validation_succeeded = any(
+        outcome.step_type == "validation" and outcome.succeeded for outcome in prior_outcomes
+    )
+    if not validation_succeeded:
+        return _StepOutcome(
+            step_index=index,
+            step_type=step.step_type,
+            succeeded=False,
+            error=(
+                "manifest emit refuses to run: no prior successful ValidationStep "
+                "in the workflow outcomes (round-15 / round-20 discipline; the "
+                "manifest documents a validated harness, never a hopefully-correct one)"
+            ),
+        )
+
+    harness_files = _read_harness_files_bytes(context.workspace)
+    if not harness_files:
+        return _StepOutcome(
+            step_index=index,
+            step_type=step.step_type,
+            succeeded=False,
+            error=(
+                "manifest emit refuses to run: workspace harness/ directory contains "
+                "no files; the harness body-generation steps must have produced at "
+                "least harness/__init__.py before manifest emit"
+            ),
+        )
+    # Round-15: recompute the harness_version_hash from the on-disk
+    # files, never reuse a stale value from an earlier turn. This is
+    # the canonical input the manifest carries.
+    harness_version_hash = compute_harness_version_hash(harness_files)
+
+    # Manifest payload. Extension points come from the harness contract's
+    # factor type (closed v1 set per round-15 introspection); the
+    # integration_pattern_summary is a one-line operator-surface aid.
+    extension_points = _build_manifest_extension_points(context.contract)
+    integration_pattern_summary = _summarize_integration_patterns(extension_points)
+    manifest = HarnessAPIManifest(
+        extension_points=extension_points,
+        integration_pattern_summary=integration_pattern_summary,
+        harness_version_hash=harness_version_hash,
+        parent_harness_contract_hash=step.parent_harness_contract_hash,
+        manifest_schema_version=MANIFEST_SCHEMA_VERSION,
+        runtime_template_version=step.runtime_template_version,
+    )
+    if step.runtime_template_version != RUNTIME_TEMPLATE_VERSION:
+        return _StepOutcome(
+            step_index=index,
+            step_type=step.step_type,
+            succeeded=False,
+            error=(
+                f"step.runtime_template_version {step.runtime_template_version!r} "
+                f"does not match live RUNTIME_TEMPLATE_VERSION "
+                f"{RUNTIME_TEMPLATE_VERSION!r}; the runtime that consumes this "
+                "manifest would reject it at run start"
+            ),
+        )
+
+    frozen = freeze_manifest(manifest)
+    try:
+        (context.workspace / "manifest.json").write_text(
+            frozen.model_dump_json(indent=2),
+            encoding="utf-8",
+        )
+    except OSError as exc:
+        return _StepOutcome(
+            step_index=index,
+            step_type=step.step_type,
+            succeeded=False,
+            error=f"failed to write manifest.json to workspace: {exc}",
+        )
+
+    return _StepOutcome(
+        step_index=index,
+        step_type=step.step_type,
+        succeeded=True,
+    )
+
+
 # === Bundle-construction helpers =============================================
 
 
 def _resolve_extension_points(contract: HarnessContract) -> list[ExtensionPointSpec]:
-    """Construct the D7a ``extension_points`` list from the contract.
-
-    Iterates :data:`COMPONENT_FIELD_FOR_KEY` (the round-15 introspection
-    pattern). The sub-PR C1 placeholder surfaces every closed-v1 key
-    with the contract's factor type setting the ``factor_role``; sub-PR
-    D narrows this to only the keys the contract's factor type
-    implicates once the host-side dispatcher passes a filtered subset
-    through to the sandbox.
-    """
+    """Construct the D7a ``extension_points`` list from the contract."""
     factor_role = (
         "additive_baseline_default"
         if contract.body.factor.type == "additive"
@@ -658,39 +1151,45 @@ def _resolve_extension_points(contract: HarnessContract) -> list[ExtensionPointS
     return specs
 
 
+def _build_manifest_extension_points(
+    contract: HarnessContract,
+) -> list[HarnessExtensionPoint]:
+    """Build the manifest's :class:`HarnessExtensionPoint` list.
+
+    Sub-PR C2 emits an empty extension-point list because the workflow's
+    validation-mode runner already runs against the empty-extension-
+    points stub manifest (round-20 contract). The real per-contract
+    derivation lands in sub-PR D when the host-side dispatcher passes
+    the planner-derived extension-point set through.
+    """
+    _ = contract
+    return []
+
+
+def _summarize_integration_patterns(
+    extension_points: list[HarnessExtensionPoint],
+) -> str:
+    """One-line operator-surface summary of the manifest's patterns."""
+    if not extension_points:
+        return "no extension points (validation-mode stub manifest)"
+    patterns = sorted({ep.integration_pattern for ep in extension_points})
+    return f"integration patterns: {', '.join(patterns)}"
+
+
 def _resolve_baseline_grounding(
     step: BaselineGenerationStep,
     context: _DispatchContext,
 ) -> GroundingContext:
-    """Resolve the D7b :data:`GroundingContext` for the baseline step.
-
-    Sub-PR C1 reads from one of two sources, in priority order:
-
-    1. ``grounding/baseline_grounding.json`` in the workspace (host
-       staged this from upstream ArtifactStore / MetadataStore lookups
-       via :class:`FidelityAnchor.kind`; sub-PR D wires the host side).
-    2. The staged :class:`TechniqueContract`'s ``fidelity_anchor``
-       dispatched per its ``kind``. For non-baseline-friendly variants
-       (paper / proposal anchors with no staged extract / description),
-       falls back to :class:`StandardLibraryGrounding` with the
-       technique-id as the description (visibly broken; sub-PR D
-       finishes the host-side staging so this branch becomes
-       unreachable in practice).
-
-    Additive factors with no anchor default to
-    :class:`NoOpBaselineGrounding` per DEC-013.
-    """
+    """Resolve the D7b :data:`GroundingContext` for the baseline step."""
     staged = context.workspace / "grounding" / "baseline_grounding.json"
     if staged.exists():
         try:
             raw = json.loads(staged.read_text())
             return _adapter_validate_grounding(raw)
-        except (ValueError, OSError) as exc:
-            _emit_status_line(
-                "grounding_staged_invalid",
-                staged_path=str(staged),
-                reason=str(exc),
-            )
+        except (ValueError, OSError):
+            # Fall through to contract-driven resolution; the planner
+            # may not have staged grounding for this baseline yet.
+            pass
 
     if context.technique_contract is None:
         if step.factor_type == "additive":
@@ -739,22 +1238,13 @@ def _resolve_baseline_grounding(
             spec_text=anchor.spec_text,
             attested_by=anchor.attested_by,
         )
-    # Exhaustive over FidelityAnchor.kind; the type checker treats this
-    # branch as unreachable. Defensive fall-through preserves a clean
-    # diagnostic if the union grows in a future revision.
+    # Exhaustive over FidelityAnchor.kind; defensive fall-through.
     return StandardLibraryGrounding(
         technique_description=f"Baseline technique {step.baseline_technique_id!r}."
     )
 
 
 def _adapter_validate_grounding(raw: Any) -> GroundingContext:
-    """Validate a raw dict into the :data:`GroundingContext` union.
-
-    Pydantic v2's :class:`pydantic.TypeAdapter` is the canonical entry
-    point for validating against a discriminated-union alias; we
-    instantiate inline because the alias is the only consumer and the
-    overhead is negligible.
-    """
     from pydantic import TypeAdapter
 
     adapter: TypeAdapter[GroundingContext] = TypeAdapter(GroundingContext)
@@ -776,8 +1266,33 @@ def _read_harness_source(workspace: Path) -> dict[str, str]:
     return sources
 
 
+def _read_harness_files_bytes(workspace: Path) -> dict[str, bytes]:
+    """Collect ``{relative_path: bytes}`` for every regular file under
+    ``<workspace>/harness/``.
+
+    Mirrors the host-side ``emit_harness_manifest`` tool's
+    ``_read_harness_files`` shape so the hash is byte-stable across the
+    sandbox-side and host-side surfaces. Paths are relative to the
+    harness directory so the digest is workspace-position-independent
+    (``compute_harness_version_hash`` sorts internally).
+    """
+    base = workspace / "harness"
+    if not base.is_dir():
+        return {}
+    files: dict[str, bytes] = {}
+    for path in base.rglob("*"):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(base).as_posix()
+        try:
+            files[rel] = path.read_bytes()
+        except OSError:
+            continue
+    return files
+
+
 def _read_or_empty(path: Path) -> str:
-    """Read a text file or return an empty string. Used for optional staged inputs."""
+    """Read a text file or return an empty string."""
     if not path.exists():
         return ""
     try:
@@ -787,23 +1302,12 @@ def _read_or_empty(path: Path) -> str:
 
 
 def _coerce_abi_name(name: str) -> Any:
-    """Cast a raw ABI function name to the schema's ``ABIFunctionName`` Literal.
-
-    Pydantic enforces the Literal at validation time; this helper exists
-    so the type checker is satisfied with the cast at the call site. The
-    workflow generator produces names from the v1 ABI table that match
-    the Literal by construction, so the cast is never lossy at runtime.
-    """
+    """Cast a raw ABI function name to the schema's ``ABIFunctionName`` Literal."""
     return name
 
 
 def _abi_purpose(name: str) -> str:
-    """One-sentence purpose for the ABI function ``name``.
-
-    Hardcoded for the v1 ABI; mirrors the spec text in
-    ``10-runtime-and-templates.md`` §8.2. Future ABIs extend the lookup
-    or carry purpose directly on the contract.
-    """
+    """One-sentence purpose for the ABI function ``name``."""
     purposes = {
         "build_harness": (
             "Construct the experiment harness from `config` and return a "
@@ -822,6 +1326,250 @@ def _abi_purpose(name: str) -> str:
     return purposes.get(name, f"ABI function `{name}`")
 
 
+# === Diagnose-bundle assembly + fix application ==============================
+
+
+def _build_diagnose_bundle(
+    *,
+    anchor: _StepOutcome,
+    context: _DispatchContext,
+    prior_diagnoses: list[PriorDiagnosis],
+) -> DiagnoseBundle:
+    """Assemble the D7c :class:`DiagnoseBundle` from workspace context."""
+    stderr_tail = anchor.captured_stderr or ""
+    failure_reason = anchor.error or "validation failed without a structured reason"
+
+    # Parse validation_results.json if present (the runtime writes it
+    # only on success, so this is typically None on failure; the field
+    # exists for the "soft fail with structured results" future-path).
+    validation_results: dict[str, object] | None = None
+    results_path = context.workspace / "validation_results.json"
+    if results_path.exists():
+        try:
+            raw = json.loads(results_path.read_text())
+            if isinstance(raw, dict):
+                validation_results = cast(dict[str, object], raw)
+        except (ValueError, OSError):
+            validation_results = None
+
+    current_code = _collect_current_code(context.workspace)
+    original_input_bundle = _resolve_original_bundle_ref(context)
+
+    return DiagnoseBundle(
+        failure_reason=failure_reason,
+        container_stderr=stderr_tail,
+        validation_results=validation_results,
+        current_code=current_code,
+        prior_diagnoses=prior_diagnoses,
+        original_input_bundle=original_input_bundle,
+    )
+
+
+def _collect_current_code(workspace: Path) -> dict[str, str]:
+    """Gather the most-recently-written code files for the diagnose bundle.
+
+    Includes every ``.py`` under ``harness/`` and ``techniques/``;
+    these are the surfaces the body-generation steps wrote into. The
+    map is workspace-relative-path -> file content; the agent sees what
+    the prior steps produced without dereferencing any path.
+    """
+    files: dict[str, str] = {}
+    for sub in ("harness", "techniques"):
+        sub_dir = workspace / sub
+        if not sub_dir.is_dir():
+            continue
+        for path in sorted(sub_dir.rglob("*.py")):
+            relative = path.relative_to(workspace)
+            try:
+                files[str(relative)] = path.read_text()
+            except OSError:
+                continue
+    return files
+
+
+def _resolve_original_bundle_ref(context: _DispatchContext) -> OriginalInputBundleRef:
+    """Build the discriminated bundle reference for the harness flow.
+
+    Harness-flow diagnose steps always reference the harness body-
+    generation bundle that produced the failing code. Sub-PR C2's
+    discriminator-walk returns a :class:`HarnessOriginalBundleRef`
+    populated with the contract's factor type plus a placeholder
+    extension-points summary (empty for the validation-mode stub
+    manifest per the D7c design-note §4 chosen variant).
+    """
+    return HarnessOriginalBundleRef(
+        function_signature="def build_harness(config: dict) -> Harness:",
+        factor_type=context.contract.body.factor.type,
+        extension_points_summary=("(validation-mode stub manifest: extension_points=[])"),
+    )
+
+
+def _validation_step_from_anchor(
+    anchor_index: int,
+    context: _DispatchContext,
+) -> ValidationStep:
+    """Re-construct a :class:`ValidationStep` for re-running validation
+    after the diagnose step applied a fix.
+
+    Mirrors the shape the generator originally emitted (round-15
+    drift-guard discipline; consult ``contract.body.seeds[0]`` rather
+    than hardcoding).
+    """
+    _ = anchor_index
+    seed = context.contract.body.seeds[0] if context.contract.body.seeds else _DEFAULT_SEED
+    return ValidationStep(
+        technique_id=_VALIDATION_TECHNIQUE_NAME,
+        seed=seed,
+        dispatch_target="subprocess",
+    )
+
+
+@dataclass
+class _FixApplication:
+    """Result of applying a :class:`Diagnosis`'s ``fix_payload`` to disk."""
+
+    applied: bool
+    target_path: Path | None = None
+    error: str | None = None
+
+
+def _apply_diagnosis(
+    diagnosis: Diagnosis,
+    context: _DispatchContext,
+) -> _FixApplication:
+    """Write ``diagnosis.fix_payload`` to the surface named by ``fix_target``.
+
+    Per architectural_decisions.md §12 sub-step 4.8 "all deterministic":
+    the mini-orchestrator applies the fix, the agent does not. The
+    surface table is:
+
+    * ``harness`` -> ``harness/__init__.py``
+    * ``baseline`` -> ``techniques/baseline.py``
+    * ``config`` -> ``config.yaml``
+    * ``technique`` -> not applicable to harness_builder flows; returns
+      ``applied=False`` so the diagnose step records ``did_not_apply``
+      and the agent picks a different target.
+    """
+    surface_table = {
+        "harness": "harness/__init__.py",
+        "baseline": "techniques/baseline.py",
+        "config": "config.yaml",
+    }
+    if diagnosis.fix_target == "technique":
+        return _FixApplication(
+            applied=False,
+            error=(
+                "fix_target='technique' is not applicable to a harness_builder "
+                "diagnose step; the workflow has no per-technique writable surface "
+                "here (technique_implementer flows accept this target)"
+            ),
+        )
+    relative = surface_table.get(diagnosis.fix_target)
+    if relative is None:
+        return _FixApplication(
+            applied=False,
+            error=f"unknown fix_target {diagnosis.fix_target!r}",
+        )
+    target = context.workspace / relative
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        target.write_text(diagnosis.fix_payload)
+    except OSError as exc:
+        return _FixApplication(
+            applied=False,
+            error=f"failed to write {relative}: {exc}",
+        )
+    return _FixApplication(applied=True, target_path=target)
+
+
+def _register_read_file_tool(agent: Any, workspace: Path) -> None:
+    """Register the workspace-scoped ``read_file`` PydanticAI tool.
+
+    Per architectural_decisions.md §12 #1 "Design discipline":
+    ``read_file`` is the diagnose-step-only escape hatch for
+    genuinely unforeseen lookups. Workspace-rooted paths only (no
+    escape via ``..``); responses are size-capped per
+    :data:`READ_FILE_MAX_BYTES`. The per-attempt call budget
+    (:data:`READ_FILE_BUDGET_PER_ATTEMPT`) is enforced via a
+    closure-scoped counter.
+
+    Implemented as ``@agent.tool_plain`` so the tool signature does not
+    need a ``RunContext`` argument; the workspace path is captured in
+    the closure at registration time.
+    """
+    state = {"call_count": 0}
+
+    @agent.tool_plain
+    def read_file(path: str) -> str:
+        """Read a UTF-8 text file from the agent's workspace.
+
+        ``path`` is workspace-relative (``..`` escapes rejected). The
+        response is truncated at the configured size cap with a
+        structured flag if exceeded. Per-attempt call budget is enforced
+        in-process and surfaces as a structured error.
+
+        Use only when the bundle is missing context you genuinely need
+        for the diagnosis; the bundle is designed to be complete.
+        """
+        if state["call_count"] >= READ_FILE_BUDGET_PER_ATTEMPT:
+            return (
+                f"read_file budget exhausted ({READ_FILE_BUDGET_PER_ATTEMPT} calls "
+                "per diagnose attempt); the bundle is structurally complete by "
+                "design and further reads are a signal that the bundle needs "
+                "extension, not more tool latitude."
+            )
+        state["call_count"] += 1
+        try:
+            resolved = (workspace / path).resolve()
+            resolved.relative_to(workspace.resolve())
+        except ValueError:
+            return f"path {path!r} resolves outside workspace; access denied"
+        if not resolved.exists() or not resolved.is_file():
+            return f"path {path!r} does not exist or is not a regular file"
+        try:
+            data = resolved.read_bytes()
+        except OSError as exc:
+            return f"failed to read {path!r}: {exc}"
+        if len(data) > READ_FILE_MAX_BYTES:
+            truncated = data[:READ_FILE_MAX_BYTES].decode("utf-8", errors="replace")
+            return (
+                truncated
+                + f"\n\n[file truncated at {READ_FILE_MAX_BYTES} bytes "
+                + f"(total {len(data)} bytes)]"
+            )
+        return data.decode("utf-8", errors="replace")
+
+    _ = read_file  # silence unused-binding lint; the decorator registers
+
+
+def _first_line(text: str) -> str:
+    """Return the first non-empty line of ``text`` (capped at 200 chars)."""
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped:
+            return stripped[:200]
+    return ""
+
+
+def _tail_text(text: str, max_lines: int, max_bytes: int) -> str:
+    """Tail ``text`` to the last ``max_lines`` lines, then cap at
+    ``max_bytes`` from the end so the most recent content survives.
+
+    Mirrors the D7c design-note §1 cap-from-end rule.
+    """
+    if not text:
+        return ""
+    lines = text.splitlines()
+    if len(lines) > max_lines:
+        lines = lines[-max_lines:]
+    tail = "\n".join(lines)
+    encoded = tail.encode("utf-8")
+    if len(encoded) > max_bytes:
+        encoded = encoded[-max_bytes:]
+        tail = encoded.decode("utf-8", errors="replace")
+    return tail
+
+
 # === Agent / lint helpers ====================================================
 
 
@@ -829,12 +1577,7 @@ _AgentOutputT = TypeVar("_AgentOutputT", bound=BaseModel)
 
 
 class _AgentRunError(RuntimeError):
-    """Raised when a PydanticAI agent call surfaces an unrecoverable error.
-
-    Sub-PR C1 wraps the run with a thin diagnostic so the caller can
-    drop a clean step-failure message without leaking PydanticAI's
-    internal exception types into the status emit.
-    """
+    """Raised when a PydanticAI agent call surfaces an unrecoverable error."""
 
 
 def _run_agent_sync(
@@ -842,19 +1585,7 @@ def _run_agent_sync(
     user_message: str,
     output_type: type[_AgentOutputT],
 ) -> _AgentOutputT:
-    """Invoke a PydanticAI :class:`Agent` synchronously and unwrap the output.
-
-    Wraps :meth:`Agent.run_sync` so the call site does not import
-    ``pydantic_ai`` directly (keeps the harness_builder module
-    PydanticAI-agnostic at the type level; the dependency lives in
-    :mod:`smai_agent_runtime.agent_reasoning`).
-
-    Test-substitution: when the :data:`_FAKE_LLM_ENV_VAR` env var is
-    truthy, returns :func:`_fake_llm_output` instead of calling the
-    real agent. Required for cross-process subprocess tests; in-process
-    tests prefer monkeypatching this callable directly so they can
-    capture the bundle the dispatcher built.
-    """
+    """Invoke a PydanticAI :class:`Agent` synchronously and unwrap the output."""
     if os.environ.get(_FAKE_LLM_ENV_VAR):
         return _fake_llm_output(output_type, user_message)
 
@@ -875,33 +1606,15 @@ def _fake_llm_output(
     output_type: type[_AgentOutputT],
     user_message: str,
 ) -> _AgentOutputT:
-    """Deterministic conforming output for the requested schema.
-
-    Active only when :data:`_FAKE_LLM_ENV_VAR` is truthy. Produces a
-    minimum-valid Python source body so the downstream lint + write
-    path runs end-to-end; the bodies are intentionally trivial.
-
-    Inspects ``user_message`` for the target function name (body steps
-    re-render with the right discriminator) so the
-    ``output.function_name == step.function_name`` assertion stays
-    intact across the three v1 ABI functions.
-    """
+    """Deterministic conforming output for the requested schema."""
     if output_type is HarnessBuilderBodyGenerationOutput:
-        # The body-generation prompt renders the target ABI function as
-        # ``fill harness/__init__.py body for `<name>``` near the top of
-        # the user message (the H1 in step_2_fill_init_py.yaml's
-        # initial_user_message_template). Look for that exact marker so
-        # the three ABI names disambiguate cleanly: substring matches
-        # like "evaluate" lose to "run_training_loop" because the latter
-        # also contains snippets that overlap with other names'
-        # ``purpose`` prose.
         fn_name: Any = "build_harness"
         for candidate in ("build_harness", "run_training_loop", "evaluate"):
             if f"body for `{candidate}`" in user_message:
                 fn_name = candidate
                 break
         module_source = (
-            '"""Fake-LLM stub module for sub-PR C1 cross-process tests."""\n'
+            '"""Fake-LLM stub module for sub-PR C tests."""\n'
             "\n"
             "def build_harness(config):\n"
             "    return {}\n"
@@ -920,12 +1633,32 @@ def _fake_llm_output(
     if output_type is TechniqueBodyOutput:
         return TechniqueBodyOutput(
             technique_py_source=(
-                '"""Fake-LLM baseline stub for sub-PR C1 cross-process tests."""\n'
+                '"""Fake-LLM baseline stub for sub-PR C tests."""\n'
                 "\n"
                 "def baseline(*args, **kwargs):\n"
                 "    return None\n"
             ),
             reasoning="fake-llm stub: deterministic conforming output for tests",
+        )  # type: ignore[return-value]
+    if output_type is Diagnosis:
+        return Diagnosis(
+            diagnosis=(
+                "Fake-LLM stub diagnosis for tests. The diagnose step's "
+                "real output requires real LLM access."
+            ),
+            fix_target="harness",
+            fix_payload=(
+                '"""Fake-LLM stub harness body for tests."""\n'
+                "\n"
+                "def build_harness(config):\n"
+                "    return {}\n"
+                "\n"
+                "def run_training_loop(harness, technique):\n"
+                "    return {}\n"
+                "\n"
+                "def evaluate(harness, result):\n"
+                "    return {}\n"
+            ),
         )  # type: ignore[return-value]
     raise _AgentRunError(
         f"_FAKE_LLM_ENV_VAR active but no canned output registered for {output_type.__name__!r}"
@@ -936,12 +1669,10 @@ def _run_ruff_check(target_path: Path) -> str | None:
     """Run ``ruff check`` against ``target_path``.
 
     Returns ``None`` on clean lint, or the captured output (head + tail
-    capped) on failure. Errors invoking ruff itself surface as failure
-    output prefixed with ``"ruff invocation error: "`` so the agent
-    sees a structured signal rather than silent success.
+    capped) on failure.
     """
     try:
-        proc = subprocess.run(
+        proc = subprocess.run(  # noqa: S603
             ["ruff", "check", "--no-cache", str(target_path)],
             capture_output=True,
             text=True,
@@ -963,89 +1694,6 @@ def _run_ruff_check(target_path: Path) -> str | None:
             + output[-tail_cap:]
         )
     return output
-
-
-# === Sub-PR B fake handlers (kept until sub-PR C2) ===========================
-
-
-def _fake_validation_step(
-    step: ValidationStep,
-    index: int,
-    workspace: Path,
-) -> _StepOutcome:
-    """Canned passing validation_results.json. Sub-PR C2 replaces with
-    a real ``python experiment.py --mode validation`` subprocess (or
-    Compute submit per the dispatch_target field)."""
-    outputs_dir = workspace / "outputs"
-    outputs_dir.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "succeeded": True,
-        "technique_id": step.technique_id,
-        "seed": step.seed,
-        "dispatch_target": step.dispatch_target,
-        "note": "sub-PR B fake handler; real subprocess validation lands in sub-PR C2",
-    }
-    (outputs_dir / "validation_results.json").write_text(json.dumps(payload, indent=2))
-    (workspace / "validation_results.json").write_text(json.dumps(payload, indent=2))
-    print(
-        f"[sub-PR B fake] validation step {index} wrote canned passing payload",
-        file=sys.stderr,
-    )
-    return _StepOutcome(step_index=index, step_type=step.step_type, succeeded=True)
-
-
-def _fake_diagnose_step(
-    step: DiagnoseOnFailureStep,
-    index: int,
-    prior_outcomes: list[_StepOutcome],
-) -> _StepOutcome:
-    """Conditional: pass-through when the anchor succeeded.
-
-    In the sub-PR B fake-handler shape every :class:`ValidationStep`
-    succeeds, so this branch is always the pass-through path. Sub-PR C2
-    threads the real D7c diagnose bundle through when the anchor
-    actually fails."""
-    if step.anchor_step_index >= len(prior_outcomes):
-        return _StepOutcome(
-            step_index=index,
-            step_type=step.step_type,
-            succeeded=False,
-            error=(
-                f"anchor_step_index {step.anchor_step_index} out of range "
-                f"(only {len(prior_outcomes)} prior steps)"
-            ),
-        )
-    anchor = prior_outcomes[step.anchor_step_index]
-    if anchor.succeeded:
-        return _StepOutcome(step_index=index, step_type=step.step_type, succeeded=True)
-    print(
-        f"[sub-PR B fake] diagnose step {index} would diagnose failure of step "
-        f"{step.anchor_step_index} ({anchor.step_type}); real loop lands in sub-PR C2",
-        file=sys.stderr,
-    )
-    return _StepOutcome(step_index=index, step_type=step.step_type, succeeded=True)
-
-
-def _fake_manifest_emit_step(
-    step: ManifestEmitStep,
-    index: int,
-    workspace: Path,
-) -> _StepOutcome:
-    """Canned manifest.json. Sub-PR C2 wires the real round-15
-    harness_version_hash recompute + ``HarnessAPIManifest`` freeze."""
-    payload: dict[str, Any] = {
-        "runtime_template_version": step.runtime_template_version,
-        "parent_harness_contract_hash": step.parent_harness_contract_hash,
-        "extension_points": [],
-        "harness_version_hash": "sub-pr-b-placeholder-hash",
-        "note": "sub-PR B fake; real round-15 hash + freeze lands in sub-PR C2",
-    }
-    (workspace / "manifest.json").write_text(json.dumps(payload, indent=2))
-    print(
-        f"[sub-PR B fake] manifest_emit step {index} wrote canned manifest.json",
-        file=sys.stderr,
-    )
-    return _StepOutcome(step_index=index, step_type=step.step_type, succeeded=True)
 
 
 __all__ = [
