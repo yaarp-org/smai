@@ -42,25 +42,6 @@ from smai_orchestrator.engine.clock import (
 DEFAULT_RUNTIME_IMAGE = "smai-runtime:dev"
 DEFAULT_RUNTIME_CPU_IMAGE = "smai-runtime-cpu:dev"
 
-# Built-in default agent-image tag.
-#
-# Round 14 made the harness-builder / technique-implementer agents run
-# **in-process in the worker** (mirroring the planner); the abandoned
-# agent-container path was removed. As a result :attr:`EngineConfig.agent_image`
-# is **currently unconsumed** — no code submits a job under this image.
-# The field + constant are deliberately retained, reserved for a
-# possible future re-containerization of the agent fleet (the
-# deferred-hardening note in
-# ``smai_agents.agents.harness_builder``'s module docstring).
-#
-# Reconciliation note: ``smai_compute_localgpu`` carries its own
-# ``DEFAULT_AGENT_IMAGE = "smai-agent:dev"`` literal (its local
-# image-build machinery, also currently unexercised). This module does
-# NOT import it: ``EngineConfig`` is a foundational import and must not
-# pull a plugin onto its module-load path. The two copies must hold the
-# same string; that is asserted by a unit test rather than an import.
-DEFAULT_AGENT_IMAGE = "smai-agent:dev"
-
 
 class RetryBackoffConfig(BaseModel):
     """Named backoff configuration for retry-edge gate rules (`05` §6).
@@ -242,22 +223,6 @@ class EngineConfig(BaseModel):
     :class:`HarnessContract` requests GPU. Override per deployment via
     ``smai.yaml`` (e.g. to point at a published internal image)."""
 
-    agent_image: str = DEFAULT_AGENT_IMAGE
-    """Container image that *would* host agent-side CG-execution jobs.
-
-    **Currently unconsumed.** Round 12 added this field for a
-    containerized harness-builder / technique-implementer dispatch;
-    round 14 removed that path — all six fleet agents (planner, harness
-    builder, technique implementer, code reviewer, contextual evaluator,
-    supervisor) now run in-process in the worker, so no code submits a
-    :class:`Compute` job under this image. The field + the
-    ``agent.Dockerfile`` reference build are retained, reserved for a
-    possible future re-containerization of the agent fleet (the
-    deferred-hardening note in
-    ``smai_agents.agents.harness_builder``'s module docstring covers
-    the costs that would motivate it: ``execute``-tool host isolation
-    and non-blocking dispatch). Until then, setting it has no effect."""
-
     runtime_cpu_image: str = DEFAULT_RUNTIME_CPU_IMAGE
     """Container image hosting experiment seed runs whose
     ``controlled_conditions.compute.gpu`` is ``false`` (round-4 friction
@@ -265,8 +230,7 @@ class EngineConfig(BaseModel):
     multi-arch ``python:3.11-slim-bookworm`` base with CPU torch wheels,
     so CPU-only experiments don't drag in the ~5-8 GB CUDA image and the
     macOS / Apple-Silicon path runs natively. Distinct from
-    :attr:`runtime_image` and from the agent-side ``smai-agent:dev``
-    (which has no ML stack). Selected automatically by the run-record
+    :attr:`runtime_image`. Selected automatically by the run-record
     dispatcher at the same read site as the ``gpu`` flag; override here."""
 
     # ---- Retention sweep (Task 3.H2 / DEC-033 #1, #2) ---------------------

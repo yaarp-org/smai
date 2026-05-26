@@ -100,7 +100,7 @@ plugins:
     model_id: us.anthropic.claude-opus-4-6-v1
   metadata_store_config: {}        # see "Where state lives" below
   artifact_store_config: {}        # localfs default: $SMAI_ARTIFACTS_ROOT or ~/.smai/artifacts
-  compute_config: {}               # localgpu default: smai-runtime:dev / smai-agent:dev images
+  compute_config: {}               # localgpu default: smai-runtime:dev / smai-runtime-cpu:dev images
 
 # smai ui only. The entire block is optional.
 api:
@@ -124,7 +124,7 @@ plugin constructor. Keys are exactly the constructor parameters:
 | `postgres` | `uri`, `use_advisory_locks` (`True`), `tenant_aware` (`False`), `fair_scheduling` (`off`), `fair_scheduling_weights`, `engine_kwargs` (e.g. `{pool_size: 10}`) | URL embeds credentials |
 | `localfs` | `root` (`$SMAI_ARTIFACTS_ROOT` or `~/.smai/artifacts`) | none |
 | `s3` | `bucket` (required), `region`, `prefix` (`""`), `presigned_url_expiry_seconds`, `max_object_size_bytes` | AWS default credential chain; bucket must exist |
-| `localgpu` | `agent_image` (`smai-agent:dev`), `runtime_image` (`smai-runtime:dev`), `runtime_cpu_image` (`smai-runtime-cpu:dev`), `workspace` | Docker running locally; build all three reference images yourself (SMAI does not publish them). On Linux the workspace bind-mount must be writable by uid 1000. |
+| `localgpu` | `runtime_image` (`smai-runtime:dev`), `runtime_cpu_image` (`smai-runtime-cpu:dev`), `workspace` | Docker running locally; build the reference images yourself (SMAI does not publish them). On Linux the workspace bind-mount must be writable by uid 1000. |
 | `modal` | `app_name` (`smai`), `default_gpu_type` (`T4`), `max_timeout_seconds` (`86400`) | `~/.modal.toml` or `MODAL_TOKEN_ID` + `MODAL_TOKEN_SECRET` |
 | `runpod` | `api_base`, `default_gpu_type` (`NVIDIA RTX A4000`), `default_timeout_seconds` (`3600`), `max_timeout_seconds`, `default_container_disk_gb` (`10`) | `RUNPOD_API_KEY` |
 

@@ -684,8 +684,7 @@ def test_verify_runtime_image_config_local_build_passes() -> None:
 def test_verify_runtime_image_config_registry_pull_default_image_fails() -> None:
     """A registry-pull substrate paired with the local-only built-in
     default runtime-image tags is the round-11 bug — FAIL with an
-    actionable message naming every offending field and the runbook.
-    Round 14: the agent image is no longer part of this check."""
+    actionable message naming every offending field and the runbook."""
     result = verify_runtime_image_config(
         _RegistryPullCompute(),
         DEFAULT_RUNTIME_IMAGE,
@@ -694,7 +693,6 @@ def test_verify_runtime_image_config_registry_pull_default_image_fails() -> None
     assert result.ok is False
     assert "engine.runtime_image" in result.reason
     assert "engine.runtime_cpu_image" in result.reason
-    assert "engine.agent_image" not in result.reason
     assert "fake-registry-pull" in result.reason
     assert "OPERATIONS.md" in result.reason
 

@@ -443,9 +443,8 @@ def test_enforce_lease_capability_allows_multi_worker_against_leasing_store() ->
 
 
 # === Worker pre-flight: container-image config check (round 11) ==============
-# Round 14: the harness-builder / technique-implementer agents run
-# in-process, so ``engine.agent_image`` is no longer part of the check —
-# only the experiment-seed-run runtime images are.
+# Covers the experiment-seed-run runtime images
+# (``engine.runtime_image`` / ``engine.runtime_cpu_image``).
 
 _PUB_RUNTIME = "registry.example.com/org/smai-runtime:v2"
 _PUB_RUNTIME_CPU = "registry.example.com/org/smai-runtime-cpu:v2"

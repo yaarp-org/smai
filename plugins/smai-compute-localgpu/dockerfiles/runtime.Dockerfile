@@ -8,10 +8,9 @@
 # stack the runtime expects (torch, torchvision, numpy, scipy, einops,
 # timm) on top of CUDA + cuDNN.
 #
-# Sibling images: ``agent.Dockerfile`` (``smai-agent:dev``, agent-side
-# code exec, no ML stack) and ``runtime-cpu.Dockerfile``
-# (``smai-runtime-cpu:dev``, the lean multi-arch CPU variant the
-# run-record dispatcher picks when ``compute.gpu=false``).
+# Sibling image: ``runtime-cpu.Dockerfile`` (``smai-runtime-cpu:dev``,
+# the lean multi-arch CPU variant the run-record dispatcher picks when
+# ``compute.gpu=false``).
 #
 # Mac caveat: Docker Desktop on macOS / Apple Silicon cannot pass GPU
 # through. This image will build on Mac but ``LocalGpuCompute`` rejects
@@ -106,9 +105,10 @@ RUN pip install --no-cache-dir /tmp/smai-core \
 # Workspace mount-point per ``10-runtime-and-templates.md`` §8.5.
 WORKDIR /workspace
 
-# Default to a non-root user — same rationale as agent.Dockerfile.
-# CUDA + Docker GPU passthrough work fine for non-root containers
-# given the NVIDIA Container Toolkit.
+# Default to a non-root user so an agent's ``write_file`` tool produces
+# files owned by a UID that maps cleanly to the host. CUDA + Docker GPU
+# passthrough work fine for non-root containers given the NVIDIA
+# Container Toolkit.
 RUN useradd --create-home --shell /bin/bash smai
 USER smai
 

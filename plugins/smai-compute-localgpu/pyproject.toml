@@ -37,5 +37,4 @@ packages = ["src/smai_compute_localgpu"]
 # the files at ``dockerfiles/`` next to the package; mirroring the
 # layout in the wheel keeps both invocations consistent.
 [tool.hatch.build.targets.wheel.force-include]
-"dockerfiles/agent.Dockerfile" = "smai_compute_localgpu/dockerfiles/agent.Dockerfile"
 "dockerfiles/runtime.Dockerfile" = "smai_compute_localgpu/dockerfiles/runtime.Dockerfile"

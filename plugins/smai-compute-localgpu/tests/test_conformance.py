@@ -78,7 +78,7 @@ class TestLocalGpuComputeConformance(ComputeConformance):
 
     def make_compute(self) -> Compute:
         try:
-            return LocalGpuCompute(agent_image="smai-agent:dev")
+            return LocalGpuCompute()
         except ComputeUnavailable as exc:  # pragma: no cover — guarded by pytestmark
             pytest.skip(f"Docker preflight failed: {exc}")
 
@@ -88,6 +88,6 @@ class TestLocalGpuComputeConformance(ComputeConformance):
         # (every call is a fresh subprocess) but the contract is
         # cleaner with a separately-constructed object.
         try:
-            return LocalGpuCompute(agent_image="smai-agent:dev")
+            return LocalGpuCompute()
         except ComputeUnavailable as exc:  # pragma: no cover
             pytest.skip(f"Docker preflight failed: {exc}")

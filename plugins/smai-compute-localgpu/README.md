@@ -23,15 +23,6 @@ pip install smai-compute-localgpu
 
 SMAI does not publish prebuilt images. Build the reference Dockerfiles yourself before first use.
 
-### Agent image (CPU, ~500 MB)
-
-Used when `LocalGpuCompute.submit(..., gpu=False)` for agent-side code execution (harness builder, technique implementer, code reviewer, contextual evaluator).
-
-```bash
-docker build -t smai-agent:dev \
-    -f plugins/smai-compute-localgpu/dockerfiles/agent.Dockerfile .
-```
-
 ### Runtime image (GPU, ~5–8 GB)
 
 Used when `LocalGpuCompute.submit(..., gpu=True)` for GPU experiment seed runs.
@@ -39,6 +30,15 @@ Used when `LocalGpuCompute.submit(..., gpu=True)` for GPU experiment seed runs.
 ```bash
 docker build -t smai-runtime:dev \
     -f plugins/smai-compute-localgpu/dockerfiles/runtime.Dockerfile .
+```
+
+### Runtime image (CPU, ~1–2 GB)
+
+Used when `LocalGpuCompute.submit(..., gpu=False)` for CPU experiment seed runs.
+
+```bash
+docker build -t smai-runtime-cpu:dev \
+    -f plugins/smai-compute-localgpu/dockerfiles/runtime-cpu.Dockerfile .
 ```
 
 If `LocalGpuCompute.submit` is called with one of these tags and the image isn't built, the plugin raises `JobImageInvalid` with the exact `docker build` command embedded in the error.
@@ -51,7 +51,7 @@ GPU passthrough requires the [NVIDIA Container Toolkit](https://docs.nvidia.com/
 
 Docker Desktop on macOS / Apple Silicon **cannot pass GPU through**. On Darwin:
 
-* The agent image (`gpu=False`) works fine.
+* CPU jobs (`gpu=False`) work fine.
 * `submit(..., gpu=True)` raises `ComputeUnavailable` immediately with a pointer to `smai-compute-modal` / `smai-compute-runpod` for GPU experiment runs.
 * The plugin's `capabilities.supports_gpu` is reported as `False` on Darwin.
 
@@ -62,12 +62,12 @@ This is a Docker / macOS limitation, not a SMAI policy choice. The plugin fails 
 ```python
 from smai_compute_localgpu import LocalGpuCompute
 
-compute = LocalGpuCompute()  # uses smai-agent:dev / smai-runtime:dev defaults
+compute = LocalGpuCompute()  # uses smai-runtime:dev / smai-runtime-cpu:dev defaults
 
 handle = await compute.submit(
-    image="smai-agent:dev",
-    command=["python", "agent_loop.py"],
-    env={"SMAI_TASK": "harness_build"},
+    image="smai-runtime-cpu:dev",
+    command=["python", "-m", "smai_runtime.runner"],
+    env={},
     timeout_seconds=3600,
     workspace="/path/to/workspace",  # bind-mounted at /workspace
 )

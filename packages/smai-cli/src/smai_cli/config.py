@@ -187,7 +187,7 @@ def dev_defaults() -> dict[str, Any]:
                 # or ~/.smai/artifacts, applied by the plugin itself.
             },
             "compute_config": {
-                # LocalGpuCompute uses smai-runtime:dev / smai-agent:dev
+                # LocalGpuCompute uses smai-runtime:dev / smai-runtime-cpu:dev
                 # by default per `10-runtime-and-templates.md` §8.5.
             },
         },

@@ -16,11 +16,9 @@ Two surfaces:
   :class:`ArtifactStore`, populates the workspace, and runs the agent
   loop **in-process in the worker** — exactly as the planner dispatch
   does (``smai_agents.agents.planner.make_dispatch_planner``). Round 14
-  removed the abandoned containerized-agent path: there was no agent
-  CLI entry point, ``agent.Dockerfile`` installed no smai packages, and
-  the substrate bind-mounted nothing — every container exited with
-  ``ModuleNotFoundError``. After the session the handler publishes the
-  agent's workspace outputs to :class:`ArtifactStore`
+  removed the abandoned containerized-agent path. After the session the
+  handler publishes the agent's workspace outputs to
+  :class:`ArtifactStore`
   (:func:`smai_agents.agents.artifact_publish.publish_workspace_outputs`)
   and synthesizes an ``inline-<cg_id>`` :class:`JobHandle`; the
   ``implementing`` state's edges are ``dispatch_time`` (not
@@ -33,8 +31,7 @@ Two production-hardening costs are knowingly deferred (acceptable for
 in a container — no isolation; (b) the multi-turn agent loop runs
 synchronously and blocks the worker's poll cycle for its full
 duration — the dispatch is not made non-blocking. Both are tracked for
-a future re-containerization, which is also why
-:attr:`EngineConfig.agent_image` is kept (currently unconsumed).
+the agent-layer refactor's sandboxed-execution path.
 
 Factor-type-aware framing (DEC-017 / §9 of ``10-runtime-and-templates.md``):
 the harness builder always builds the same code shape; what differs is

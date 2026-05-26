@@ -399,9 +399,7 @@ few that bite in practice:
   selects `smai-runtime:dev` for GPU experiment runs and
   `smai-runtime-cpu:dev` for `controlled_conditions.compute.gpu: false`
   ones; override the names via `engine.runtime_image` /
-  `engine.runtime_cpu_image`. (Round 14: the harness-builder /
-  technique-implementer agents run in-process — no `smai-agent:dev`
-  image is needed; see §7.1.) Both images run as the non-root `smai`
+  `engine.runtime_cpu_image`. Both images run as the non-root `smai`
   user (uid 1000), and `LocalGpuCompute` bind-mounts a per-CG
   workspace dir at `/workspace`; on Linux that dir must be writable by
   uid 1000 (`chmod -R a+rwX` the `workspace_root`, or run `smai` as uid
@@ -438,15 +436,6 @@ few that bite in practice:
 
 ## 7.1 Building and publishing the runtime images
 
-> **Round 14:** the agent image (`engine.agent_image` / `agent.Dockerfile`)
-> is **currently unused** — all six fleet agents, including the harness
-> builder and technique implementer, run in-process in the worker, so no
-> agent container is ever submitted. The `engine.agent_image` field and
-> `agent.Dockerfile` are retained, reserved for a possible future
-> re-containerization; you do **not** need to build or publish the agent
-> image. This section covers only the two runtime (experiment-seed-run)
-> images.
-
 A registry-pull compute substrate (`modal`, `runpod`) cannot use the
 built-in default `engine.runtime_image` / `engine.runtime_cpu_image`
 values (`smai-runtime:dev` / `smai-runtime-cpu:dev`). Those are
@@ -466,8 +455,7 @@ it does not.
 The reference Dockerfiles live at
 `plugins/smai-compute-localgpu/dockerfiles/runtime.Dockerfile` (GPU,
 `nvidia/cuda` base) and `runtime-cpu.Dockerfile` (CPU-only, lean
-`python:3.11-slim` base). (`agent.Dockerfile` sits alongside them but,
-per the note above, is currently unused.)
+`python:3.11-slim` base).
 
 > **Round 19:** both runtime Dockerfiles now `COPY` and `pip install`
 > `packages/smai-core/` and `packages/smai-runtime/` (smai-core first,

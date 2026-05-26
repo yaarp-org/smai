@@ -708,8 +708,8 @@ plugins:
   metadata_store_config: {}
   # Empty {} ⇒ localfs root = $SMAI_ARTIFACTS_ROOT or ~/.smai/artifacts.
   artifact_store_config: {}
-  # Empty {} ⇒ localgpu uses the smai-runtime:dev / smai-agent:dev images
-  # (build them locally first — SMAI does not publish them).
+  # Empty {} ⇒ localgpu uses the smai-runtime:dev / smai-runtime-cpu:dev
+  # images (build them locally first — SMAI does not publish them).
   compute_config: {}
 
 pipelines:

@@ -20,7 +20,6 @@ from unittest.mock import patch
 
 import pytest
 from smai_compute_localgpu import (
-    DEFAULT_AGENT_IMAGE,
     DEFAULT_RUNTIME_CPU_IMAGE,
     DEFAULT_RUNTIME_IMAGE,
     LocalGpuCompute,
@@ -34,7 +33,6 @@ from smai_core.plugins import (
 
 def test_default_image_tags_match_documented_defaults() -> None:
     """The build-hint format depends on these tag names — pin them."""
-    assert DEFAULT_AGENT_IMAGE == "smai-agent:dev"
     assert DEFAULT_RUNTIME_IMAGE == "smai-runtime:dev"
     assert DEFAULT_RUNTIME_CPU_IMAGE == "smai-runtime-cpu:dev"
 
@@ -87,28 +85,19 @@ async def test_submit_gpu_true_on_mac_raises_with_modal_runpod_hint() -> None:
     assert "modal" in msg.lower() or "runpod" in msg.lower()
 
 
-def test_build_hint_for_default_agent_image() -> None:
+def test_build_hint_for_default_runtime_image() -> None:
     """The SMAI-default tag check produces the documented build command
     in the missing-image error (Task 2.A4 acceptance: "missing-image
     error contains the exact build command")."""
     instance = LocalGpuCompute(skip_preflight=True)
     err = instance._make_image_invalid(  # pyright: ignore[reportPrivateUsage]
-        DEFAULT_AGENT_IMAGE, "image not found"
-    )
-    assert isinstance(err, JobImageInvalid)
-    assert err.image == DEFAULT_AGENT_IMAGE
-    assert "docker build" in err.reason
-    assert "agent.Dockerfile" in err.reason
-    assert DEFAULT_AGENT_IMAGE in err.reason
-
-
-def test_build_hint_for_default_runtime_image() -> None:
-    instance = LocalGpuCompute(skip_preflight=True)
-    err = instance._make_image_invalid(  # pyright: ignore[reportPrivateUsage]
         DEFAULT_RUNTIME_IMAGE, "image not found"
     )
     assert isinstance(err, JobImageInvalid)
+    assert err.image == DEFAULT_RUNTIME_IMAGE
+    assert "docker build" in err.reason
     assert "runtime.Dockerfile" in err.reason
+    assert DEFAULT_RUNTIME_IMAGE in err.reason
 
 
 def test_build_hint_for_default_runtime_cpu_image() -> None:

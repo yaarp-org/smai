@@ -11,11 +11,9 @@
 # on Apple Silicon (no amd64-under-Rosetta emulation, unlike the
 # ``nvidia/cuda``-based ``runtime.Dockerfile``).
 #
-# This is distinct from ``agent.Dockerfile`` (``smai-agent:dev``): the
-# agent image is for agent-side *code execution* and deliberately has no
-# ML stack; this image is for *training runs* and does. It is selected
-# automatically by the run-record dispatcher when ``compute.gpu=false``;
-# override the name via ``engine.runtime_cpu_image`` in ``smai.yaml``.
+# It is selected automatically by the run-record dispatcher when
+# ``compute.gpu=false``; override the name via ``engine.runtime_cpu_image``
+# in ``smai.yaml``.
 #
 # Build with::
 #

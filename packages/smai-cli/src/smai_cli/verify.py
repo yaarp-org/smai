@@ -30,20 +30,18 @@ Probe semantics (per the Task 3.G3 brief carry-forward #4):
   (auth failure, substrate unreachable) surfaces as a verify
   failure.
 
-* **Container-image config** (round 11 / round 12) —
+* **Container-image config** (round 11) —
   :func:`verify_runtime_image_config` is a free, deterministic,
   always-on check: when the configured :class:`Compute` substrate is
   registry-pull (:attr:`ComputeCapabilities.requires_published_image`),
   it fails if ``engine.runtime_image`` / ``runtime_cpu_image`` (the
-  experiment-seed-run images, round 11) or ``engine.agent_image`` (the
-  harness-builder / technique-implementer agent-side image, round 12)
-  are still the local-only built-in defaults the substrate cannot pull.
-* **Container-image real probe** (round 11 / round 12, opt-in) —
+  experiment-seed-run images, round 11) are still the local-only
+  built-in defaults the substrate cannot pull.
+* **Container-image real probe** (round 11, opt-in) —
   :func:`verify_runtime_image_probe` is gated behind
   ``smai verify --probe-image``: it submits a trivial no-op job per
-  configured image (the two runtime images + the agent image, deduped)
-  to confirm pullability. It costs real money / time, so it is opt-in
-  only.
+  configured runtime image (deduped) to confirm pullability. It costs
+  real money / time, so it is opt-in only.
 
 No new Protocol methods are introduced — every probe uses an existing
 method (the image probe uses ``submit`` / ``cancel``). Where
@@ -79,8 +77,7 @@ _VERIFY_PROBE_HANDLE = "smai-verify-probe-handle-that-does-not-exist"
 # Doc pointer surfaced in the container-image config-check failure
 # message (and the build-and-push runbook it references).
 _CONTAINER_IMAGE_RUNBOOK = (
-    "packages/smai-cli/OPERATIONS.md, section "
-    "'Building and publishing the runtime and agent images'"
+    "packages/smai-cli/OPERATIONS.md, section 'Building and publishing the runtime images'"
 )
 
 
@@ -289,11 +286,6 @@ def verify_runtime_image_config(
     cannot pull them. Left unchecked the failure surfaces as an opaque
     ``RemoteError: Image build ... failed`` mid-CG-execution — this
     catches it at pre-flight with a concrete pointer.
-
-    Round 14: ``engine.agent_image`` is no longer checked — the
-    harness-builder / technique-implementer agents run in-process in
-    the worker, so that image is never submitted to :class:`Compute`
-    (the field is retained, currently unconsumed).
 
     Local-build substrates (``requires_published_image`` ``False``,
     e.g. ``LocalGpu``) always pass: building the default tags locally is
