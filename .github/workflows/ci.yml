@@ -59,3 +59,14 @@ jobs:
         with:
           dockerfile: plugins/smai-compute-localgpu/dockerfiles/runtime-cpu.Dockerfile
           recursive: false
+
+      - name: hadolint (agent-runtime.Dockerfile)
+        # Sandbox-side image for the agent-layer refactor's harness_builder
+        # / technique_implementer mini-orchestrators (Step 3, D4 §6).
+        # CI does not build or push the image — the operator builds
+        # locally and publishes per OPERATIONS.md §7.1. This step is a
+        # static lint over the Dockerfile syntax / best-practices.
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: plugins/smai-compute-localgpu/dockerfiles/agent-runtime.Dockerfile
+          recursive: false

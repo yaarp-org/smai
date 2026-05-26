@@ -41,6 +41,15 @@
       ]
     },
     {
+      "root": "packages/smai-agent-runtime",
+      "reportMissingImports": "error",
+      "extraPaths": [
+        "packages/smai-agent-runtime/src",
+        "packages/smai-core/src",
+        "packages/smai-runtime/src"
+      ]
+    },
+    {
       "root": "plugins/smai-llm-bedrock",
       "reportMissingImports": "error",
       "extraPaths": [
@@ -170,6 +179,7 @@
     "packages/smai-core/src",
     "packages/smai-orchestrator/src",
     "packages/smai-agents/src",
+    "packages/smai-agent-runtime/src",
     "packages/smai-cli/src",
     "packages/smai-api-spec/src",
     "packages/smai-api-conformance/src",

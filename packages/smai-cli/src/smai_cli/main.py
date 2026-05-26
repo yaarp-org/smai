@@ -1671,14 +1671,11 @@ def _enforce_container_images_published(runtime: Any) -> None:
     RunPod, anything whose ``ComputeCapabilities.requires_published_image``
     is ``True``) cannot pull the local-only built-in default tags — the
     experiment-seed-run images (``smai-runtime:dev`` /
-    ``smai-runtime-cpu:dev``, round 11); left unchecked the failure
-    surfaces as an opaque ``RemoteError: Image build ... failed``
-    mid-CG-execution. This catches it at boot with a concrete,
-    actionable message.
-
-    Round 14: the agent image is not checked — the harness-builder /
-    technique-implementer agents run in-process in the worker, so that
-    image is never submitted to :class:`Compute`.
+    ``smai-runtime-cpu:dev``, round 11) plus the agent-runtime image
+    (``smai-agent-runtime:dev``, Step 3 of the agent-layer refactor);
+    left unchecked the failure surfaces as an opaque ``RemoteError:
+    Image build ... failed`` mid-CG-execution. This catches it at boot
+    with a concrete, actionable message.
 
     Reuses :func:`smai_cli.verify.verify_runtime_image_config` so the
     boot-path check is byte-identical to the one ``smai verify`` runs.
@@ -1690,6 +1687,7 @@ def _enforce_container_images_published(runtime: Any) -> None:
         runtime.plugins.compute,
         engine.runtime_image,
         engine.runtime_cpu_image,
+        engine.agent_runtime_image,
     )
     if not result.ok:
         _err(f"worker pre-flight refused to boot — {result.reason}")
@@ -1834,12 +1832,12 @@ def smai_verify(
             "--probe-image",
             help=(
                 "Additionally submit a trivial no-op job per configured "
-                "container image (the two runtime images + the agent "
-                "image, deduped) to confirm it is pullable by the "
-                "configured compute substrate. COSTS REAL MONEY / TIME "
-                "(a real, minimal compute job per unique image) — opt-in "
-                "only. The free, always-on container-image config check "
-                "runs without this flag."
+                "container image (the two runtime images + the agent-"
+                "runtime image, deduped) to confirm it is pullable by "
+                "the configured compute substrate. COSTS REAL MONEY / "
+                "TIME (a real, minimal compute job per unique image) — "
+                "opt-in only. The free, always-on container-image "
+                "config check runs without this flag."
             ),
         ),
     ] = False,
@@ -1867,17 +1865,16 @@ def smai_verify(
     * **Compute** — read-only ``status`` against a non-existent
       handle; expects :class:`JobNotFound`. Surfaces auth +
       substrate reachability.
-    * **Container-image config** (round 11) — a free, always-on check:
-      when the compute substrate is registry-pull (Modal / RunPod),
-      fails if ``engine.runtime_image`` / ``runtime_cpu_image`` (the
-      experiment-seed-run images) are still the local-only built-in
-      defaults the substrate cannot pull. The agent image is not
-      checked — round 14 moved the harness-builder / technique-
-      implementer agents in-process, so that image is never submitted.
+    * **Container-image config** (round 11; agent image restored at
+      Step 3 of the agent-layer refactor per D4 §7) — a free, always-
+      on check: when the compute substrate is registry-pull (Modal /
+      RunPod), fails if ``engine.runtime_image`` /
+      ``runtime_cpu_image`` / ``agent_runtime_image`` are still the
+      local-only built-in defaults the substrate cannot pull.
     * **Container-image probe** (``--probe-image``, opt-in) — submits a
-      trivial no-op job per configured runtime image (deduped) to
-      confirm pullability. **Costs real money / time**, so it is opt-in
-      only.
+      trivial no-op job per configured container image (deduped across
+      the two runtime images + the agent-runtime image) to confirm
+      pullability. **Costs real money / time**, so it is opt-in only.
 
     Exit code: 0 iff every check passes. Non-zero (1) if any check
     fails — the per-check reason is printed to stdout, and the verb
@@ -1930,6 +1927,7 @@ def smai_verify(
                     plugins.compute,
                     engine_cfg.runtime_image,
                     engine_cfg.runtime_cpu_image,
+                    engine_cfg.agent_runtime_image,
                 ),
             }
             if probe_image:
@@ -1939,6 +1937,7 @@ def smai_verify(
                     plugins.compute,
                     engine_cfg.runtime_image,
                     engine_cfg.runtime_cpu_image,
+                    engine_cfg.agent_runtime_image,
                 )
         return results
 
@@ -2203,6 +2202,7 @@ _VERSION_PACKAGES: tuple[str, ...] = (
     "smai-core",
     "smai-orchestrator",
     "smai-agents",
+    "smai-agent-runtime",
     "smai-runtime",
     "smai-llm-bedrock",
     "smai-store-sqlite",

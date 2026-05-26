@@ -1,0 +1,28 @@
+[project]
+name = "smai-agent-runtime"
+version = "0.1.0"
+description = "Sandbox-side agent runtime: mini-orchestrator + PydanticAI Agents + provider SDKs. Consumed via container image, not by the host process. Per agent_refactor/architectural_decisions.md §3 and compute_dispatch_decisions.md §6 (DEC-038)."
+requires-python = ">=3.11"
+dependencies = [
+    "smai-core",
+    "smai-runtime",
+    "pydantic>=2.0",
+    # PydanticAI + provider SDKs are pinned in the Dockerfile per D4 §3
+    # (sandbox-side image surface). Host-side floors are kept loose so
+    # `uv sync` can satisfy them; the image carries the pinned set.
+    "pydantic-ai>=0.0.13",
+    "anthropic>=0.40.0",
+    "openai>=1.50.0",
+    "boto3>=1.35.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv.sources]
+smai-core = { workspace = true }
+smai-runtime = { workspace = true }
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/smai_agent_runtime"]

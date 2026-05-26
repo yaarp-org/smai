@@ -37,6 +37,7 @@ from smai_orchestrator.engine.clock import (
     default_wall_clock,
 )
 from smai_orchestrator.engine.config import (
+    DEFAULT_AGENT_RUNTIME_IMAGE,
     DEFAULT_RUNTIME_CPU_IMAGE,
     DEFAULT_RUNTIME_IMAGE,
     EngineConfig,
@@ -78,6 +79,7 @@ from smai_orchestrator.engine.types import (
 )
 
 __all__ = [
+    "DEFAULT_AGENT_RUNTIME_IMAGE",
     "DEFAULT_RUNTIME_CPU_IMAGE",
     "DEFAULT_RUNTIME_IMAGE",
     "ConcurrencyPool",

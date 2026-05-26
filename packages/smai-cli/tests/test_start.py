@@ -443,11 +443,12 @@ def test_enforce_lease_capability_allows_multi_worker_against_leasing_store() ->
 
 
 # === Worker pre-flight: container-image config check (round 11) ==============
-# Covers the experiment-seed-run runtime images
-# (``engine.runtime_image`` / ``engine.runtime_cpu_image``).
+# Covers the experiment-seed-run runtime images plus the agent-runtime
+# image added at Step 3 of the agent-layer refactor (D4 §7).
 
 _PUB_RUNTIME = "registry.example.com/org/smai-runtime:v2"
 _PUB_RUNTIME_CPU = "registry.example.com/org/smai-runtime-cpu:v2"
+_PUB_AGENT = "registry.example.com/org/smai-agent-runtime:v2"
 
 
 def _make_image_check_runtime(
@@ -455,6 +456,7 @@ def _make_image_check_runtime(
     requires_published_image: bool,
     runtime_image: str,
     runtime_cpu_image: str,
+    agent_runtime_image: str,
 ) -> object:
     """Build a minimal duck-typed runtime for the ``_enforce_container_images_published``
     tests — exposes only ``plugins.compute.capabilities`` + ``config.engine``."""
@@ -476,6 +478,7 @@ def _make_image_check_runtime(
 
     _EngineCfg.runtime_image = runtime_image  # type: ignore[attr-defined]
     _EngineCfg.runtime_cpu_image = runtime_cpu_image  # type: ignore[attr-defined]
+    _EngineCfg.agent_runtime_image = agent_runtime_image  # type: ignore[attr-defined]
 
     class _Config:
         engine = _EngineCfg()
@@ -493,12 +496,17 @@ def test_enforce_container_images_published_rejects_registry_pull_default_image(
     image (round 11)."""
     import typer
     from smai_cli.main import _enforce_container_images_published
-    from smai_orchestrator.engine import DEFAULT_RUNTIME_CPU_IMAGE, DEFAULT_RUNTIME_IMAGE
+    from smai_orchestrator.engine import (
+        DEFAULT_AGENT_RUNTIME_IMAGE,
+        DEFAULT_RUNTIME_CPU_IMAGE,
+        DEFAULT_RUNTIME_IMAGE,
+    )
 
     runtime = _make_image_check_runtime(
         requires_published_image=True,
         runtime_image=DEFAULT_RUNTIME_IMAGE,
         runtime_cpu_image=DEFAULT_RUNTIME_CPU_IMAGE,
+        agent_runtime_image=DEFAULT_AGENT_RUNTIME_IMAGE,
     )
     with pytest.raises(typer.Exit):
         _enforce_container_images_published(runtime)
@@ -508,25 +516,32 @@ def test_enforce_container_images_published_allows_local_build_default_image() -
     """A local-build substrate with the default image tags is the
     intended flow — no raise."""
     from smai_cli.main import _enforce_container_images_published
-    from smai_orchestrator.engine import DEFAULT_RUNTIME_CPU_IMAGE, DEFAULT_RUNTIME_IMAGE
+    from smai_orchestrator.engine import (
+        DEFAULT_AGENT_RUNTIME_IMAGE,
+        DEFAULT_RUNTIME_CPU_IMAGE,
+        DEFAULT_RUNTIME_IMAGE,
+    )
 
     runtime = _make_image_check_runtime(
         requires_published_image=False,
         runtime_image=DEFAULT_RUNTIME_IMAGE,
         runtime_cpu_image=DEFAULT_RUNTIME_CPU_IMAGE,
+        agent_runtime_image=DEFAULT_AGENT_RUNTIME_IMAGE,
     )
     _enforce_container_images_published(runtime)
 
 
 def test_enforce_container_images_published_allows_registry_pull_overridden_image() -> None:
-    """A registry-pull substrate with both runtime images overridden to
-    published references — no raise."""
+    """A registry-pull substrate with all three images overridden to
+    published references — no raise. Step 3 of the agent-layer refactor
+    (D4 §7) added the third image to the check surface."""
     from smai_cli.main import _enforce_container_images_published
 
     runtime = _make_image_check_runtime(
         requires_published_image=True,
         runtime_image=_PUB_RUNTIME,
         runtime_cpu_image=_PUB_RUNTIME_CPU,
+        agent_runtime_image=_PUB_AGENT,
     )
     _enforce_container_images_published(runtime)
 

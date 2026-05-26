@@ -8,12 +8,19 @@ Three rules:
        (``pydantic``, ``jsonschema``, plus the standard library — which is not
        declared).
     2. No ``.py`` file under ``packages/smai-core/src/`` imports a pipeline
-       package (``smai_agents``, ``smai_orchestrator``, ``smai_runtime``,
-       ``smai_cli``, or the ``smai`` umbrella — which transitively pulls all
-       four) or any plugin package (``smai_llm_*``, ``smai_store_*``,
-       ``smai_artifacts_*``, ``smai_compute_*``).
+       package (``smai_agents``, ``smai_agent_runtime``, ``smai_orchestrator``,
+       ``smai_runtime``, ``smai_cli``, or the ``smai`` umbrella — which
+       transitively pulls all four) or any plugin package (``smai_llm_*``,
+       ``smai_store_*``, ``smai_artifacts_*``, ``smai_compute_*``).
     3. No ``plugins/smai-*`` package declares a dependency on a pipeline package,
        and no ``.py`` file under its ``src/`` imports one.
+
+``smai_agent_runtime`` is sandbox-side per DEC-038 (proposed): the package is
+consumed via container image, not by the host process. It carries its own
+dep policy (PydanticAI + provider SDKs) distinct from the methodology-layer
+allowlist. Treating it as a pipeline package here is the cheapest way to
+enforce "no host code imports it" — if a plugin or smai-core source ever
+tries ``import smai_agent_runtime``, the lint catches it.
 
 Usage::
 
@@ -38,21 +45,43 @@ from pathlib import Path
 
 # ---------- constants ---------------------------------------------------------
 
-# Module names (i.e. importable identifiers, with underscores) for the four
+# Module names (i.e. importable identifiers, with underscores) for the
 # pipeline packages plus the ``smai`` umbrella (which depends on all of them
 # and re-exports the Tier A surface — importing it transitively breaks
 # atomicity the same way importing any of the four directly would).
 # Forbidden in both smai-core and plugin sources, EXCEPT smai-orchestrator
 # in plugin sources (see ``PLUGIN_PIPELINE_ALLOWED`` below).
+#
+# ``smai_agent_runtime`` is included so the lint mechanically enforces
+# "consumed via image, not via host process" — no plugin or smai-core
+# source may import it (per DEC-038, the sandbox-side runtime packages
+# DEC noted in agent_refactor/compute_dispatch_decisions.md §6). D5 of the
+# agent-layer refactor notes that Step 3 lands half of the check_deps
+# delta (this addition); Step 8 lands the rest (replaces ``smai_agents``
+# with ``smai_inline_agents`` when the package is split).
 PIPELINE_MODULES: frozenset[str] = frozenset(
-    {"smai", "smai_agents", "smai_orchestrator", "smai_runtime", "smai_cli"}
+    {
+        "smai",
+        "smai_agents",
+        "smai_agent_runtime",
+        "smai_orchestrator",
+        "smai_runtime",
+        "smai_cli",
+    }
 )
 
-# Distribution names (i.e. PyPI / pyproject names, with hyphens) for the four
+# Distribution names (i.e. PyPI / pyproject names, with hyphens) for the
 # pipeline packages plus the ``smai`` umbrella. Used when scanning
 # ``[project] dependencies``.
 PIPELINE_DISTS: frozenset[str] = frozenset(
-    {"smai", "smai-agents", "smai-orchestrator", "smai-runtime", "smai-cli"}
+    {
+        "smai",
+        "smai-agents",
+        "smai-agent-runtime",
+        "smai-orchestrator",
+        "smai-runtime",
+        "smai-cli",
+    }
 )
 
 # Pipeline packages that plugins ARE allowed to depend on / import. Per
@@ -99,26 +128,28 @@ REASON_CORE_DEP = (
 )
 REASON_CORE_IMPORT = (
     "smai-core is the methodology layer (DEC-029); runtime imports of "
-    "pipeline packages (smai_agents, smai_orchestrator, smai_runtime, "
-    "smai_cli, the smai umbrella, or any plugin) break the package-boundary "
-    "atomicity invariant (00-vision.md §4 principle #2). Pure typing "
-    "references are allowed under `if TYPE_CHECKING:` (per `01-data-model.md` "
-    "§5.1 / `07-plugin-interfaces.md` §3.1: the MetadataStore Protocol "
-    "type-references pipeline-tracking record types from smai-orchestrator)."
+    "pipeline packages (smai_agents, smai_agent_runtime, smai_orchestrator, "
+    "smai_runtime, smai_cli, the smai umbrella, or any plugin) break the "
+    "package-boundary atomicity invariant (00-vision.md §4 principle #2). "
+    "Pure typing references are allowed under `if TYPE_CHECKING:` (per "
+    "`01-data-model.md` §5.1 / `07-plugin-interfaces.md` §3.1: the "
+    "MetadataStore Protocol type-references pipeline-tracking record types "
+    "from smai-orchestrator)."
 )
 REASON_PLUGIN_DEP = (
     "Plugin packages must depend only on smai-core and their own provider SDK "
     "(implementation_plan.md §2.3); pulling in pipeline packages "
-    "(smai-agents, smai-orchestrator, smai-runtime, smai-cli, or the smai "
-    "umbrella) bloats the plugin install footprint and creates accidental "
-    "cross-package coupling."
+    "(smai-agents, smai-agent-runtime, smai-orchestrator, smai-runtime, "
+    "smai-cli, or the smai umbrella) bloats the plugin install footprint "
+    "and creates accidental cross-package coupling."
 )
 REASON_PLUGIN_IMPORT = (
     "Plugin packages must not import pipeline packages "
-    "(smai_agents, smai_orchestrator, smai_runtime, smai_cli, or the smai "
-    "umbrella) at runtime per implementation_plan.md §2.3; doing so couples "
-    "the plugin to the pipeline layer it is meant to plug into. Pure typing "
-    "references are allowed under `if TYPE_CHECKING:`."
+    "(smai_agents, smai_agent_runtime, smai_orchestrator, smai_runtime, "
+    "smai_cli, or the smai umbrella) at runtime per implementation_plan.md "
+    "§2.3; doing so couples the plugin to the pipeline layer it is meant "
+    "to plug into. Pure typing references are allowed under "
+    "`if TYPE_CHECKING:`."
 )
 
 # ---------- data types --------------------------------------------------------

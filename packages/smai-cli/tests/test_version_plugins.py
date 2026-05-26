@@ -19,6 +19,7 @@ def test_version_prints_known_packages_in_text_format() -> None:
         "smai-core",
         "smai-orchestrator",
         "smai-agents",
+        "smai-agent-runtime",
         "smai-runtime",
     ):
         assert pkg in output, f"missing package {pkg!r} in version output"

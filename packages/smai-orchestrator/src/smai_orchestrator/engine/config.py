@@ -42,6 +42,18 @@ from smai_orchestrator.engine.clock import (
 DEFAULT_RUNTIME_IMAGE = "smai-runtime:dev"
 DEFAULT_RUNTIME_CPU_IMAGE = "smai-runtime-cpu:dev"
 
+# Built-in default agent-runtime image tag — sandbox-side image for the
+# harness_builder + technique_implementer agent roles per
+# ``agent_refactor/architectural_decisions.md`` §3 / D4 §5. Same
+# local-only-by-default posture as the two runtime images above; the
+# round-11 ``verify_runtime_image_config`` check rejects the default on
+# a registry-pull substrate. NOT a revival of the round-12-vintage
+# ``DEFAULT_AGENT_IMAGE`` (deleted in the Pre-step refactor cleanup):
+# this names the new ``smai-agent-runtime`` package's image, distinct
+# from the in-process ``smai-agents/`` shape it replaces. Step 4 of the
+# refactor wires it into the unified compute dispatcher.
+DEFAULT_AGENT_RUNTIME_IMAGE = "smai-agent-runtime:dev"
+
 
 class RetryBackoffConfig(BaseModel):
     """Named backoff configuration for retry-edge gate rules (`05` §6).
@@ -232,6 +244,29 @@ class EngineConfig(BaseModel):
     macOS / Apple-Silicon path runs natively. Distinct from
     :attr:`runtime_image`. Selected automatically by the run-record
     dispatcher at the same read site as the ``gpu`` flag; override here."""
+
+    agent_runtime_image: str = DEFAULT_AGENT_RUNTIME_IMAGE
+    """Container image hosting *sandboxed agent roles* — currently
+    ``harness_builder`` and ``technique_implementer`` per
+    ``agent_refactor/architectural_decisions.md`` §6. The reference
+    build is ``agent-runtime.Dockerfile`` — CPU-only multi-arch
+    ``python:3.11-slim-bookworm`` carrying the mini-orchestrator,
+    PydanticAI, and the three provider SDKs per D4 §3. Distinct from
+    :attr:`runtime_image` / :attr:`runtime_cpu_image` (which host the
+    experiment-seed-run runtime, not the agent reasoning loop).
+
+    Step 4 of the refactor reads this at host-side dispatch to set the
+    ``image`` arg on :meth:`Compute.submit`. The same round-11
+    ``requires_published_image`` check that guards the two runtime
+    images extends to this one (per D4 §7-§8): a registry-pull substrate
+    (Modal / RunPod) paired with the local-only ``smai-agent-runtime:dev``
+    default is a hard fail at ``smai verify`` time.
+
+    Override per deployment via ``smai.yaml``. Not a revival of the
+    round-12-vintage ``EngineConfig.agent_image`` (deleted in the Pre-
+    step refactor cleanup); the rename to ``agent_runtime_image`` makes
+    clear this is the refactor's new substrate, not the in-process
+    shape it replaces."""
 
     # ---- Retention sweep (Task 3.H2 / DEC-033 #1, #2) ---------------------
 

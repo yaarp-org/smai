@@ -36,15 +36,21 @@ def test_minimal_runtime_config_constructs() -> None:
 def test_engine_runtime_images_have_defaults_and_are_overridable() -> None:
     """Round-4 friction (A): the GPU / CPU experiment-run images are
     config knobs on :class:`EngineConfig` (default to the reference
-    ``smai-runtime:dev`` / ``smai-runtime-cpu:dev`` tags)."""
+    ``smai-runtime:dev`` / ``smai-runtime-cpu:dev`` tags). Step 3 of
+    the agent-layer refactor (D4 §5) adds the third image —
+    ``smai-agent-runtime:dev`` — with the same default-and-overridable
+    posture."""
     assert EngineConfig().runtime_image == "smai-runtime:dev"
     assert EngineConfig().runtime_cpu_image == "smai-runtime-cpu:dev"
+    assert EngineConfig().agent_runtime_image == "smai-agent-runtime:dev"
     custom = EngineConfig(
         runtime_image="myorg/smai-runtime:1.2.3",
         runtime_cpu_image="myorg/smai-runtime-cpu:1.2.3",
+        agent_runtime_image="myorg/smai-agent-runtime:1.2.3",
     )
     assert custom.runtime_image == "myorg/smai-runtime:1.2.3"
     assert custom.runtime_cpu_image == "myorg/smai-runtime-cpu:1.2.3"
+    assert custom.agent_runtime_image == "myorg/smai-agent-runtime:1.2.3"
 
 
 def test_plugin_selection_config_dicts_default_empty() -> None:

@@ -67,6 +67,7 @@ from smai_core.plugins import (
 )
 from smai_core.plugins.compute import ComputeError, JobImageInvalid, JobNotFound
 from smai_orchestrator.engine import (
+    DEFAULT_AGENT_RUNTIME_IMAGE,
     DEFAULT_RUNTIME_CPU_IMAGE,
     DEFAULT_RUNTIME_IMAGE,
 )
@@ -271,6 +272,7 @@ def verify_runtime_image_config(
     compute: Compute,
     runtime_image: str,
     runtime_cpu_image: str,
+    agent_runtime_image: str,
 ) -> VerifyResult:
     """Hard-fail config check: a registry-pull Compute substrate paired
     with a local-only built-in default container image.
@@ -281,15 +283,23 @@ def verify_runtime_image_config(
     RunPod), the ``image`` argument to :meth:`Compute.submit` MUST be a
     registry-pullable tag. The built-in :class:`EngineConfig` defaults —
     the experiment-seed-run images (``smai-runtime:dev`` /
-    ``smai-runtime-cpu:dev``, round 11) — are local-only Docker tags
-    ``LocalGpuCompute`` builds on the host; a registry-pull substrate
-    cannot pull them. Left unchecked the failure surfaces as an opaque
-    ``RemoteError: Image build ... failed`` mid-CG-execution — this
-    catches it at pre-flight with a concrete pointer.
+    ``smai-runtime-cpu:dev``, round 11) plus the agent-runtime image
+    (``smai-agent-runtime:dev``, D4 §7 of the agent-layer refactor) —
+    are local-only Docker tags ``LocalGpuCompute`` builds on the host; a
+    registry-pull substrate cannot pull them. Left unchecked the failure
+    surfaces as an opaque ``RemoteError: Image build ... failed`` mid-
+    CG-execution — this catches it at pre-flight with a concrete
+    pointer.
 
     Local-build substrates (``requires_published_image`` ``False``,
     e.g. ``LocalGpu``) always pass: building the default tags locally is
     exactly the intended flow.
+
+    The third arg (``agent_runtime_image``) re-enters the check at
+    Step 3 of the agent-layer refactor (D4 §7). Round 14 had removed
+    the agent image from the probe surface because the agents ran in-
+    process; the refactor's dispatch-unification path reverses that
+    decision.
     """
     capabilities = compute.capabilities
     if not getattr(capabilities, "requires_published_image", False):
@@ -306,6 +316,8 @@ def verify_runtime_image_config(
         offenders.append(("engine.runtime_image", runtime_image))
     if runtime_cpu_image == DEFAULT_RUNTIME_CPU_IMAGE:
         offenders.append(("engine.runtime_cpu_image", runtime_cpu_image))
+    if agent_runtime_image == DEFAULT_AGENT_RUNTIME_IMAGE:
+        offenders.append(("engine.agent_runtime_image", agent_runtime_image))
     if not offenders:
         return VerifyResult(
             ok=True,
@@ -367,6 +379,7 @@ async def verify_runtime_image_probe(
     compute: Compute,
     runtime_image: str,
     runtime_cpu_image: str,
+    agent_runtime_image: str,
 ) -> VerifyResult:
     """Opt-in real probe (``smai verify --probe-image``): submit a
     trivial no-op job per configured container image to confirm it is
@@ -381,11 +394,14 @@ async def verify_runtime_image_probe(
     therefore **costs real money / time** and is opt-in; ``smai verify
     --help`` documents that.
 
-    Probes :attr:`runtime_image` and :attr:`runtime_cpu_image` — deduped
-    by image string so a deployment that points both fields at the same
-    tag pays for one probe job, not two. Fails if any image is
-    unreachable. Round 14: the agent image is no longer probed (the
-    agents run in-process — that image is never submitted).
+    Probes :attr:`runtime_image`, :attr:`runtime_cpu_image`, and
+    :attr:`agent_runtime_image` — deduped by image string so a
+    deployment that points multiple fields at the same tag pays for one
+    probe job per unique tag. Fails if any image is unreachable. The
+    third image (agent runtime, D4 §8 of the agent-layer refactor)
+    re-enters the probe surface that round 14 had trimmed when the
+    agents went in-process; the refactor's dispatch-unification path
+    restores it.
     """
     started = time.monotonic()
     # Dedup by image string, preserving first-seen order: the runtime
@@ -397,6 +413,7 @@ async def verify_runtime_image_probe(
     for label, image in (
         ("runtime_image", runtime_image),
         ("runtime_cpu_image", runtime_cpu_image),
+        ("agent_runtime_image", agent_runtime_image),
     ):
         if image not in seen:
             seen.add(image)
