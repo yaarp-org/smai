@@ -8,7 +8,10 @@ reviewer, contextual evaluator, supervisor) bypass the loop and call
 
 Four of five agents ship across 2.B3 + 2.B4:
 
-* :func:`smai_agents.agents.harness_builder.run_harness_builder_session` — §2.2
+* :func:`smai_agents.agents.harness_builder.make_dispatch_harness_build_sandboxed` — §2.2
+  (sub-PR E cutover: the host-side surface is now a thin
+  :class:`smai_orchestrator.dispatch.DispatcherBundle` wrapper; the
+  in-process ``run_harness_builder_session`` is gone)
 * :func:`smai_agents.agents.technique_implementer.run_technique_implementer_session` — §2.3
 * :func:`smai_agents.agents.code_reviewer.run_code_review` — §2.4
 * :func:`smai_agents.agents.contextual_evaluator.run_contextual_evaluation` — §2.5
@@ -28,8 +31,7 @@ from smai_agents.agents.contextual_evaluator import (
     run_contextual_evaluation,
 )
 from smai_agents.agents.harness_builder import (
-    make_dispatch_harness_build,
-    run_harness_builder_session,
+    make_dispatch_harness_build_sandboxed,
 )
 from smai_agents.agents.manifest_tool import (
     EMIT_HARNESS_MANIFEST_TOOL_NAME,
@@ -81,13 +83,12 @@ __all__ = [
     "PlannerSessionResult",
     "PlannerVariant",
     "SupervisorInput",
-    "make_dispatch_harness_build",
+    "make_dispatch_harness_build_sandboxed",
     "make_dispatch_planner",
     "make_dispatch_technique_implementation",
     "make_emit_harness_manifest_tool",
     "run_code_review",
     "run_contextual_evaluation",
-    "run_harness_builder_session",
     "run_planner_session",
     "run_supervisor_check",
     "run_technique_implementer_session",

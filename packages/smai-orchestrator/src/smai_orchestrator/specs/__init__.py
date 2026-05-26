@@ -25,7 +25,7 @@ directly and register manually via
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -109,7 +109,7 @@ def register_smai_specs(
     max_review_attempts: int = 1,
     require_human_approval: bool = False,
     evaluation_dispatch_trace: list[str] | None = None,
-    harness_builder_inline_runner: Any = None,
+    harness_builder_extra_env: Mapping[str, str] | None = None,
     technique_implementer_inline_runner: Any = None,
 ) -> tuple[PipelineSpec, PipelineSpec]:
     """Construct and register both CG-side SMAI specs into the process registry.
@@ -153,7 +153,7 @@ def register_smai_specs(
         max_review_attempts=max_review_attempts,
         require_human_approval=require_human_approval,
         evaluation_dispatch_trace=evaluation_dispatch_trace,
-        harness_builder_inline_runner=harness_builder_inline_runner,
+        harness_builder_extra_env=harness_builder_extra_env,
     )
     entry_spec = build_cg_entries_spec(
         workspace_root=workspace_root,

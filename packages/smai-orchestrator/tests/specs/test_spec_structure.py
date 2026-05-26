@@ -120,16 +120,22 @@ def test_cg_spec_scheduling_queries_declared(cg_spec) -> None:  # type: ignore[n
 def test_cg_spec_edge_declaration_order_success_first(cg_spec) -> None:  # type: ignore[no-untyped-def]
     """Per `03` §2.4 success edges are declared before retry / failure
     edges within the same (from_state, fires_on) group."""
-    # Round 14: ``implementing`` edges fire on ``dispatch_time`` (the
-    # harness builder runs in-process). Success → implemented BEFORE
-    # no-survivors → impl_failed; the harness-build-failed edge is gone
-    # (routed through the dispatch handler's error path + RetryPolicy).
-    impl_dispatch = cg_spec.edges_from("implementing", fires_on="dispatch_time")
-    assert len(impl_dispatch) == 2
-    assert impl_dispatch[0].target_state == "implemented"
-    assert impl_dispatch[1].target_state == "implementation_failed"
-    assert cg_spec.edges_from("implementing", fires_on="job_succeeded") == []
-    assert cg_spec.edges_from("implementing", fires_on="job_failed") == []
+    # Sub-PR E cutover: ``implementing`` edges fire on phase-1
+    # ``job_succeeded`` / ``job_failed`` (the harness builder runs in the
+    # sandboxed ``smai-agent-runtime`` container, polled by phase-1).
+    # Success → implemented BEFORE no-survivors → impl_failed within the
+    # ``job_succeeded`` group; ``job_failed`` carries the sandbox-crash
+    # terminal. No dispatch_time edges leave ``implementing`` now.
+    assert cg_spec.edges_from("implementing", fires_on="dispatch_time") == []
+
+    impl_job_succeeded = cg_spec.edges_from("implementing", fires_on="job_succeeded")
+    assert len(impl_job_succeeded) == 2
+    assert impl_job_succeeded[0].target_state == "implemented"
+    assert impl_job_succeeded[1].target_state == "implementation_failed"
+
+    impl_job_failed = cg_spec.edges_from("implementing", fires_on="job_failed")
+    assert len(impl_job_failed) == 1
+    assert impl_job_failed[0].target_state == "implementation_failed"
 
     # implemented dispatch_time: running BEFORE implementing-retry BEFORE impl_failed
     implemented_dispatch = cg_spec.edges_from("implemented", fires_on="dispatch_time")
@@ -157,14 +163,15 @@ def test_cg_spec_engine_spec_projection_partitions_phases(cg_spec) -> None:  # t
     """:meth:`PipelineSpec.engine_spec` partitions per-state queries by
     presence of phase-1 trigger edges (``job_succeeded`` / ``job_failed``).
 
-    Round 14: every CG-execution dispatch (including the in-process
-    harness builder) advances via ``dispatch_time`` edges, so the spec
-    has *no* phase-1 query states — every scheduling query is phase-2."""
+    Sub-PR E cutover: ``implementing`` carries phase-1 ``job_*`` edges
+    now (the sandboxed harness-builder dispatch is a polled Compute
+    job), so its scheduling query partitions into ``phase1_queries``.
+    Every other dispatch state still advances via ``dispatch_time``
+    edges and stays in ``phase2_queries``.
+    """
     eng = cg_spec.engine_spec()
-    assert eng.phase1_queries == {}
-    # ``implementing`` runs the harness builder in-process; it + the
-    # other dispatch states are phase-2 (re-evaluated each cycle).
-    assert "implementing" in eng.phase2_queries
+    assert "implementing" in eng.phase1_queries
+    assert "implementing" not in eng.phase2_queries
     assert "draft" in eng.phase2_queries
     assert "implemented" in eng.phase2_queries
     assert "running" in eng.phase2_queries

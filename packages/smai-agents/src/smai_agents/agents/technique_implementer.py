@@ -69,7 +69,6 @@ from smai_agents.agent_session_telemetry import (
     open_agent_session,
 )
 from smai_agents.agents.artifact_publish import publish_workspace_outputs
-from smai_agents.agents.harness_builder import SessionRunner
 from smai_agents.loop import (
     AgentLoopConfig,
     AgentOutcome,
@@ -91,6 +90,15 @@ from smai_agents.std_tools import (
 from smai_agents.tools import ToolRegistry
 
 _TECHNIQUE_IMPLEMENTER_ROLE: TaskRole = "technique_implementer"
+
+# Test-only seam: a ``runner`` callable that takes the assembled
+# :class:`AgentSession` and returns an :class:`AgentOutcome`. Production
+# deployments leave this ``None``; tests pass :func:`run_loop` (or a
+# stub that records the session for later assertions). Sub-PR E moved
+# this from :mod:`smai_agents.agents.harness_builder` (which retired its
+# in-process scaffolding) — kept local here because the
+# technique-implementer dispatch still runs in-process pending Step 7.
+SessionRunner = Callable[[AgentSession], Awaitable[AgentOutcome]]
 
 # Three grounding-context types per DEC-017 / §2.3 Inputs.
 ContextKind = Literal[

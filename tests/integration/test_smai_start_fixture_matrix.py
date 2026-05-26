@@ -435,7 +435,9 @@ async def test_smai_start_drives_cg_to_complete_no_creds(tmp_path: Path) -> None
         worker_id="g3-fixture-matrix-test",
         workspace_root=tmp_path / "workspaces",
         plugin_overrides=overrides,
-        harness_builder_inline_runner=_harness_inline_runner,
+        # Sub-PR E cutover: harness builder dispatch is sandboxed; the
+        # fake Compute carries it via stage_workspace/submit/status. The
+        # technique-implementer in-process path remains until Step 7.
         technique_implementer_inline_runner=_technique_inline_runner,
     ) as runtime:
         # Seed the technique registry so the smoke YAML compiles cleanly.

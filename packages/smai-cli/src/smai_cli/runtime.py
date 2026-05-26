@@ -1323,7 +1323,6 @@ class Runtime:
         runtime_image: str | None = None,
         runtime_cpu_image: str | None = None,
         paper_fetcher: PaperFetcher | None = None,
-        harness_builder_inline_runner: Any = None,
         technique_implementer_inline_runner: Any = None,
     ) -> AsyncGenerator[Runtime, None]:
         """Out-of-band production worker (`09` §6 / `05` §7.2 / DEC-024).
@@ -1374,7 +1373,6 @@ class Runtime:
             run_worker=True,
             paper_fetcher=paper_fetcher,
             worker_id=worker_id,
-            harness_builder_inline_runner=harness_builder_inline_runner,
             technique_implementer_inline_runner=technique_implementer_inline_runner,
         ) as runtime:
             yield runtime
@@ -1395,7 +1393,6 @@ class Runtime:
         paper_fetcher: PaperFetcher | None = None,
         worker_id: str | None = None,
         proposal_cg_id_for: Callable[[str, str], str] | None = None,
-        harness_builder_inline_runner: Any = None,
         technique_implementer_inline_runner: Any = None,
     ) -> AsyncGenerator[Runtime, None]:
         """Boot the in-band Runtime; yield a configured instance.
@@ -1419,11 +1416,16 @@ class Runtime:
         :func:`run_worker_cycle` manually; production callers
         (``smai dev``) leave it ``True``.
 
-        ``harness_builder_inline_runner`` / ``technique_implementer_inline_runner``
-        are test-only runner overrides threaded into the two agent
-        dispatch factories (replacing :func:`run_loop`). Production
-        leaves them ``None`` — the agents run their real loops
-        in-process in the worker.
+        ``technique_implementer_inline_runner`` is a test-only runner
+        override threaded into the technique-implementer dispatch
+        factory (replacing :func:`run_loop`). Production leaves it
+        ``None`` — the agent runs its real loop in-process in the
+        worker. Sub-PR E retired the analogous
+        ``harness_builder_inline_runner`` seam when the harness builder
+        moved to the sandboxed ``smai-agent-runtime`` dispatch path;
+        tests that exercise the harness builder now mock at the
+        :class:`Compute` boundary (sub-PR B's ``RecordingCompute``
+        pattern).
 
         ``worker_id`` is the deployment-stable identity threaded into
         the phase-3 lease wrapper (`05` §3.5 / DEC-035 #2 / Task 3.G1).
@@ -1458,10 +1460,8 @@ class Runtime:
             # arg (``"<provider>:<model_id>"`` form) layers on top; the
             # ``SMAI_MODEL_<ROLE>`` env var (read inside
             # ``get_model_for_task``) wins over both.
-            roles_overrides: dict[
-                TaskRole, tuple[str, str] | dict[str, tuple[str, str]]
-            ] = _role_models_to_overrides(
-                config.engine.role_models, config.plugins.llm_provider
+            roles_overrides: dict[TaskRole, tuple[str, str] | dict[str, tuple[str, str]]] = (
+                _role_models_to_overrides(config.engine.role_models, config.plugins.llm_provider)
             )
             if per_role_overrides is not None:
                 roles_overrides = {
@@ -1496,18 +1496,29 @@ class Runtime:
             # Register the SMAI Phase-2 specs (CG-execution + entry).
             llm_for_code_reviewer = plugins.llm_providers["code_reviewer"]
             llm_for_contextual_evaluator = plugins.llm_providers["contextual_evaluator"]
+            # Sub-PR E cutover: project ``engine.role_models`` into the
+            # ``SMAI_MODEL_<ROLE>[__<STEP>]`` env-var shape the
+            # sandboxed mini-orchestrator's :func:`get_model_for_step`
+            # consumes (D3 per-step model selection). Empty dict when
+            # the deployment has no role-model overrides — the
+            # sandbox-side defaults pick up.
+            harness_builder_extra_env = _role_models_to_step_env(
+                config.engine.role_models, config.plugins.llm_provider
+            )
             cg_spec, entry_spec = register_smai_specs(
                 workspace_root=workspace_root,
                 llm_for_code_reviewer=llm_for_code_reviewer,
                 llm_for_contextual_evaluator=llm_for_contextual_evaluator,
                 runtime_image=effective_runtime_image,
                 runtime_cpu_image=effective_runtime_cpu_image,
-                # The ``*_inline_runner`` kwargs are test-only runner
-                # overrides (default None). The harness-builder and
-                # technique-implementer agents run in-process in the
-                # worker (round 14), so no agent container image is
-                # threaded.
-                harness_builder_inline_runner=harness_builder_inline_runner,
+                # Sub-PR E cutover: ``harness_builder_inline_runner``
+                # is gone — the harness builder now runs as a real
+                # ``smai-agent-runtime`` Compute job. The role-model
+                # env-overrides are threaded through to the sandbox
+                # container via the sub-PR B dispatcher's ``extra_env``.
+                # ``technique_implementer_inline_runner`` stays until
+                # Step 7 ports that role.
+                harness_builder_extra_env=harness_builder_extra_env,
                 technique_implementer_inline_runner=technique_implementer_inline_runner,
             )
             # Register the :class:`RunRecord` sub-state-machine spec
@@ -1757,7 +1768,7 @@ def _role_models_to_overrides(
     return out
 
 
-def _role_models_to_step_env(  # pyright: ignore[reportUnusedFunction]
+def _role_models_to_step_env(
     role_models: Mapping[str, str | Mapping[str, str]], provider_name: str
 ) -> dict[str, str]:
     """Project ``engine.role_models`` into the env-var dict the sandboxed

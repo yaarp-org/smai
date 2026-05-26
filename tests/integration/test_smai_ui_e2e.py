@@ -179,10 +179,12 @@ async def test_full_user_journey(tmp_path: Path) -> None:
         workspace_root=tmp_path / "workspaces",
         plugin_overrides=overrides,
         run_worker=True,
-        # Round 14: the harness-builder / technique-implementer agents
-        # run in-process; pass no-op runners (the agent outputs are
-        # pre-staged above, before the worker boots).
-        harness_builder_inline_runner=_noop_agent_runner,
+        # Sub-PR E cutover: harness-builder dispatch is sandboxed now;
+        # FakeAlwaysSucceededCompute's status-always-succeeded shape
+        # carries it (the workspace harvest is a no-op and the
+        # pre-staged ArtifactStore manifest stays visible to the
+        # success gate). The technique-implementer in-process path
+        # remains until Step 7.
         technique_implementer_inline_runner=_noop_agent_runner,
         # Round-9 added a test-only knob to pin deterministic CG ids.
         # Production generates ULID-shaped ids by default; the N3

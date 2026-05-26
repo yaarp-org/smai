@@ -204,6 +204,40 @@ async def phase1_step(  # noqa: PLR0913
         # Anything else is a Compute plugin bug; treat as no-match.
         return Phase1Outcome(status="terminated_no_match", job_status=job_status)
 
+    # Agent-refactor Step 4 sub-PR E (cutover reorder): fire the
+    # ``post_terminal_handler`` BEFORE the gate evaluation so the gate
+    # body can read any artifacts the handler just published
+    # (architectural_decisions §7 "host attests-and-persists" — sandbox
+    # writes to workspace; host harvests + publishes on terminal). The
+    # sandboxed harness-builder dispatcher (sub-PR B) relies on this
+    # order: its post-terminal harvests the workspace and publishes the
+    # manifest to :class:`ArtifactStore`; the
+    # ``_make_gate_harness_succeeded_advance`` gate then reads that
+    # manifest plus the DEC-033 #3 fanout it performs.
+    #
+    # Best-effort by contract: any exception is swallowed so a hook
+    # failure cannot block the state-machine transition. Hooks are also
+    # required to be idempotent — phase-1 may re-fire them on
+    # subsequent cycles when an earlier cycle's gate evaluation didn't
+    # advance (entries-not-terminal-yet shape). Fires on both
+    # ``job_succeeded`` and ``job_failed`` for symmetry with the
+    # in-process predecessor's unconditional publish (round-14's
+    # "partial agent run still lands whatever it did produce" rule
+    # restated as a workspace harvest).
+    if action.post_terminal_handler is not None:
+        await _invoke_post_terminal_handler(
+            handler=action.post_terminal_handler,
+            entity_kind=spec.entity_kind,
+            entity_id=entity_id,
+            entity_state=entity_state,
+            entity_version=entity_version,
+            compute=compute,
+            metadata_store=metadata_store,
+            artifact_store=artifact_store,
+            config=config,
+            job_handle=handle,
+        )
+
     gate_context = GateContext(
         entity_kind=spec.entity_kind,
         entity_id=entity_id,
@@ -269,27 +303,6 @@ async def phase1_step(  # noqa: PLR0913
             )
         )
 
-    # Post-terminal hook (agent_refactor Step 4 sub-PR B): on terminal
-    # success, fire the dispatch action's optional post-terminal handler
-    # so workspace-harvest / "host attests-and-persists" side effects
-    # (architectural_decisions §7) run once per successful observation.
-    # Best-effort by contract — phase-1 swallows exceptions so a hook
-    # failure cannot block the state-machine transition (the transition
-    # already committed above).
-    if fires_on == "job_succeeded" and action.post_terminal_handler is not None:
-        await _invoke_post_terminal_handler(
-            handler=action.post_terminal_handler,
-            entity_kind=spec.entity_kind,
-            entity_id=entity_id,
-            entity_state=entity_state,
-            entity_version=entity_version,
-            compute=compute,
-            metadata_store=metadata_store,
-            artifact_store=artifact_store,
-            config=config,
-            job_handle=handle,
-        )
-
     return Phase1Outcome(status="advanced", fired_edge=fired, job_status=job_status)
 
 
@@ -309,11 +322,17 @@ async def _invoke_post_terminal_handler(  # noqa: PLR0913
     """Build a :class:`PostTerminalContext` and run the hook best-effort.
 
     The synthetic :class:`DispatchContext` carries the pre-transition
-    ``entity_state`` / ``entity_version`` (the values that drove the
-    dispatch into this in-progress state). Hooks that need post-CAS
+    ``entity_state`` / ``entity_version`` — the values that drove the
+    dispatch into this in-progress state. Hooks that need post-CAS
     state read fresh from ``metadata_store``; the synthetic context is
     for symmetry with dispatch-time resolvers (sub-PR B's
     :attr:`WorkspaceOutputs.destination` only reads ``entity_id``).
+
+    Sub-PR E cutover note: phase-1 now invokes this BEFORE the
+    state-machine CAS (and on both ``job_succeeded`` and ``job_failed``)
+    so the published artifacts are visible to the gate body that
+    follows. The "best-effort" semantic stays — any exception is
+    logged and swallowed; the gate evaluation proceeds.
     """
     dispatch_ctx = DispatchContext(
         entity_kind=entity_kind,  # type: ignore[arg-type]

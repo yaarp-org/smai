@@ -82,7 +82,7 @@ disagrees):
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
@@ -391,16 +391,36 @@ def _make_gate_draft_ready() -> Callable[[GateContext], Awaitable[GateOutcome]]:
     return _gate
 
 
+def _make_gate_always_advance(
+    reason: str,
+) -> Callable[[GateContext], Awaitable[GateOutcome]]:
+    """Build a gate that unconditionally advances with ``reason``.
+
+    Used by phase-1 ``job_failed`` edges where the observation IS the
+    advancement signal (run_record.py's ``submitted → failed`` style):
+    the sandbox container exited non-zero, so the CG's
+    implementation-phase is terminally failed for this attempt; the
+    gate has no other condition to check.
+    """
+
+    async def _gate(ctx: GateContext) -> GateOutcome:
+        return GateOutcome(advance=True, reason=reason)
+
+    return _gate
+
+
 def _make_gate_harness_succeeded_advance() -> Callable[[GateContext], Awaitable[GateOutcome]]:
     async def _gate(ctx: GateContext) -> GateOutcome:
-        # Round 14: ``dispatch_time`` gate (the harness builder runs
-        # in-process, so ``ctx.job_outcome`` is always None — there is
-        # no external job). Success = the harness builder emitted a
-        # manifest AND every entry is terminal AND ≥1 is implemented.
-        # The ``emit_harness_manifest`` tool only writes the manifest
-        # after a passing in-workspace validation run (manifest_tool §9
-        # step 5), so manifest-presence already encodes "harness
-        # validation passed" — no separate validation-results read.
+        # Sub-PR E cutover: phase-1 ``job_succeeded`` gate. The
+        # ``smai-agent-runtime`` container reached exit 0; the dispatch
+        # action's ``post_terminal_handler`` (sub-PR E reorder — fires
+        # before this gate) has already harvested the workspace and
+        # published ``manifest.json`` to :class:`ArtifactStore`. Success =
+        # the manifest is present AND every entry is terminal AND ≥1
+        # is implemented. The sandbox-side ``ManifestEmitStep`` only
+        # writes the manifest after a passing in-sandbox validation
+        # run, so manifest-presence already encodes "harness validation
+        # passed" — no separate validation-results read.
         manifest_key = HARNESS_MANIFEST_KEY_TEMPLATE.format(cg_id=ctx.entity_id)
         if not await ctx.artifact_store.exists(manifest_key):
             return GateOutcome(advance=False, reason="manifest not yet written")
@@ -433,13 +453,17 @@ def _make_gate_harness_succeeded_advance() -> Callable[[GateContext], Awaitable[
 
 def _make_gate_harness_succeeded_no_survivors() -> Callable[[GateContext], Awaitable[GateOutcome]]:
     async def _gate(ctx: GateContext) -> GateOutcome:
-        # Round 14: ``dispatch_time`` gate (``ctx.job_outcome`` is always
-        # None — in-process dispatch). Fires only when every entry has
-        # reached a terminal implementation state and none is
-        # ``implemented`` — which can only happen once the harness built
-        # (entries cannot run without a manifest), so a harness-build
-        # failure never reaches here (it routes through the dispatch
-        # handler's error path + the RetryPolicy instead).
+        # Sub-PR E cutover: phase-1 ``job_succeeded`` gate. Fires only
+        # when the sandbox harness-builder exited cleanly (job_succeeded)
+        # AND every entry has reached a terminal implementation state
+        # AND none is ``implemented`` — i.e. all entries failed to
+        # implement against the just-published harness. A harness-build
+        # *job* failure (container exit code != 0) never reaches here:
+        # it routes via the sibling ``implementing → implementation_failed
+        # (job failed)`` edge declared further down. A *dispatch
+        # handler* failure (workspace materialization raised, etc.)
+        # routes through the engine's ``_handle_dispatch_failure`` +
+        # the round-10 RetryPolicy instead.
         entries = await _list_all_entries_for_cg(ctx.metadata_store, ctx.entity_id)
         if _entries_terminal_with_zero_implemented(entries):
             return GateOutcome(advance=True, reason="zero entries implemented")
@@ -1043,7 +1067,7 @@ def build_cg_execution_spec(
     max_implementation_phase_attempts: int = 2,
     require_human_approval: bool = False,
     evaluation_dispatch_trace: list[str] | None = None,
-    harness_builder_inline_runner: Any = None,
+    harness_builder_extra_env: Mapping[str, str] | None = None,
 ) -> PipelineSpec:
     """Build the SMAI CG-execution :class:`PipelineSpec`.
 
@@ -1093,11 +1117,14 @@ def build_cg_execution_spec(
         evaluation_dispatch_trace: Optional spy hook for the test
             asserting mechanical-then-contextual ordering per the
             acceptance criteria. Production deployments leave ``None``.
-        harness_builder_inline_runner: Test-only runner override threaded
-            into :func:`make_dispatch_harness_build` as ``inline_runner``
-            — replaces :func:`run_loop` as the harness-builder session
-            runner. Production leaves it ``None``. Typed ``Any`` to keep
-            this module loadable without smai-agents installed.
+        harness_builder_extra_env: Optional env-var overrides threaded
+            into the sandboxed harness-builder container via the
+            sub-PR B dispatcher's ``extra_env`` knob. Sub-PR D's
+            ``_role_models_to_step_env`` helper projects
+            :attr:`EngineConfig.role_models` into this map for D3
+            per-step model selection; the CLI bootstrap layer
+            (:class:`smai_cli.runtime.Runtime`) is the canonical
+            producer.
 
     Per-entity-kind structure: this returns the CG-level spec
     (entity_kind=``"cg"``); the entry-level spec is built by
@@ -1112,14 +1139,29 @@ def build_cg_execution_spec(
     # layer Tier B integration path, where users construct PipelineSpec
     # objects programmatically without the agent fleet).
     from smai_agents.agents.harness_builder import (  # noqa: PLC0415
-        make_dispatch_harness_build,
+        make_dispatch_harness_build_sandboxed,
     )
 
-    harness_builder_dispatch = make_dispatch_harness_build(
+    # Sub-PR E cutover: production now uses the sandboxed dispatcher
+    # (sub-PR B) which submits a real Compute job carrying the agent
+    # workspace. The retry policy is built here so it can be passed both
+    # to the factory (for symmetry) and to the :class:`DispatchAction`
+    # below (where the engine reads it for the round-10 counter bump +
+    # synthesized retry-exhausted terminal). The bundle returns a
+    # ``handler`` + ``post_terminal_handler`` pair; the engine fires the
+    # post-terminal hook in phase-1 to harvest the workspace and publish
+    # outputs to :class:`ArtifactStore` BEFORE the gate body evaluates
+    # (sub-PR E phase1 reorder — the gate reads the published manifest).
+    implementation_phase_retry_policy = RetryPolicy(
+        attempt_counter_field="implementation_phase_attempt",
+        max_attempts=max_implementation_phase_attempts,
+        on_exhaustion_target_state="implementation_failed",
+        on_exhaustion_reason=("implementation-phase retry budget exhausted; terminal"),
+    )
+    harness_builder_bundle = make_dispatch_harness_build_sandboxed(
         workspace_root=workspace_root,
-        runtime_image=runtime_image,
-        runtime_cpu_image=runtime_cpu_image,
-        inline_runner=harness_builder_inline_runner,
+        retry_policy=implementation_phase_retry_policy,
+        extra_env=harness_builder_extra_env,
     )
 
     states: list[StateDef] = [
@@ -1130,22 +1172,22 @@ def build_cg_execution_spec(
                 name="cg.dispatch_implementation_phase",
                 handler=cast(
                     Callable[[DispatchContext], Awaitable[DispatchOutcome]],
-                    harness_builder_dispatch,
+                    harness_builder_bundle.handler,
                 ),
                 pool=POOL_AGENTS,
                 handle_field="harness_job_handle",
-                # Round 10: a dispatch failure here (e.g. Modal
-                # ``Sandbox.create`` failing pre-submit, or the harness
-                # builder agent's session raising before submitting a
-                # validation job) used to infinitely roll back to
-                # ``draft`` and re-dispatch; the synthesized retry-
-                # exhausted terminal closes that loop.
-                retry_policy=RetryPolicy(
-                    attempt_counter_field="implementation_phase_attempt",
-                    max_attempts=max_implementation_phase_attempts,
-                    on_exhaustion_target_state="implementation_failed",
-                    on_exhaustion_reason=("implementation-phase retry budget exhausted; terminal"),
-                ),
+                post_terminal_handler=harness_builder_bundle.post_terminal_handler,
+                # Round 10: a dispatch *handler* failure (e.g. workspace
+                # materialization raising before submit, or the
+                # ``Compute.submit`` call itself raising) routes through
+                # the engine's ``_handle_dispatch_failure`` + the
+                # synthesized retry-exhausted terminal. Note that
+                # *job* failures (sandbox container exit code != 0 after
+                # a successful submit) instead fire the ``job_failed``
+                # edge directly — they are an observation, not a
+                # dispatch failure, and route to ``implementation_failed``
+                # without consuming the retry budget.
+                retry_policy=implementation_phase_retry_policy,
             ),
         ),
         StateDef(
@@ -1189,30 +1231,47 @@ def build_cg_execution_spec(
             gate_rule=_make_gate_draft_ready(),
             fires_on="dispatch_time",
         ),
-        # Round 14: the harness builder runs in-process (no external
-        # Compute job to poll), so these edges fire on ``dispatch_time``
-        # — the next worker cycle re-evaluates them against the
-        # artifacts the in-process session published, exactly like the
-        # proposal spec's ``designing → designed`` edge. A *harness
-        # build* failure (the agent did not emit a manifest) is surfaced
-        # by the dispatch handler as a ``DispatchOutcome`` error and
-        # handled by the engine's ``_handle_dispatch_failure`` + the
-        # ``implementing`` state's RetryPolicy — there is no separate
-        # ``harness build failed`` edge. Declared success-first so a
-        # passing harness short-circuits before the no-survivors edge.
+        # Sub-PR E cutover: the harness builder now runs in a
+        # ``smai-agent-runtime`` sandbox via the sub-PR B dispatcher,
+        # so phase-1 polls the :class:`Compute` job. On terminal
+        # success the engine fires the dispatch action's
+        # ``post_terminal_handler`` (harvests workspace + publishes
+        # ``harness/`` / ``techniques/`` / ``manifest.json`` to
+        # :class:`ArtifactStore`) BEFORE evaluating these edges, so
+        # the success gate reads the just-published manifest. The
+        # success-first declaration order pre-empts the no-survivors
+        # gate; the job_failed terminal handles the sandbox-crash
+        # path.
         EdgeDef(
             name="cg.implementing → implemented",
             from_state="implementing",
             target_state="implemented",
             gate_rule=_make_gate_harness_succeeded_advance(),
-            fires_on="dispatch_time",
+            fires_on="job_succeeded",
         ),
         EdgeDef(
             name="cg.implementing → implementation_failed (no survivors)",
             from_state="implementing",
             target_state="implementation_failed",
             gate_rule=_make_gate_harness_succeeded_no_survivors(),
-            fires_on="dispatch_time",
+            fires_on="job_succeeded",
+        ),
+        # Sub-PR E cutover: when the sandbox container exits non-zero
+        # (validation never passed, fatal agent error, supervisor abort,
+        # etc.) the harness build is unrecoverable for this attempt.
+        # Routes the CG to ``implementation_failed`` terminal. Distinct
+        # from the round-10 retry-exhausted path: that fires on dispatch
+        # *handler* failures (workspace materialization / Compute.submit
+        # raising), this fires on job-status observation after a
+        # successful submit.
+        EdgeDef(
+            name="cg.implementing → implementation_failed (job failed)",
+            from_state="implementing",
+            target_state="implementation_failed",
+            gate_rule=_make_gate_always_advance(
+                "sandbox harness-builder job terminal-failed; terminal"
+            ),
+            fires_on="job_failed",
         ),
         # implemented edge trio — success first, retry second, terminal third.
         EdgeDef(
