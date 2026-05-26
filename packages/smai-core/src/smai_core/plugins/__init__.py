@@ -45,6 +45,8 @@ from smai_core.plugins.compute import (
     JobNotFound,
     JobState,
     JobStatus,
+    WorkspaceHandle,
+    WorkspaceNotFound,
 )
 from smai_core.plugins.llm_provider import (
     CacheConfig,
@@ -111,6 +113,8 @@ __all__ = [
     "JobNotFound",
     "JobState",
     "JobStatus",
+    "WorkspaceHandle",
+    "WorkspaceNotFound",
     # llm_provider
     "CacheConfig",
     "LlmCapabilities",

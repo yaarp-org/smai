@@ -22,6 +22,7 @@ seam.
 
 from __future__ import annotations
 
+import pathlib
 import time
 
 import pytest
@@ -32,10 +33,23 @@ from smai_core.plugins import (
     JobHandle,
     JobImageInvalid,
     JobStatus,
+    WorkspaceHandle,
+    WorkspaceNotFound,
 )
 from smai_core.plugins.conformance._common import (
     TimeProvider,
     skip_no_factory_override,
+)
+
+# Module-level fixture tree exercised by ``test_workspace_round_trip``.
+# Three regular files across two directory levels: enough to exercise
+# tar/zip boundary handling on substrates that upload-and-download
+# (Modal Volumes) while small enough that round-trip latency stays
+# under the conformance suite's poll_budget_seconds.
+_WORKSPACE_FIXTURE_FILES: tuple[tuple[str, bytes], ...] = (
+    ("README.md", b"# smai conformance round-trip\nfixture tree.\n"),
+    ("data/config.json", b'{"smai_conformance": "round-trip"}\n'),
+    ("data/sub/payload.bin", bytes(range(256))),
 )
 
 
@@ -279,6 +293,113 @@ class ComputeConformance:
     def test_capabilities_are_capabilities_model(self, compute: Compute) -> None:
         """Capability attribute is the right Pydantic model."""
         assert isinstance(compute.capabilities, ComputeCapabilities)
+
+    # ---- workspace distribution (agent-refactor Step 1) --------------------
+
+    async def test_workspace_round_trip(
+        self,
+        compute: Compute,
+        fixture_image: str,
+        time_provider: TimeProvider,
+        poll_budget_seconds: float,
+        tmp_path: pathlib.Path,
+    ) -> None:
+        """Stage a directory tree, run a container that reads it and
+        writes derived outputs, harvest, assert the host sees what the
+        container wrote (§2 agent_refactor/compute_dispatch_decisions.md).
+
+        The round-trip exercises three substrate behaviors at once:
+        (a) ``stage_workspace`` materializes the source tree at the
+        container's ``/workspace/`` mount point; (b) the container can
+        read the staged files and write to the same location; (c)
+        ``harvest_workspace`` returns the container-side writes to the
+        host. Real ``submit`` is used (not a no-op) because (b) is the
+        load-bearing assertion — a stage/harvest pair that bypasses the
+        container cannot catch substrate-side mount-direction bugs.
+
+        Plugins with ``workspace_distribution == "none"`` skip cleanly;
+        substrates whose fake test seam cannot simulate the
+        in-container mount may override this test to skip with the
+        rationale documented locally.
+        """
+        if compute.capabilities.workspace_distribution == "none":
+            pytest.skip(
+                f"plugin {compute.name!r} declares workspace_distribution='none'; "
+                "round-trip test does not apply."
+            )
+
+        source = tmp_path / "source"
+        for relpath, payload in _WORKSPACE_FIXTURE_FILES:
+            target = source / relpath
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(payload)
+
+        # Stage; round-trip the handle through Pydantic JSON to mirror
+        # the cross-process persistence contract used by JobHandle in
+        # ``test_job_handle_reconnection``.
+        handle = await compute.stage_workspace(source)
+        round_tripped = WorkspaceHandle.model_validate_json(handle.model_dump_json())
+
+        # Container reads /workspace/README.md and writes a derived
+        # marker file plus an exact-copy directory. Reading proves the
+        # stage direction worked; writing proves the harvest direction
+        # will have something to harvest. Command is shell-free (list
+        # argv, no expansion) per the existing conformance fixtures'
+        # style.
+        program = (
+            "import pathlib, shutil;"
+            "ws = pathlib.Path('/workspace');"
+            "src = (ws / 'README.md').read_bytes();"
+            "(ws / 'echo.txt').write_bytes(src);"
+            "shutil.copytree(ws / 'data', ws / 'data_copy')"
+        )
+        job_handle = await compute.submit(
+            image=fixture_image,
+            command=["python", "-c", program],
+            env={},
+            timeout_seconds=int(poll_budget_seconds),
+            workspace=round_tripped,
+        )
+        status = await _poll_until_terminal(compute, job_handle, time_provider, poll_budget_seconds)
+        assert status.state == "succeeded", (
+            f"in-container worker exited non-success: {status!r}; "
+            f"logs={await compute.logs(job_handle)!r}"
+        )
+
+        harvest = tmp_path / "harvest"
+        await compute.harvest_workspace(round_tripped, harvest)
+
+        expected: dict[str, bytes] = {
+            relpath: payload for relpath, payload in _WORKSPACE_FIXTURE_FILES
+        }
+        expected["echo.txt"] = _WORKSPACE_FIXTURE_FILES[0][1]
+        for relpath, payload in _WORKSPACE_FIXTURE_FILES:
+            if relpath.startswith("data/"):
+                expected[f"data_copy/{relpath[len('data/') :]}"] = payload
+
+        harvested = {
+            str(p.relative_to(harvest)): p.read_bytes() for p in harvest.rglob("*") if p.is_file()
+        }
+        assert harvested == expected, (
+            f"workspace round-trip mismatch: "
+            f"missing={set(expected) - set(harvested)!r}, "
+            f"extra={set(harvested) - set(expected)!r}"
+        )
+
+    async def test_workspace_harvest_missing_handle_raises(
+        self, compute: Compute, tmp_path: pathlib.Path
+    ) -> None:
+        """``harvest_workspace`` with an unknown handle raises
+        :class:`WorkspaceNotFound` — the symmetric obligation to
+        :class:`JobNotFound` on ``status``."""
+        if compute.capabilities.workspace_distribution == "none":
+            pytest.skip(f"plugin {compute.name!r} declares workspace_distribution='none'.")
+        bogus = WorkspaceHandle(
+            plugin=compute.name,
+            handle="smai-conformance-unknown-workspace-handle-7c3a",
+        )
+        with pytest.raises(WorkspaceNotFound):
+            await compute.harvest_workspace(bogus, tmp_path / "harvest")
 
 
 # ---- private helpers --------------------------------------------------------

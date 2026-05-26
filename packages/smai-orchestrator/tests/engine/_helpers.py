@@ -13,6 +13,7 @@ from collections import deque
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Literal
 
 from smai_core.plugins import (
@@ -20,6 +21,7 @@ from smai_core.plugins import (
     ComputeCapabilities,
     JobHandle,
     JobStatus,
+    WorkspaceHandle,
 )
 
 # === FakeClock for wall-clock tests ==========================================
@@ -139,6 +141,12 @@ class FakeCompute:
 
     async def cancel(self, handle: JobHandle) -> None:
         self.cancel_calls.append(handle)
+
+    async def stage_workspace(self, local_path: Path) -> WorkspaceHandle:
+        return WorkspaceHandle(plugin=self.name, handle=str(local_path))
+
+    async def harvest_workspace(self, handle: WorkspaceHandle, local_path: Path) -> None:
+        del handle, local_path
 
 
 # === FakeArtifactStore =======================================================

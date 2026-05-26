@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import AbstractAsyncContextManager
+from pathlib import Path
 from typing import Any
 
 from smai_core.plugins import (
@@ -31,6 +32,7 @@ from smai_core.plugins import (
     ModelResponse,
     NormalizedMessage,
     Transaction,
+    WorkspaceHandle,
 )
 
 # ---------- LlmProvider ------------------------------------------------------
@@ -290,6 +292,11 @@ class _ConformingCompute:
         return ""
 
     async def cancel(self, handle: JobHandle) -> None: ...
+
+    async def stage_workspace(self, local_path: Path) -> WorkspaceHandle:
+        return WorkspaceHandle(plugin=self.name, handle=str(local_path))
+
+    async def harvest_workspace(self, handle: WorkspaceHandle, local_path: Path) -> None: ...
 
 
 class _NonConformingCompute:

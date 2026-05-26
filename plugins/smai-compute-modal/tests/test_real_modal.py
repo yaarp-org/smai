@@ -34,10 +34,12 @@ from __future__ import annotations
 
 import asyncio
 import os
+from typing import cast
 
 import pytest
 from smai_compute_modal import ModalCompute
-from smai_core.plugins import JobStatus
+from smai_core.plugins import Compute, JobStatus
+from smai_core.plugins.conformance import ComputeConformance
 
 # The marker registration lives in root pyproject.toml per Task 3.G3.
 # Each credentialed test ALSO carries skipif-on-env so it skips
@@ -151,3 +153,33 @@ async def test_real_modal_cancel_terminates_running_job() -> None:
     )
     # Idempotent — second cancel on a terminal sandbox is a no-op.
     await compute.cancel(handle)
+
+
+class TestRealModalComputeConformance(ComputeConformance):
+    """Re-run :class:`ComputeConformance` against real Modal.
+
+    The fake-substrate lane (``tests/test_conformance.py``) skips
+    :meth:`test_workspace_round_trip` because ``FakeSandbox`` cannot
+    simulate the ``/workspace`` mount path. This credentialed subclass
+    runs the round-trip against a real Modal Volume so the §2
+    workspace-distribution contract is exercised at least once before
+    declaring Step 1 done.
+
+    All credentialed-only methods inherit the module-level
+    :data:`pytestmark` skipif so the suite skips cleanly when
+    ``MODAL_TOKEN_ID`` / ``MODAL_TOKEN_SECRET`` are unset.
+    """
+
+    @pytest.fixture
+    def fixture_image(self) -> str:
+        return _FIXTURE_IMAGE
+
+    @pytest.fixture
+    def poll_budget_seconds(self) -> float:
+        return _TERMINAL_TIMEOUT_SECONDS
+
+    def make_compute(self) -> Compute:
+        return cast(Compute, ModalCompute(app_name="smai-real-modal-test"))
+
+    def make_fresh_compute(self) -> Compute:
+        return cast(Compute, ModalCompute(app_name="smai-real-modal-test"))

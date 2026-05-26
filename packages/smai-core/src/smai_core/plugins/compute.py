@@ -17,6 +17,7 @@ selection, or cost accounting. Plugins surface only job lifecycle.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -94,6 +95,27 @@ class ComputeCapabilities(BaseModel):
         this flag to refuse a registry-pull substrate paired with the
         local-only built-in default runtime image, rather than letting
         the failure surface as an opaque mid-run image-build error.
+
+    ``workspace_distribution``:
+        How the plugin moves files between host and sandbox (§2
+        ``agent_refactor/compute_dispatch_decisions.md``).
+
+        ``"bind_mount"``: :meth:`Compute.stage_workspace` is a
+        no-op-passthrough returning a :class:`WorkspaceHandle` wrapping
+        the host path; the container sees the same files via the
+        substrate's mount semantics. :meth:`Compute.harvest_workspace`
+        is also a no-op (the host already reads what the container
+        wrote). LocalGpu.
+
+        ``"upload_download"``: :meth:`Compute.stage_workspace` uploads
+        the local directory to a substrate-managed volume / store;
+        :meth:`Compute.harvest_workspace` downloads back. Modal.
+
+        ``"none"``: Plugin does not support workspace distribution.
+        Both methods raise :class:`NotImplementedError`. The conformance
+        suite's round-trip test skips cleanly. The unified dispatch
+        factory (Step 2 of the agent-layer refactor) refuses to
+        dispatch a role that needs a workspace through this plugin.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -102,6 +124,7 @@ class ComputeCapabilities(BaseModel):
     max_timeout_seconds: int
     supports_log_streaming: bool = False
     requires_published_image: bool = False
+    workspace_distribution: Literal["bind_mount", "upload_download", "none"] = "bind_mount"
 
 
 # === Error contract (§7.3) ===================================================
@@ -138,6 +161,50 @@ class JobImageInvalid(ComputeError):
 
 class ComputeUnavailable(ComputeError):
     """Substrate-level outage (§7.3). Caller may retry."""
+
+
+# === Workspace types (agent-refactor §2) ====================================
+
+
+class WorkspaceHandle(BaseModel):
+    """Opaque identifier for a staged workspace.
+
+    Mirrors :class:`JobHandle`'s shape so substrates can reuse their
+    handle-encoding conventions. The ``plugin`` field is the same
+    plugin-identifier string the Compute plugin sets as its
+    :attr:`Compute.name` ("localgpu", "modal", "runpod"); the
+    ``handle`` field encodes whatever the substrate needs to reattach
+    to the staged data (a host path for bind-mount substrates, a Modal
+    volume name + version, a RunPod volume id, etc.); ``metadata`` is
+    for non-load-bearing annotations (``staged_at``, ``byte_count``)
+    that the substrate or callers find useful but the Protocol does
+    not interpret.
+
+    Consumers persist this object via the :class:`MetadataStore` and
+    pass it back to :meth:`Compute.harvest_workspace` later (possibly
+    from a fresh worker process, per the same cross-process
+    reconnection contract as :class:`JobHandle`).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    plugin: str
+    handle: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class WorkspaceNotFound(ComputeError):
+    """Raised by :meth:`Compute.harvest_workspace` when the substrate
+    has no record of the workspace handle.
+
+    Mirrors :class:`JobNotFound`: substrate-side garbage collection,
+    expired volumes, or a handle that was never staged on this
+    substrate produce this error.
+    """
+
+    def __init__(self, handle: WorkspaceHandle) -> None:
+        self.handle = handle
+        super().__init__(f"workspace not found: {handle.plugin}/{handle.handle}")
 
 
 # === Protocol shape (§7.2) ===================================================
@@ -215,5 +282,69 @@ class Compute(Protocol):
         return ``state='cancelled'`` once the substrate confirms.
         Idempotent — calling cancel on an already-terminal job is a
         no-op.
+        """
+        ...
+
+    async def stage_workspace(self, local_path: Path) -> WorkspaceHandle:
+        """Make ``local_path`` (a directory tree on the host) available
+        inside subsequent :meth:`submit` calls under ``/workspace/``
+        (or the substrate's equivalent root). Returns an opaque handle
+        the caller persists and passes back to :meth:`harvest_workspace`
+        later.
+
+        Implementations MUST:
+
+        * Treat ``local_path`` as the canonical source: every regular
+          file under it is staged; symlinks are followed (since the
+          container's view should be self-contained).
+        * Raise :class:`FileNotFoundError` if ``local_path`` does not
+          exist and :class:`NotADirectoryError` if it exists but is
+          not a directory. These are caller-side bugs and use stdlib
+          exceptions, not the Compute error taxonomy (which is
+          reserved for substrate-side conditions).
+        * Raise :class:`ComputeUnavailable` if the substrate is
+          unreachable.
+        * Encode reattachment state in the returned
+          :class:`WorkspaceHandle` so a fresh process can later harvest
+          (the same cross-process contract as :class:`JobHandle`).
+
+        Not idempotent in the strict sense: repeat calls on the same
+        ``local_path`` may produce distinct handles, and substrates
+        with versioned volumes may layer the second stage on top of
+        the first. Callers that need a single staged copy must persist
+        the first handle.
+
+        Plugins with ``workspace_distribution="none"`` raise
+        :class:`NotImplementedError`.
+        """
+        ...
+
+    async def harvest_workspace(self, handle: WorkspaceHandle, local_path: Path) -> None:
+        """Copy the workspace's current contents (as the container
+        last wrote them) back to the host at ``local_path``. Returns
+        once the copy is complete.
+
+        Implementations MUST:
+
+        * Create ``local_path`` (including missing parent directories)
+          when absent. Overwrite same-named files when present
+          (``mkdir(parents=True, exist_ok=True)`` semantics).
+        * Raise :class:`WorkspaceNotFound` when the substrate has no
+          record of the handle (expired volume, garbage-collected,
+          mismatched plugin identifier).
+        * Raise :class:`ComputeUnavailable` if the substrate is
+          unreachable.
+        * Tolerate being called multiple times on the same
+          ``(handle, local_path)`` pair: the second call writes the
+          same files. No partial state on failure (best-effort
+          all-or-nothing; substrate-dependent).
+
+        Plugins with ``workspace_distribution="bind_mount"`` MAY
+        implement this as a no-op (the host already sees what the
+        container wrote via the mount); the method exists for Protocol
+        uniformity at callsites.
+
+        Plugins with ``workspace_distribution="none"`` raise
+        :class:`NotImplementedError`.
         """
         ...

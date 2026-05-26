@@ -111,6 +111,14 @@ class _InlineComputeStub:
     async def cancel(self, handle):  # type: ignore[no-untyped-def]
         del handle
 
+    async def stage_workspace(self, local_path):  # type: ignore[no-untyped-def]
+        from smai_core.plugins import WorkspaceHandle  # noqa: PLC0415
+
+        return WorkspaceHandle(plugin=self.name, handle=str(local_path))
+
+    async def harvest_workspace(self, handle, local_path):  # type: ignore[no-untyped-def]
+        del handle, local_path
+
 
 # === run_attempt: round-10 — engine bumps it on each step-1 CAS ============
 

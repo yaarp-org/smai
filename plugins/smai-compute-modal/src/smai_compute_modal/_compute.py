@@ -53,7 +53,9 @@ shell history.
 from __future__ import annotations
 
 import contextlib
+import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from smai_core.plugins import (
@@ -64,6 +66,8 @@ from smai_core.plugins import (
     JobNotFound,
     JobState,
     JobStatus,
+    WorkspaceHandle,
+    WorkspaceNotFound,
 )
 
 # === Constants ==============================================================
@@ -85,6 +89,11 @@ _DEFAULT_APP_NAME = "smai"
 # §13 — sufficient for the classification workloads in scope and the
 # cheapest GPU offering on Modal.
 _DEFAULT_GPU_TYPE = "T4"
+
+# In-Sandbox mount path for a staged workspace volume. Matches the
+# bind-mount target used by ``smai-compute-localgpu`` (§10.8.5) so
+# substrate-agnostic code can reference ``/workspace`` uniformly.
+_WORKSPACE_MOUNT_PATH = "/workspace"
 
 
 # === Implementation =========================================================
@@ -138,6 +147,10 @@ class ModalCompute:
             # Modal pulls the job image from a registry via
             # ``Image.from_registry`` — the operator must publish it.
             requires_published_image=True,
+            # Modal Volumes provide upload/download bidirectional
+            # workspace distribution (§2 ``agent_refactor/
+            # compute_dispatch_decisions.md``).
+            workspace_distribution="upload_download",
         )
 
     # --- public surface (Compute Protocol) ---------------------------------
@@ -171,6 +184,7 @@ class ModalCompute:
         gpu_type = self._resolve_gpu_spec(gpu, plugin_options)
         cpu = _coerce_optional_float(plugin_options.get("cpu"), "cpu")
         memory_mb = _coerce_optional_int(plugin_options.get("memory_mb"), "memory_mb")
+        workspace_handle = _coerce_workspace_handle(plugin_options.get("workspace"))
 
         # Cap the substrate-imposed maximum so a misconfigured caller
         # cannot ask Modal for a 48-hour Sandbox.
@@ -192,6 +206,19 @@ class ModalCompute:
             create_kwargs["cpu"] = cpu
         if memory_mb is not None:
             create_kwargs["memory"] = memory_mb
+        if workspace_handle is not None:
+            if workspace_handle.plugin != self.name:
+                raise ValueError(
+                    f"plugin_options['workspace'] is a WorkspaceHandle from "
+                    f"plugin {workspace_handle.plugin!r}; this plugin is "
+                    f"{self.name!r}"
+                )
+            volume = await _to_thread(
+                self._modal.Volume.from_name,
+                workspace_handle.handle,
+                create_if_missing=False,
+            )
+            create_kwargs["volumes"] = {_WORKSPACE_MOUNT_PATH: volume}
 
         try:
             sandbox = await _to_thread(
@@ -363,6 +390,72 @@ class ModalCompute:
                 return
             raise ComputeUnavailable(f"modal.Sandbox.terminate failed: {exc!r}") from exc
 
+    async def stage_workspace(self, local_path: Path) -> WorkspaceHandle:
+        """Stage ``local_path`` into a fresh Modal Volume.
+
+        Creates a per-stage Modal Volume (``smai-staged-<uuid>``) and
+        uploads ``local_path``'s contents via ``Volume.batch_upload``.
+        Subsequent :meth:`submit` calls receiving ``workspace=<handle>``
+        attach the named volume at ``/workspace`` in the Sandbox.
+        """
+        if not local_path.exists():
+            raise FileNotFoundError(local_path)
+        if not local_path.is_dir():
+            raise NotADirectoryError(local_path)
+
+        volume_name = f"smai-staged-{uuid.uuid4().hex[:12]}"
+
+        try:
+            volume = await _to_thread(
+                self._modal.Volume.from_name,
+                volume_name,
+                create_if_missing=True,
+            )
+        except Exception as exc:  # noqa: BLE001 - duck-typed boundary
+            raise ComputeUnavailable(f"modal.Volume.from_name failed: {exc!r}") from exc
+
+        try:
+            await _to_thread(_upload_directory, volume, local_path)
+        except Exception as exc:  # noqa: BLE001 - duck-typed boundary
+            raise ComputeUnavailable(f"modal.Volume.batch_upload failed: {exc!r}") from exc
+
+        return WorkspaceHandle(
+            plugin=self.name,
+            handle=volume_name,
+            metadata={"staged_at": _utc_now_iso()},
+        )
+
+    async def harvest_workspace(self, handle: WorkspaceHandle, local_path: Path) -> None:
+        """Download a staged Modal Volume's contents back to the host.
+
+        Resolves the volume by name (the handle's ``handle`` field),
+        creates ``local_path`` (mkdir(parents=True, exist_ok=True)),
+        and copies the volume's tree into it. Raises
+        :class:`WorkspaceNotFound` when Modal has no record of the
+        volume.
+        """
+        if handle.plugin != self.name:
+            raise WorkspaceNotFound(handle)
+
+        try:
+            volume = await _to_thread(
+                self._modal.Volume.from_name,
+                handle.handle,
+                create_if_missing=False,
+            )
+        except Exception as exc:
+            if _is_not_found_error(exc):
+                raise WorkspaceNotFound(handle) from exc
+            raise ComputeUnavailable(f"modal.Volume.from_name failed: {exc!r}") from exc
+
+        local_path.mkdir(parents=True, exist_ok=True)
+        try:
+            await _to_thread(_download_directory, volume, local_path)
+        except Exception as exc:
+            if _is_not_found_error(exc):
+                raise WorkspaceNotFound(handle) from exc
+            raise ComputeUnavailable(f"modal Volume read-back failed: {exc!r}") from exc
+
     # --- internal helpers --------------------------------------------------
 
     async def _ensure_app(self) -> Any:
@@ -505,6 +598,92 @@ def _read_attr(obj: Any, name: str) -> Any:
         return getattr(obj, name)
     except Exception:  # noqa: BLE001 - duck-typed boundary
         return None
+
+
+def _coerce_workspace_handle(value: object) -> WorkspaceHandle | None:
+    """Normalize the ``workspace=`` plugin_option to a WorkspaceHandle.
+
+    Accepts ``None`` (no workspace volume) or a :class:`WorkspaceHandle`.
+    Other shapes (the legacy ``str`` form for LocalGpu) raise
+    :class:`ValueError`: Modal has no bind-mount semantics, so a bare
+    host-path string would silently drop on this substrate
+    (``run_experiment.py:253-260`` round-18 TODO). The plugin now
+    refuses the shape rather than continuing to drop it.
+    """
+    if value is None:
+        return None
+    if isinstance(value, WorkspaceHandle):
+        return value
+    raise ValueError(
+        f"plugin_options['workspace'] for ModalCompute must be a "
+        f"WorkspaceHandle (produced by stage_workspace) or None; got "
+        f"{type(value).__name__}"
+    )
+
+
+def _upload_directory(volume: Any, local_path: Path) -> None:
+    """Upload ``local_path``'s contents to ``volume`` under root.
+
+    Uses Modal's ``Volume.batch_upload`` context manager. The fake
+    Modal substrate mirrors the production surface — ``batch_upload``
+    returns a context manager exposing ``put_directory(local, remote)``.
+    """
+    with volume.batch_upload() as batch:
+        batch.put_directory(str(local_path), "/")
+
+
+def _download_directory(volume: Any, local_path: Path) -> None:
+    """Copy ``volume``'s tree into ``local_path``.
+
+    Iterates the volume's tree via ``iterdir("/")``, recursing into
+    directories. Reads each file via ``read_file`` (which Modal's SDK
+    yields chunk-by-chunk as bytes) and writes to the corresponding
+    relative path under ``local_path``.
+    """
+    _download_subtree(volume, "/", local_path)
+
+
+def _download_subtree(volume: Any, remote_path: str, local_root: Path) -> None:
+    """Recursively walk ``remote_path`` on ``volume`` and write under
+    ``local_root``."""
+    for entry in volume.iterdir(remote_path):
+        entry_path = _entry_path(entry)
+        rel = entry_path.lstrip("/")
+        local_target = local_root / rel
+        if _entry_is_dir(entry):
+            local_target.mkdir(parents=True, exist_ok=True)
+            _download_subtree(volume, entry_path, local_root)
+        else:
+            local_target.parent.mkdir(parents=True, exist_ok=True)
+            chunks: list[bytes] = []
+            for chunk in volume.read_file(entry_path):
+                chunks.append(chunk if isinstance(chunk, bytes) else bytes(chunk))
+            local_target.write_bytes(b"".join(chunks))
+
+
+def _entry_path(entry: Any) -> str:
+    """Read the path off a ``modal.Volume.FileEntry`` (or fake equivalent).
+
+    Modal's FileEntry has a ``path`` attribute (string, absolute on the
+    volume). Fakes mirror that.
+    """
+    path = getattr(entry, "path", None)
+    if not isinstance(path, str):
+        raise ComputeUnavailable(f"modal Volume.iterdir entry missing path attribute: {entry!r}")
+    return path
+
+
+def _entry_is_dir(entry: Any) -> bool:
+    """True iff ``entry`` represents a directory.
+
+    Modal's FileEntry exposes a ``type`` enum (``FileEntryType.DIRECTORY``
+    vs ``FILE``). We string-compare to stay version-tolerant; fakes
+    mirror the same string surface.
+    """
+    entry_type = getattr(entry, "type", None)
+    if entry_type is None:
+        return False
+    return "DIRECTORY" in str(entry_type).upper()
 
 
 def _coerce_optional_float(value: object, name: str) -> float | None:

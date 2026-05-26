@@ -162,6 +162,8 @@ _COMPUTE_EXPECTED_METHODS = {
     "test_logs_returns_stdout",
     "test_invalid_image_raises",
     "test_capabilities_are_capabilities_model",
+    "test_workspace_round_trip",
+    "test_workspace_harvest_missing_handle_raises",
 }
 
 
@@ -504,4 +506,41 @@ def test_cursor_page_round_trips_real_pipeline_records() -> None:
                 "updated_at": now,
                 "unknown_extra": "rejected",
             }
+        )
+
+
+# ---------- assert_logs_on_failure (round-20 step-back HIGH-#1) --------------
+
+
+async def test_assert_logs_on_failure_returns_non_empty() -> None:
+    """The consistency-of-use helper returns the logs string when
+    :meth:`Compute.logs` yields non-empty content on a failing job."""
+    from smai_core.plugins import JobHandle  # noqa: PLC0415
+    from smai_core.plugins.conformance import assert_logs_on_failure  # noqa: PLC0415
+
+    class _LogsCompute:
+        async def logs(self, handle: JobHandle) -> str:  # noqa: ARG002
+            return "Traceback (most recent call last): ..."
+
+    logs = await assert_logs_on_failure(
+        _LogsCompute(),
+        JobHandle(plugin="fake", handle="job-1"),
+    )
+    assert "Traceback" in logs
+
+
+async def test_assert_logs_on_failure_raises_on_empty_logs() -> None:
+    """The helper raises :class:`AssertionError` when the dispatcher
+    forgot to surface stderr — the round-20 step-back HIGH-#1 anti-pattern."""
+    from smai_core.plugins import JobHandle  # noqa: PLC0415
+    from smai_core.plugins.conformance import assert_logs_on_failure  # noqa: PLC0415
+
+    class _SilentCompute:
+        async def logs(self, handle: JobHandle) -> str:  # noqa: ARG002
+            return ""
+
+    with pytest.raises(AssertionError, match="round-20 step-back HIGH-#1"):
+        await assert_logs_on_failure(
+            _SilentCompute(),
+            JobHandle(plugin="fake", handle="job-1"),
         )

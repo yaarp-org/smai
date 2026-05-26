@@ -47,6 +47,7 @@ import re
 import sys
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, cast
 
 from smai_core.plugins import (
@@ -57,6 +58,8 @@ from smai_core.plugins import (
     JobNotFound,
     JobState,
     JobStatus,
+    WorkspaceHandle,
+    WorkspaceNotFound,
 )
 
 from smai_compute_localgpu._docker import docker_binary, run_docker
@@ -180,6 +183,7 @@ class LocalGpuCompute:
             supports_gpu=sys.platform != "darwin",
             max_timeout_seconds=_MAX_TIMEOUT_SECONDS,
             supports_log_streaming=False,
+            workspace_distribution="bind_mount",
         )
         if not skip_preflight:
             self._preflight_docker_info_sync()
@@ -224,12 +228,8 @@ class LocalGpuCompute:
         if gpu:
             await self._preflight_nvidia_smi()
 
-        workspace_arg = plugin_options.get("workspace", self._workspace)
-        if workspace_arg is not None and not isinstance(workspace_arg, str):
-            raise ValueError(
-                f"plugin_options['workspace'] must be a str path, got "
-                f"{type(workspace_arg).__name__}"
-            )
+        workspace_raw = plugin_options.get("workspace", self._workspace)
+        workspace_arg = _resolve_workspace_path(workspace_raw, self.name)
 
         container_name = f"{_CONTAINER_NAME_PREFIX}-{uuid.uuid4().hex[:12]}"
         argv: list[str] = ["run", "--detach", "--name", container_name]
@@ -432,6 +432,45 @@ class LocalGpuCompute:
                 f"docker stop failed (exit {result.returncode}): {result.stderr.strip()}"
             )
 
+    async def stage_workspace(self, local_path: Path) -> WorkspaceHandle:
+        """No-op passthrough: validate ``local_path`` and wrap its
+        resolved host path in a :class:`WorkspaceHandle`.
+
+        ``workspace_distribution='bind_mount'`` means the substrate's
+        bind mount IS the distribution mechanism; staging is the
+        identity transform. The returned handle encodes the resolved
+        absolute path so a subsequent :meth:`submit` call with
+        ``workspace=<handle>`` bind-mounts the same directory into
+        the container, and :meth:`harvest_workspace` is a no-op (the
+        host already reads what the container wrote via the mount).
+        """
+        if not local_path.exists():
+            raise FileNotFoundError(local_path)
+        if not local_path.is_dir():
+            raise NotADirectoryError(local_path)
+        resolved = local_path.resolve()
+        return WorkspaceHandle(
+            plugin=self.name,
+            handle=str(resolved),
+            metadata={"staged_at": _utc_now_iso()},
+        )
+
+    async def harvest_workspace(self, handle: WorkspaceHandle, local_path: Path) -> None:
+        """No-op: bind-mount semantics mean the host already sees what
+        the container wrote.
+
+        Validates the handle: if the resolved staged path no longer
+        exists, raises :class:`WorkspaceNotFound` to honor the
+        symmetric error contract with :class:`JobNotFound`. The
+        ``local_path`` argument is accepted for Protocol uniformity
+        but ignored — the harvest IS the mount.
+        """
+        del local_path  # Protocol uniformity; bind-mount means no copy.
+        if handle.plugin != self.name:
+            raise WorkspaceNotFound(handle)
+        if not Path(handle.handle).exists():
+            raise WorkspaceNotFound(handle)
+
     # --- preflight ---------------------------------------------------------
 
     def _preflight_docker_info_sync(self) -> None:
@@ -614,6 +653,33 @@ class LocalGpuCompute:
 
 
 # === Module-level helpers ===================================================
+
+
+def _resolve_workspace_path(value: Any, plugin_name: str) -> str | None:
+    """Normalize the ``workspace=`` plugin_option to a host path string.
+
+    Accepts ``None`` (no workspace bind mount), a ``str`` path
+    (legacy round-18 shape), or a :class:`WorkspaceHandle` produced by
+    :meth:`LocalGpuCompute.stage_workspace`. Other types raise
+    :class:`ValueError`. A :class:`WorkspaceHandle` from a different
+    plugin raises :class:`ValueError` rather than silently bind-mounting
+    a path the foreign plugin chose.
+    """
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    if isinstance(value, WorkspaceHandle):
+        if value.plugin != plugin_name:
+            raise ValueError(
+                f"plugin_options['workspace'] is a WorkspaceHandle from "
+                f"plugin {value.plugin!r}; this plugin is {plugin_name!r}"
+            )
+        return value.handle
+    raise ValueError(
+        f"plugin_options['workspace'] must be a str path, a "
+        f"WorkspaceHandle, or None; got {type(value).__name__}"
+    )
 
 
 def _utc_now_iso() -> str:

@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections import deque
 from collections.abc import AsyncIterator, Sequence
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Literal
 
 from smai_core.plugins import (
@@ -18,6 +19,7 @@ from smai_core.plugins import (
     ComputeCapabilities,
     JobHandle,
     JobStatus,
+    WorkspaceHandle,
 )
 
 
@@ -161,6 +163,12 @@ class E3FakeCompute:
     async def logs(self, handle: JobHandle) -> str:
         del handle
         return ""
+
+    async def stage_workspace(self, local_path: Path) -> WorkspaceHandle:
+        return WorkspaceHandle(plugin=self.name, handle=str(local_path))
+
+    async def harvest_workspace(self, handle: WorkspaceHandle, local_path: Path) -> None:
+        del handle, local_path
 
     def planned_terminal_for(self, handle_name: str) -> str | None:
         """Lookup the terminal we promised for a given handle.

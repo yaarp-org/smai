@@ -42,6 +42,7 @@ from smai_core.plugins import (
     TextContent,
     TokenUsage,
     ToolDefinition,
+    WorkspaceHandle,
 )
 from smai_orchestrator import (
     DEFAULT_TASK_ROLES,
@@ -133,6 +134,12 @@ class _FakeCompute:
     async def logs(self, handle: JobHandle) -> str:
         del handle
         return ""
+
+    async def stage_workspace(self, local_path: Path) -> WorkspaceHandle:
+        return WorkspaceHandle(plugin=self.name, handle=str(local_path))
+
+    async def harvest_workspace(self, handle: WorkspaceHandle, local_path: Path) -> None:
+        del handle, local_path
 
 
 class _InMemoryArtifactStore:

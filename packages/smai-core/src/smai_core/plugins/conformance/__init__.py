@@ -57,6 +57,7 @@ seam shape itself lives in 2.C1.
 
 from __future__ import annotations
 
+from smai_core.plugins.conformance._common import assert_logs_on_failure
 from smai_core.plugins.conformance.test_artifact_store import ArtifactStoreConformance
 from smai_core.plugins.conformance.test_compute import ComputeConformance
 from smai_core.plugins.conformance.test_llm_provider import LlmProviderConformance
@@ -67,4 +68,5 @@ __all__ = [
     "ComputeConformance",
     "LlmProviderConformance",
     "MetadataStoreConformance",
+    "assert_logs_on_failure",
 ]

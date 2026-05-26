@@ -27,6 +27,7 @@ from __future__ import annotations
 
 from collections import deque
 from collections.abc import AsyncIterator, Sequence
+from pathlib import Path
 from typing import Any, Literal
 
 import yaml
@@ -50,6 +51,7 @@ from smai_core.plugins import (
     TextContent,
     TokenUsage,
     ToolDefinition,
+    WorkspaceHandle,
 )
 
 # === StubLlmProvider =========================================================
@@ -154,6 +156,12 @@ class FakeCompute:
     async def logs(self, handle: JobHandle) -> str:
         del handle
         return ""
+
+    async def stage_workspace(self, local_path: Path) -> WorkspaceHandle:
+        return WorkspaceHandle(plugin=self.name, handle=str(local_path))
+
+    async def harvest_workspace(self, handle: WorkspaceHandle, local_path: Path) -> None:
+        del handle, local_path
 
 
 # === InMemoryArtifactStore ===================================================

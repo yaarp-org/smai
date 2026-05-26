@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, TypeVar
 
 import pytest
@@ -38,6 +39,7 @@ from smai_core.plugins import (
     MetadataStoreCapabilities,
     ModelResponse,
     NormalizedMessage,
+    WorkspaceHandle,
 )
 
 # The pipeline-tracking record types live in ``smai-orchestrator`` per
@@ -279,6 +281,12 @@ class _UnimplementedCompute:
     async def cancel(self, handle: JobHandle) -> None:
         raise NotImplementedError("stub compute")
 
+    async def stage_workspace(self, local_path: Path) -> WorkspaceHandle:
+        raise NotImplementedError("stub compute")
+
+    async def harvest_workspace(self, handle: WorkspaceHandle, local_path: Path) -> None:
+        raise NotImplementedError("stub compute")
+
 
 # === Skip-collection helper =================================================
 #
@@ -296,6 +304,44 @@ _SKIP_MESSAGE_TEMPLATE = (
 def skip_no_factory_override(class_name: str, factory_name: str) -> None:
     """Skip the test with a clear message when the factory wasn't overridden."""
     pytest.skip(_SKIP_MESSAGE_TEMPLATE.format(class_name=class_name, factory_name=factory_name))
+
+
+# === Consistency-of-use helpers (round-20 step-back HIGH-#1) ================
+#
+# Round-20's load-bearing observation: ``Compute.logs(handle)`` exists on
+# the Protocol, but agent-side dispatch callers (e.g.,
+# ``run_experiment._harvest_result``) failed to call it on failure, so
+# the container's stderr never reached the agent loop. The fix is
+# consistency-of-use across all dispatch sites, not a new Protocol
+# method. This helper makes that consistency testable at the dispatch
+# call site — a unit test for any dispatcher asserts the helper
+# returns non-empty content from a synthetic failing handle, pinning
+# the convention.
+#
+# Importable from ``smai_core.plugins.conformance`` (re-exported by the
+# package ``__init__``).
+
+
+async def assert_logs_on_failure(compute: Any, failing_handle: JobHandle) -> str:
+    """Assert ``compute.logs(failing_handle)`` returns non-empty content.
+
+    Round-20 step-back HIGH-#1: container stderr was silently dropped
+    by the agent-side dispatch path because callers did not invoke
+    ``Compute.logs()`` on terminal-failure states. The cure is
+    consistency-of-use across every dispatcher that ships under the
+    refactor's unified factory (Step 2). This helper is the test-time
+    pin for that convention.
+
+    Returns the logs string so call sites can additionally assert on
+    its contents.
+    """
+    logs = await compute.logs(failing_handle)
+    assert logs, (
+        "Compute.logs(handle) returned empty content on failure; "
+        "dispatch callers must surface container stderr (round-20 "
+        "step-back HIGH-#1)."
+    )
+    return logs
 
 
 # === Pipeline-record fixture construction helpers ==========================
@@ -401,6 +447,7 @@ __all__ = [
     "_UnimplementedLlmProvider",
     "_UnimplementedMetadataStore",
     "_UnimplementedTransaction",
+    "assert_logs_on_failure",
     "make_record",
     "skip_no_factory_override",
 ]

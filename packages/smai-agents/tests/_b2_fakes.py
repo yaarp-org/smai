@@ -20,6 +20,7 @@ from smai_core.plugins import (
     JobHandle,
     JobImageInvalid,
     JobStatus,
+    WorkspaceHandle,
 )
 
 
@@ -107,6 +108,12 @@ class FakeCompute:
 
     async def cancel(self, handle: JobHandle) -> None:
         self.cancel_calls.append(handle)
+
+    async def stage_workspace(self, local_path: Path) -> WorkspaceHandle:
+        return WorkspaceHandle(plugin=self.name, handle=str(local_path))
+
+    async def harvest_workspace(self, handle: WorkspaceHandle, local_path: Path) -> None:
+        del handle, local_path
 
 
 class FakeClock:

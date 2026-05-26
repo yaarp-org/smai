@@ -294,6 +294,139 @@ class _Exception:
     InvalidError = FakeInvalidError
 
 
+class _FakeFileEntryType:
+    """Stand-in for the ``modal.volume.FileEntryType`` enum values.
+
+    Mirrors the string-surface check :func:`_entry_is_dir` performs —
+    the production enum's ``str(value)`` yields ``"FileEntryType.FILE"``
+    / ``"FileEntryType.DIRECTORY"``.
+    """
+
+    FILE = "FileEntryType.FILE"
+    DIRECTORY = "FileEntryType.DIRECTORY"
+
+
+class _FakeFileEntry:
+    """Stand-in for ``modal.volume.FileEntry``."""
+
+    def __init__(self, path: str, *, is_dir: bool) -> None:
+        self.path = path
+        self.type = _FakeFileEntryType.DIRECTORY if is_dir else _FakeFileEntryType.FILE
+
+
+class _FakeBatchUpload:
+    """Stand-in for ``Volume.batch_upload()``'s context manager.
+
+    Mirrors the production ``put_directory(local, remote)`` API: walks
+    the local directory and stores files in the parent fake volume's
+    in-memory map under their relative remote path.
+    """
+
+    def __init__(self, volume: _FakeVolume) -> None:
+        self._volume = volume
+
+    def __enter__(self) -> _FakeBatchUpload:
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        del exc_type, exc, tb
+
+    def put_directory(self, local_dir: str, remote_dir: str) -> None:
+        import os  # noqa: PLC0415
+        import pathlib  # noqa: PLC0415
+
+        base = pathlib.Path(local_dir)
+        if not base.is_dir():
+            raise FakeNotFoundError(f"local directory not found: {local_dir!r}")
+        remote_root = remote_dir.rstrip("/") or "/"
+        for root, _dirs, files in os.walk(base):
+            root_path = pathlib.Path(root)
+            for fname in files:
+                local_file = root_path / fname
+                rel = local_file.relative_to(base)
+                rel_posix = str(rel).replace(os.sep, "/")
+                if remote_root == "/":
+                    remote_path = "/" + rel_posix
+                else:
+                    remote_path = remote_root + "/" + rel_posix
+                self._volume._files[remote_path] = local_file.read_bytes()  # noqa: SLF001
+
+
+class _FakeVolume:
+    """Stand-in for :class:`modal.Volume`.
+
+    Stores file contents in an in-memory ``dict[str, bytes]`` keyed by
+    absolute volume path. Supports the four surfaces
+    :class:`ModalCompute.stage_workspace` /
+    :meth:`harvest_workspace` actually call: ``batch_upload``,
+    ``iterdir``, ``read_file``, plus reattachment via
+    :meth:`_VolumeFactory.from_name`.
+    """
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+        self._files: dict[str, bytes] = {}
+
+    def batch_upload(self) -> _FakeBatchUpload:
+        return _FakeBatchUpload(self)
+
+    def iterdir(self, remote_path: str) -> list[_FakeFileEntry]:
+        prefix = remote_path.rstrip("/") or "/"
+        # Compute the children of ``prefix``. Children are files whose
+        # parent path is exactly ``prefix``, plus implicit directories
+        # synthesized from any descendant file's path components.
+        seen_dirs: set[str] = set()
+        files_here: list[str] = []
+        for path in self._files:
+            parent = path.rsplit("/", 1)[0] or "/"
+            if parent == prefix:
+                files_here.append(path)
+                continue
+            # Walk up the chain to find a synthesized directory child.
+            cursor = parent
+            while cursor and cursor != prefix:
+                next_parent = cursor.rsplit("/", 1)[0] or "/"
+                if next_parent == prefix:
+                    seen_dirs.add(cursor)
+                    break
+                cursor = next_parent
+        entries: list[_FakeFileEntry] = []
+        for d in sorted(seen_dirs):
+            entries.append(_FakeFileEntry(d, is_dir=True))
+        for f in sorted(files_here):
+            entries.append(_FakeFileEntry(f, is_dir=False))
+        return entries
+
+    def read_file(self, remote_path: str) -> list[bytes]:
+        if remote_path not in self._files:
+            raise FakeNotFoundError(f"no such file in volume: {remote_path!r}")
+        return [self._files[remote_path]]
+
+
+class _VolumeFactory:
+    """Stand-in for the ``modal.Volume`` namespace.
+
+    Volumes registered here persist across :meth:`from_name` calls so
+    a fresh ``ModalCompute`` instance can reattach to a previously
+    staged volume — the production reattachment contract for workspace
+    harvest from a fresh worker.
+    """
+
+    _volumes: dict[str, _FakeVolume]
+
+    def __init__(self) -> None:
+        self._volumes = {}
+
+    def from_name(
+        self, name: str, *, create_if_missing: bool = False, **_kwargs: Any
+    ) -> _FakeVolume:
+        if name not in self._volumes:
+            if not create_if_missing:
+                raise FakeNotFoundError(f"no such volume: {name!r}")
+            self._volumes[name] = _FakeVolume(name)
+        return self._volumes[name]
+
+
 class FakeModal:
     """Top-level stand-in for the ``modal`` module.
 
@@ -312,6 +445,7 @@ class FakeModal:
         self.App = _AppFactory()
         self.Image = _ImageFactory()
         self.Sandbox = _SandboxFactory(self)
+        self.Volume = _VolumeFactory()
         self.exception = _Exception()
         self.bad_images: set[str] = set()
         self._sandboxes: dict[str, FakeSandbox] = {}

@@ -91,6 +91,7 @@ import os
 import re
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, cast
 
 import httpx
@@ -101,6 +102,7 @@ from smai_core.plugins import (
     JobNotFound,
     JobState,
     JobStatus,
+    WorkspaceHandle,
 )
 
 # === Constants ==============================================================
@@ -251,6 +253,12 @@ class RunPodCompute:
             # RunPod pulls the job image from a registry — the operator
             # must publish it where RunPod can reach it.
             requires_published_image=True,
+            # RunPod's pod-volume API is documented as "second-priority
+            # for managed-substrate plugin work" per the D1 design note;
+            # this plugin stubs the surface for Step 1 of the agent-layer
+            # refactor and revisits when a sandbox role first dispatches
+            # through RunPod.
+            workspace_distribution="none",
         )
 
     # --- public surface (Compute Protocol) ---------------------------------
@@ -447,6 +455,31 @@ class RunPodCompute:
             pass
 
         await self._terminate_pod(pod_id)
+
+    async def stage_workspace(self, local_path: Path) -> WorkspaceHandle:
+        """Not implemented: RunPod's pod-volume API is second-priority
+        for the agent-layer refactor's Step 1 (per D1).
+
+        Plugin reports ``workspace_distribution='none'`` so the unified
+        dispatch factory and the conformance round-trip both skip this
+        plugin cleanly. A future task adds the full implementation
+        when a sandbox role first dispatches through RunPod.
+        """
+        del local_path
+        raise NotImplementedError(
+            "smai-compute-runpod workspace_distribution='none' (Step 1 stub); "
+            "full implementation lands when a sandbox role first dispatches "
+            "through RunPod"
+        )
+
+    async def harvest_workspace(self, handle: WorkspaceHandle, local_path: Path) -> None:
+        """Symmetric stub to :meth:`stage_workspace`; see that docstring."""
+        del handle, local_path
+        raise NotImplementedError(
+            "smai-compute-runpod workspace_distribution='none' (Step 1 stub); "
+            "full implementation lands when a sandbox role first dispatches "
+            "through RunPod"
+        )
 
     # --- internal helpers --------------------------------------------------
 

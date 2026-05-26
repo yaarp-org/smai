@@ -103,6 +103,29 @@ class TestModalComputeConformance(ComputeConformance):
         fake_modal = FakeModal()
         return cast(Compute, ModalCompute(modal_module=fake_modal))
 
+    async def test_workspace_round_trip(  # type: ignore[override]
+        self,
+        compute: Compute,
+        fixture_image: str,
+        time_provider,  # type: ignore[no-untyped-def]
+        poll_budget_seconds: float,
+        tmp_path,  # type: ignore[no-untyped-def]
+    ) -> None:
+        """Skip on the in-process fake: ``FakeSandbox`` spawns a host
+        subprocess that has no namespace isolation, so the staged
+        volume cannot be mounted at the literal ``/workspace`` path
+        the round-trip's container program reads from.
+
+        The credentialed real-Modal lane
+        (``tests/test_real_modal.py::TestRealModalComputeConformance``)
+        covers the round-trip against a real Modal Volume mount.
+        """
+        del compute, fixture_image, time_provider, poll_budget_seconds, tmp_path
+        pytest.skip(
+            "FakeSandbox cannot simulate the /workspace mount; covered by "
+            "the credentialed lane in test_real_modal.py."
+        )
+
     async def test_job_handle_reconnection(  # type: ignore[override]
         self,
         compute: Compute,

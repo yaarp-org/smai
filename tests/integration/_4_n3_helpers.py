@@ -54,6 +54,7 @@ from collections import deque
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from smai_core.plugins import (
@@ -70,6 +71,7 @@ from smai_core.plugins import (
     TokenUsage,
     ToolDefinition,
     ToolUseContent,
+    WorkspaceHandle,
 )
 from smai_events import EnvelopedEvent
 from smai_orchestrator import (
@@ -269,6 +271,12 @@ class FakeAlwaysSucceededCompute:
     async def logs(self, handle: JobHandle) -> str:
         del handle
         return ""
+
+    async def stage_workspace(self, local_path: Path) -> WorkspaceHandle:
+        return WorkspaceHandle(plugin=self.name, handle=str(local_path))
+
+    async def harvest_workspace(self, handle: WorkspaceHandle, local_path: Path) -> None:
+        del handle, local_path
 
 
 # === Canned LLM-response builders ============================================
