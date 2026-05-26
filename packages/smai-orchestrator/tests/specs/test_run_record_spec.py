@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 
+import pytest
 from _helpers import (  # type: ignore[import-not-found]
     FakeCompute,
     make_job_handle,
@@ -519,8 +520,17 @@ async def test_dispatch_compute_submit_returns_error_when_run_missing(
     localfs_store: LocalFsStore,
 ) -> None:
     """If the run record disappeared between phase-3 step 1 and step 2
-    (e.g., another worker cleaned it up), the handler reports an error
-    and the engine forward-rolls-back."""
+    (e.g., another worker cleaned it up), the handler raises
+    :class:`LookupError`; the engine's dispatch-failure wrapper
+    (:func:`_handle_dispatch_failure`) catches the exception and
+    forward-rolls-back the entity (round-6 / round-10 behavior).
+
+    Post Step 2 migration: the run-load lives inside the factory's
+    ``image_resolver`` / ``command_builder`` closures (rather than the
+    handler body returning a :class:`DispatchOutcome` with an ``error``
+    field), so the missing-record signal surfaces as an exception. The
+    engine path is identical either way.
+    """
     fake_compute = FakeCompute()
     handler = _make_dispatch_run_compute_submit(
         gpu_image="smai-runtime:test", cpu_image="smai-runtime-cpu:test"
@@ -537,7 +547,6 @@ async def test_dispatch_compute_submit_returns_error_when_run_missing(
         config=EngineConfig(),
         checkpointer=None,
     )
-    outcome = await handler(ctx)
-    assert outcome.error is not None
-    assert "run-missing" in outcome.error
+    with pytest.raises(LookupError, match="run-missing"):
+        await handler(ctx)
     assert fake_compute.submit_calls == []

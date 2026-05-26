@@ -92,14 +92,18 @@ from smai_core.artifacts import HarnessContract
 from smai_core.plugins import (
     ArtifactNotFound,
     ArtifactStore,
-    JobHandle,
 )
 
+from smai_orchestrator.dispatch import (
+    CommandSpec,
+    WorkspaceInputs,
+    WorkspaceOutputs,
+    make_compute_dispatcher,
+)
 from smai_orchestrator.engine.types import (
     ConcurrencyPool,
     DispatchAction,
     DispatchContext,
-    DispatchOutcome,
     EdgeDef,
     GateContext,
     GateOutcome,
@@ -312,9 +316,21 @@ def _make_dispatch_run_compute_submit(
     *,
     gpu_image: str,
     cpu_image: str,
-) -> Callable[[DispatchContext], Awaitable[DispatchOutcome]]:
+    retry_policy: RetryPolicy | None = None,
+) -> Callable[[DispatchContext], Awaitable[Any]]:
     """``submitted`` on-entry dispatch — submits the per-(entry × seed)
     training job to :class:`Compute`.
+
+    Built on the unified :func:`make_compute_dispatcher` factory
+    (agent_refactor compute_dispatch_decisions.md §3, implementation
+    Step 2): seed-run dispatch and agent-session dispatch share the
+    same factory shape. The image_resolver loads the CG's
+    :class:`HarnessContract`'s ``body.compute.gpu`` flag and picks the
+    GPU or CPU runtime image; the command_builder threads
+    ``smai_runtime.runner``'s argv. Workspace inputs / outputs are
+    empty for seed runs — the runtime image is self-contained and the
+    runtime publishes metrics directly to :class:`ArtifactStore` via
+    its env-configured key.
 
     Engine surrounds this with write-first ordering (per
     :func:`smai_orchestrator.engine.run_dispatch`):
@@ -330,9 +346,10 @@ def _make_dispatch_run_compute_submit(
 
     On :class:`Compute.submit` failure the handler raises; the engine
     forward-rolls-back the run to ``pending``. The next cycle's
-    phase-2 discovery picks it up again. v1 has no run-level retry
-    budget (`03` §3.9 open item) — re-discovery is unconditional;
-    operators with budget concerns can add a deployment-specific gate.
+    phase-2 discovery picks it up again. Round 10's
+    :class:`RetryPolicy` (passed through ``retry_policy``) caps the
+    total submit attempts via the synthesized retry-exhausted
+    terminal edge.
 
     Both the ``gpu`` flag *and the image* are derived from the CG's
     :class:`HarnessContract` artifact at the same read site (see
@@ -347,20 +364,18 @@ def _make_dispatch_run_compute_submit(
     one artifact-store read per submit.
     """
 
-    async def _dispatch(ctx: DispatchContext) -> DispatchOutcome:
+    async def _resolve_image(ctx: DispatchContext) -> str:
         run = await ctx.metadata_store.get_run(ctx.entity_id)
         if run is None:
-            return DispatchOutcome(error=f"RunRecord {ctx.entity_id!r} not found")
-
-        # Round 10: ``run_attempt`` is bumped by the engine on step-1's
-        # CAS via the :class:`RetryPolicy` declared on the ``submitted``
-        # state's dispatch action; the synthesized retry-exhausted
-        # terminal transitions a run to ``failed`` once
-        # ``run_attempt >= max_run_attempts``. Pre-round-10 the bump was
-        # done here in the handler body but there was no terminal edge.
-
+            raise LookupError(f"RunRecord {ctx.entity_id!r} not found")
         gpu = await _load_compute_requirements_gpu(ctx.artifact_store, run.cg_id)
-        image = gpu_image if gpu else cpu_image
+        return gpu_image if gpu else cpu_image
+
+    async def _build_command(ctx: DispatchContext) -> CommandSpec:
+        run = await ctx.metadata_store.get_run(ctx.entity_id)
+        if run is None:
+            raise LookupError(f"RunRecord {ctx.entity_id!r} not found")
+        gpu = await _load_compute_requirements_gpu(ctx.artifact_store, run.cg_id)
         metrics_key = _metrics_key_for_run(run)
         command = [
             "python",
@@ -381,15 +396,20 @@ def _make_dispatch_run_compute_submit(
             "SMAI_SEED": str(run.seed),
             "SMAI_METRICS_KEY": metrics_key,
         }
-        handle: JobHandle = await ctx.compute.submit(
-            image=image,
-            command=command,
-            env=env,
-            gpu=gpu,
-        )
-        return DispatchOutcome(submitted_handles=[handle])
+        return CommandSpec(command=command, env=env, gpu=gpu)
 
-    return _dispatch
+    return make_compute_dispatcher(
+        # Seed runs are infrastructure, not an agent role — naming the
+        # role ``"seed_run"`` here keeps the per-role-policy lookup
+        # site uniform across dispatchers without picking an existing
+        # agent role.
+        role="seed_run",
+        image_resolver=_resolve_image,
+        command_builder=_build_command,
+        inputs=WorkspaceInputs.empty(),
+        outputs=WorkspaceOutputs.empty(),
+        retry_policy=retry_policy,
+    )
 
 
 # === Public factories ========================================================
@@ -432,9 +452,23 @@ def build_run_record_spec(
     spec changes. Today the engine drives every run through
     ``pending → submitted → {succeeded | failed | inconclusive}``.
     """
+    # Round 10: ``Compute.submit`` failures used to forward-roll-back
+    # unconditionally and re-dispatch with no budget. The synthesized
+    # retry-exhausted terminal closes that loop after
+    # :param:`max_run_attempts` submits. The :class:`RetryPolicy` is
+    # passed both to the factory (for completeness with the design
+    # sketch) and to the :class:`DispatchAction` (where the engine
+    # consumes it for counter bumps + edge synthesis).
+    submit_retry_policy = RetryPolicy(
+        attempt_counter_field="run_attempt",
+        max_attempts=max_run_attempts,
+        on_exhaustion_target_state="failed",
+        on_exhaustion_reason="run submit retry budget exhausted; terminal",
+    )
     submit_dispatch = _make_dispatch_run_compute_submit(
         gpu_image=runtime_image,
         cpu_image=runtime_cpu_image,
+        retry_policy=submit_retry_policy,
     )
 
     states: list[StateDef] = [
@@ -446,17 +480,7 @@ def build_run_record_spec(
                 handler=submit_dispatch,
                 pool=POOL_RUNS,
                 handle_field="compute_job_handle",
-                # Round 10: ``Compute.submit`` failures used to forward-
-                # roll-back unconditionally and re-dispatch with no
-                # budget. The synthesized retry-exhausted terminal
-                # closes that loop after :param:`max_run_attempts`
-                # submits.
-                retry_policy=RetryPolicy(
-                    attempt_counter_field="run_attempt",
-                    max_attempts=max_run_attempts,
-                    on_exhaustion_target_state="failed",
-                    on_exhaustion_reason="run submit retry budget exhausted; terminal",
-                ),
+                retry_policy=submit_retry_policy,
             ),
         ),
         StateDef(name="running"),

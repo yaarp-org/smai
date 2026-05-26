@@ -83,8 +83,10 @@ class FakeCompute:
         self._submits: deque[_PlannedSubmit] = deque()
         self._statuses: dict[str, deque[_PlannedStatus]] = {}
         self._sticky: dict[str, JobStatus] = {}
+        self._logs: dict[str, str] = {}
         self.submit_calls: list[dict[str, object]] = []
         self.cancel_calls: list[JobHandle] = []
+        self.logs_calls: list[JobHandle] = []
 
     def enqueue_submit_handle(self, handle: JobHandle) -> None:
         self._submits.append(_PlannedSubmit(handle=handle))
@@ -97,6 +99,16 @@ class FakeCompute:
 
     def set_status(self, handle_id: str, status: JobStatus) -> None:
         self._sticky[handle_id] = status
+
+    def set_logs(self, handle_id: str, text: str) -> None:
+        """Configure the body returned by :meth:`logs` for ``handle_id``.
+
+        Round-20 generalization (compute_dispatch_decisions.md §5):
+        ``phase1_step`` calls ``Compute.logs(handle)`` on terminal
+        failure to surface stderr-tail into ``last_error``. Test
+        callers stage the expected log body here.
+        """
+        self._logs[handle_id] = text
 
     async def submit(  # noqa: PLR0913
         self,
@@ -137,6 +149,9 @@ class FakeCompute:
         raise RuntimeError(f"FakeCompute.status: no outcome enqueued for handle {handle.handle!r}")
 
     async def logs(self, handle: JobHandle) -> str:
+        self.logs_calls.append(handle)
+        if handle.handle in self._logs:
+            return self._logs[handle.handle]
         return f"<no logs configured for {handle.handle!r}>"
 
     async def cancel(self, handle: JobHandle) -> None:

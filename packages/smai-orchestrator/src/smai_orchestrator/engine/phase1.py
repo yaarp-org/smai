@@ -222,6 +222,18 @@ async def phase1_step(  # noqa: PLR0913
     if fired is None:
         return Phase1Outcome(status="terminated_no_match", job_status=job_status)
 
+    # Round-20 generalization (agent_refactor compute_dispatch_decisions
+    # §5; implementation_plan Step 2): on terminal failure, fetch logs
+    # via ``Compute.logs(handle)`` and surface the tail into
+    # ``last_error`` so operators and the post-CG triage path see the
+    # container stderr without an out-of-band query. Best-effort —
+    # plugin failures here MUST NOT block the state-machine transition.
+    extra_fields: dict[str, object] = {action.handle_field: None}
+    if fires_on == "job_failed":
+        tail = await _best_effort_failure_tail(compute, handle, job_status)
+        if tail:
+            extra_fields["last_error"] = tail
+
     # CAS to the edge's target. Phase-1 transitions also clear the handle
     # field as part of the same UPDATE — once the job has terminated and
     # been observed, the handle is no longer load-bearing and leaving it
@@ -233,7 +245,7 @@ async def phase1_step(  # noqa: PLR0913
             entity_id,
             entity_version,
             fired.target_state,
-            fields={action.handle_field: None},
+            fields=extra_fields,
             event_channel=config.event_channel,
             from_state=entity_state,
             edge_name=fired.name,
@@ -253,6 +265,49 @@ async def phase1_step(  # noqa: PLR0913
         )
 
     return Phase1Outcome(status="advanced", fired_edge=fired, job_status=job_status)
+
+
+async def _best_effort_failure_tail(
+    compute: Compute,
+    handle: JobHandle,
+    job_status: JobStatus,
+) -> str:
+    """Compose ``last_error`` content for a terminal-failure transition.
+
+    Round-20 generalization (compute_dispatch_decisions.md §5):
+    container stderr surfaces uniformly into ``last_error`` so the
+    pre-existing "what failed?" channel (``smai status``,
+    transition_log queries, agent retry-prompt context) sees the
+    same diagnostic on every dispatched job.
+
+    Composition: ``job_status.failure_reason`` (plugin-supplied; the
+    short structured cause) followed by the tail of
+    ``Compute.logs(handle)`` (the operator-readable detail). Either
+    half MAY be empty without affecting the other; both empty returns
+    the empty string (caller skips the ``last_error`` write).
+
+    Best-effort — any exception from the plugin (``ComputeUnavailable``,
+    ``JobNotFound`` racing with substrate GC, network blips) is
+    swallowed and the state-machine transition proceeds without the
+    enriched ``last_error``. The failure-edge gate has already passed,
+    so the transition is load-bearing for the spec author's invariant
+    even if the diagnostic surface ends up empty.
+    """
+    # Lazy import to avoid the engine ↔ dispatch package import cycle
+    # (the dispatch package depends on engine.types).
+    from smai_orchestrator.dispatch import format_stderr_tail  # noqa: PLC0415
+
+    parts: list[str] = []
+    if job_status.failure_reason:
+        parts.append(job_status.failure_reason)
+    try:
+        raw_logs = await compute.logs(handle)
+    except Exception:  # noqa: BLE001 — best-effort diagnostic surface
+        raw_logs = ""
+    tail = format_stderr_tail(raw_logs)
+    if tail:
+        parts.append(tail)
+    return "\n\n".join(parts)
 
 
 def _resolve_prior_state(spec: EngineSpec, in_progress_state: str) -> str:

@@ -208,6 +208,90 @@ async def test_failed_status_fires_failure_edge(
     assert captured_outcomes[0].failure_reason == "OOM"
 
 
+async def test_round20_failure_surfaces_stderr_tail_to_last_error(
+    sqlite_store, fake_compute: FakeCompute, fake_artifact_store: FakeArtifactStore
+) -> None:
+    """Round-20 generalization (agent-refactor Step 2): on terminal
+    failure, phase-1 fetches ``Compute.logs(handle)`` and surfaces the
+    tail into the record's ``last_error`` column.
+
+    Pins consistency-of-use across every dispatched job — the
+    container's stderr reaches the post-CG triage path uniformly, not
+    just when the substrate plugin happens to populate
+    ``JobStatus.failure_reason``.
+    """
+    handle = make_job_handle("h-fail-with-logs")
+    fake_compute.set_status(
+        "h-fail-with-logs",
+        make_job_status("failed", exit_code=1, failure_reason="OOM"),
+    )
+    stderr_payload = (
+        "Traceback (most recent call last):\n"
+        '  File "/workspace/experiment.py", line 42, in <module>\n'
+        "    raise RuntimeError('cuda init failed: device 0 unavailable')\n"
+        "RuntimeError: cuda init failed: device 0 unavailable\n"
+    )
+    fake_compute.set_logs("h-fail-with-logs", stderr_payload)
+    cg = await _seed_in_progress_cg(sqlite_store, handle=handle)
+    spec = _three_state_phase1_spec()
+
+    outcome = await phase1_step(
+        spec=spec,
+        metadata_store=sqlite_store,
+        artifact_store=fake_artifact_store,
+        compute=fake_compute,
+        config=EngineConfig(),
+        record=cg,
+    )
+
+    assert outcome.status == "advanced"
+    assert outcome.fired_edge is not None
+    assert outcome.fired_edge.name == "job-failed"
+
+    # Compute.logs was called as part of the transition.
+    assert len(fake_compute.logs_calls) == 1
+    assert fake_compute.logs_calls[0].handle == "h-fail-with-logs"
+
+    final = await sqlite_store.get_cg("cg_phase1")
+    assert final is not None
+    assert final.state == "implementation_failed"
+    assert final.harness_job_handle is None
+    # The plugin-supplied failure_reason AND the container stderr tail
+    # both land in last_error so operators see one composite diagnostic.
+    assert final.last_error is not None
+    assert "OOM" in final.last_error
+    assert "cuda init failed" in final.last_error
+
+
+async def test_round20_failure_skips_logs_fetch_when_status_terminates_succeeded(
+    sqlite_store, fake_compute: FakeCompute, fake_artifact_store: FakeArtifactStore
+) -> None:
+    """Logs fetch is gated on ``fires_on=job_failed`` — successful
+    terminals leave ``last_error`` untouched and incur no log read.
+    """
+    handle = make_job_handle("h-ok")
+    fake_compute.set_status("h-ok", make_job_status("succeeded", exit_code=0))
+    fake_compute.set_logs("h-ok", "should-not-be-fetched")
+    cg = await _seed_in_progress_cg(sqlite_store, handle=handle)
+    spec = _three_state_phase1_spec()
+
+    outcome = await phase1_step(
+        spec=spec,
+        metadata_store=sqlite_store,
+        artifact_store=fake_artifact_store,
+        compute=fake_compute,
+        config=EngineConfig(),
+        record=cg,
+    )
+
+    assert outcome.status == "advanced"
+    assert fake_compute.logs_calls == []
+
+    final = await sqlite_store.get_cg("cg_phase1")
+    assert final is not None
+    assert final.last_error is None
+
+
 async def test_cancelled_and_timeout_route_through_failure_path(
     sqlite_store, fake_compute: FakeCompute, fake_artifact_store: FakeArtifactStore
 ) -> None:
