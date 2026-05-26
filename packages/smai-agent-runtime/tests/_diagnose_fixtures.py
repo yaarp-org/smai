@@ -44,7 +44,19 @@ class DiagnoseFakeAgentRunner:
         agent: Any,
         user_message: str,
         output_type: type[BaseModel],
+        *,
+        workspace: Any = None,
+        trace_step_name: str | None = None,
+        agent_runner: Any = None,
     ) -> BaseModel:
+        # Sub-PR D's resume-prep surface (architectural_decisions §12 #4):
+        # accept and ignore the trace-persistence kwargs. The fake does
+        # not exercise the message-history dump path (no AgentRunResult
+        # to serialize); the unit test for that path lives in
+        # ``test_entry.py``'s _persist_message_history coverage.
+        # ``agent_runner`` is the thread-5 DI seam — also ignored (the
+        # fake IS the runner).
+        del workspace, trace_step_name, agent_runner
         self.calls.append(
             CapturedDiagnoseCall(
                 user_message=user_message,

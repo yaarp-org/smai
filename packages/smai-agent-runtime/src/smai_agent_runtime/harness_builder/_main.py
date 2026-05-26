@@ -27,11 +27,11 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import subprocess
 import sys
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeVar, cast
@@ -103,8 +103,15 @@ from smai_agent_runtime.workflow.step_types import (
 # reads these.
 EXIT_OK = 0
 EXIT_STEP_FAILED = 1
-EXIT_RESUME_NOT_IMPLEMENTED = 64
+EXIT_RESUME_STUB = 66
 EXIT_BAD_WORKSPACE = 65
+
+# Backwards-compatible alias for sub-PR B's exit-code name. Sub-PR D
+# renames the constant to ``EXIT_RESUME_STUB`` (the architectural hedge
+# is "resume entry signature exists; workflow logic is a stub"); the
+# old name remains a re-export so importers staged between sub-PRs
+# don't break in lockstep.
+EXIT_RESUME_NOT_IMPLEMENTED = EXIT_RESUME_STUB
 
 # Hardcoded role for this module; the per-step model resolution uses it
 # to look up the right ``SMAI_MODEL_HARNESS_BUILDER__<STEP>`` env var.
@@ -131,11 +138,17 @@ _DEFAULT_SEED: int = 0
 # with ``--mode validation`` per round-20.
 _VALIDATION_TECHNIQUE_NAME: str = "baseline"
 
-# Test-substitution env var. When set to a truthy value,
-# :func:`_run_agent_sync` returns a deterministic conforming output for
-# the requested output_type rather than calling the configured LLM.
-# In-process tests prefer monkeypatching this callable directly.
-_FAKE_LLM_ENV_VAR: str = "SMAI_AGENT_RUNTIME_FAKE_LLM"
+# Dependency-injected fake-LLM runner (sub-PR D thread 5). The
+# ``--fake-llm`` argparse flag swaps this in at main()-entry boundary so
+# cross-process subprocess tests can exercise the mini-orchestrator
+# without real LLM credentials. The pre-sub-PR-D
+# ``SMAI_AGENT_RUNTIME_FAKE_LLM`` env-var read was deleted because
+# env-var-as-mode-switch is the kind of smell that hides in production
+# code paths.
+
+# Type alias for the per-step agent runner. Tests can substitute a fake;
+# production wires the real PydanticAI run via :func:`_real_agent_run`.
+AgentRunner = Callable[[Any, str, type[Any]], Any]
 
 
 @dataclass
@@ -169,6 +182,12 @@ class _DispatchContext:
     # back-reference the body-generation step that produced the failing
     # code. Filled by :func:`_dispatch_step` before each step runs.
     body_step_kinds: dict[int, str] = field(default_factory=dict[int, str])
+    # Dependency-injected agent runner (sub-PR D thread 5). ``None``
+    # means "use the real PydanticAI run path"; tests substitute a
+    # fake via the ``--fake-llm`` flag at the entry-point boundary.
+    # In-process tests still monkeypatch :func:`_run_agent_sync`
+    # directly for finer-grained per-call assertions.
+    agent_runner: AgentRunner | None = None
 
 
 def main(args: argparse.Namespace) -> int:
@@ -178,20 +197,11 @@ def main(args: argparse.Namespace) -> int:
         return EXIT_BAD_WORKSPACE
 
     if args.resume is not None:
-        # Sub-PR D wires resume-mode workflow logic. Sub-PR B's contract:
-        # the flag is accepted at argparse and routes to a no-op stub so
-        # the entry signature is pinned (per arch §12 item 4).
-        _emit_status_line(
-            "resume_not_implemented",
+        return _resume_main(
             cg_id=args.cg_id,
+            workspace_arg=args.workspace,
             resume_from=args.resume,
-            reason=(
-                "resume not yet implemented in workflow shape "
-                "(architectural hedge per architectural_decisions §12 item 4; "
-                "sub-PR D wires the resume-mode workflow logic)"
-            ),
         )
-        return EXIT_RESUME_NOT_IMPLEMENTED
 
     workspace = _resolve_workspace(args.workspace)
     if workspace is None:
@@ -244,6 +254,7 @@ def main(args: argparse.Namespace) -> int:
         technique_contract=_load_technique_contract(workspace),
         overrides=None,  # sub-PR D wires the host-side override map.
         status=emitter,
+        agent_runner=_fake_agent_runner if getattr(args, "fake_llm", False) else None,
     )
 
     outcomes: list[_StepOutcome] = []
@@ -312,6 +323,106 @@ def main(args: argparse.Namespace) -> int:
     )
     _write_status_summary(workspace, args.cg_id, outcomes, succeeded=True)
     return EXIT_OK
+
+
+# === Resume-prep hedge (architectural_decisions §12 #4) =====================
+
+
+def _resume_main(
+    *,
+    cg_id: str,
+    workspace_arg: object,
+    resume_from: str,
+) -> int:
+    """Stub resume-mode entry that loads prior state and exits.
+
+    The architectural hedge per architectural_decisions §12 item 4: the
+    refactor does not ship the multi-cycle review-feedback loop, but the
+    mini-orchestrator entry signature accepts ``--resume <prior_session_id>``
+    so a future PR can wire the workflow logic without retrofitting the
+    argparse + workspace + state-load surface. Sub-PR D fills in the
+    prior-state load; the actual "do something with the loaded
+    message_history" lands later.
+
+    Loads:
+
+    * ``conversation_traces/*.json`` files from the staged workspace
+      (written by :func:`_persist_message_history` during prior runs).
+    * Workspace contents (harness/, techniques/, validation_results.json,
+      manifest.json) are already on disk via the host-side workspace
+      stager; the resume path reads them in place.
+
+    Emits a structured ``resume_loaded`` event with the loaded step list,
+    followed by a ``resume_stub`` event indicating no workflow logic
+    ran, then exits :data:`EXIT_RESUME_STUB`.
+    """
+    workspace = _resolve_workspace(workspace_arg)
+    if workspace is None:
+        _emit_status_line(
+            "error",
+            cg_id=cg_id,
+            resume_from=resume_from,
+            reason=(
+                f"--workspace path {workspace_arg!r} does not exist or is not "
+                "a directory; resume-mode requires a staged workspace"
+            ),
+        )
+        return EXIT_BAD_WORKSPACE
+
+    traces_dir = workspace / "conversation_traces"
+    loaded_steps: list[str] = []
+    if traces_dir.is_dir():
+        for path in sorted(traces_dir.glob("*.json")):
+            loaded_steps.append(path.stem)
+    _emit_status_line(
+        "resume_loaded",
+        cg_id=cg_id,
+        resume_from=resume_from,
+        workspace=str(workspace),
+        loaded_steps=loaded_steps,
+    )
+    _emit_status_line(
+        "resume_stub",
+        cg_id=cg_id,
+        resume_from=resume_from,
+        reason=(
+            "loaded prior state; resume-mode workflow logic is not yet "
+            "implemented (architectural hedge per architectural_decisions "
+            "§12 item 4; future PR adds the multi-cycle loop)"
+        ),
+    )
+    return EXIT_RESUME_STUB
+
+
+def _persist_message_history(
+    workspace: Path,
+    step_name: str,
+    result: Any,
+) -> None:
+    """Dump a PydanticAI :class:`AgentRunResult`'s message history.
+
+    Writes ``conversation_traces/<step_name>.json`` per
+    architectural_decisions §12 item 4. The file uses PydanticAI's
+    native :meth:`all_messages_json` serialization so a future resume
+    path can rehydrate via ``ModelMessagesTypeAdapter.validate_json``.
+
+    Best-effort: serialization failures or workspace-write failures
+    do not abort the workflow step. The traces are diagnostic / hedge
+    state, not load-bearing for the current run.
+    """
+    traces_dir = workspace / "conversation_traces"
+    try:
+        traces_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return
+    try:
+        history_bytes = result.all_messages_json()
+    except (AttributeError, RuntimeError, ValueError):
+        return
+    try:
+        (traces_dir / f"{step_name}.json").write_bytes(history_bytes)
+    except OSError:
+        return
 
 
 # === Argparse / workspace helpers ============================================
@@ -539,7 +650,14 @@ def _run_body_generation_step(
         )
 
         try:
-            output = _run_agent_sync(agent, user_message, HarnessBuilderBodyGenerationOutput)
+            output = _run_agent_sync(
+                agent,
+                user_message,
+                HarnessBuilderBodyGenerationOutput,
+                workspace=context.workspace,
+                trace_step_name=(f"{index:02d}_body_{step.function_name}_attempt_{attempt_index}"),
+                agent_runner=context.agent_runner,
+            )
         except _AgentRunError as exc:
             return _StepOutcome(
                 step_index=index,
@@ -670,7 +788,14 @@ def _run_baseline_step(
         )
 
         try:
-            output = _run_agent_sync(agent, user_message, TechniqueBodyOutput)
+            output = _run_agent_sync(
+                agent,
+                user_message,
+                TechniqueBodyOutput,
+                workspace=context.workspace,
+                trace_step_name=f"{index:02d}_baseline_attempt_{attempt_index}",
+                agent_runner=context.agent_runner,
+            )
         except _AgentRunError as exc:
             return _StepOutcome(
                 step_index=index,
@@ -949,7 +1074,14 @@ def _run_diagnose_step(
         _register_read_file_tool(agent, context.workspace)
 
         try:
-            diagnosis = _run_agent_sync(agent, user_message, Diagnosis)
+            diagnosis = _run_agent_sync(
+                agent,
+                user_message,
+                Diagnosis,
+                workspace=context.workspace,
+                trace_step_name=f"{index:02d}_diagnose_attempt_{attempt_index}",
+                agent_runner=context.agent_runner,
+            )
         except _AgentRunError as exc:
             return _StepOutcome(
                 step_index=index,
@@ -1584,10 +1716,36 @@ def _run_agent_sync(
     agent: Any,
     user_message: str,
     output_type: type[_AgentOutputT],
+    *,
+    workspace: Path | None = None,
+    trace_step_name: str | None = None,
+    agent_runner: AgentRunner | None = None,
 ) -> _AgentOutputT:
-    """Invoke a PydanticAI :class:`Agent` synchronously and unwrap the output."""
-    if os.environ.get(_FAKE_LLM_ENV_VAR):
-        return _fake_llm_output(output_type, user_message)
+    """Invoke an :class:`AgentRunner` synchronously and unwrap the output.
+
+    When ``agent_runner`` is ``None``, drives the real PydanticAI Agent
+    via :meth:`Agent.run_sync` and extracts ``.output``. Tests may pass
+    a callable that returns a canned output (the ``--fake-llm`` flag at
+    the entry-point boundary substitutes :func:`_fake_agent_runner`).
+
+    When ``workspace`` and ``trace_step_name`` are both supplied, the
+    PydanticAI :class:`AgentRunResult`'s message history is dumped to
+    ``<workspace>/conversation_traces/<trace_step_name>.json`` per the
+    resume-prep architectural hedge (architectural_decisions §12 #4).
+    The fake-runner path skips trace persistence — fakes have no
+    PydanticAI :class:`AgentRunResult` to serialize.
+    """
+    if agent_runner is not None:
+        # DI: tests / --fake-llm path substitutes a runner that returns
+        # a canned output directly. No trace persistence (no
+        # AgentRunResult to project).
+        canned = agent_runner(agent, user_message, output_type)
+        if not isinstance(canned, output_type):
+            raise _AgentRunError(
+                f"injected agent_runner returned output of type "
+                f"{type(canned).__name__!r}, expected {output_type.__name__!r}"
+            )
+        return canned
 
     try:
         result = agent.run_sync(user_message)
@@ -1599,7 +1757,27 @@ def _run_agent_sync(
             f"agent returned output of type {type(output).__name__!r}, "
             f"expected {output_type.__name__!r}"
         )
+    if workspace is not None and trace_step_name is not None:
+        _persist_message_history(workspace, trace_step_name, result)
     return output
+
+
+def _fake_agent_runner(
+    agent: Any,
+    user_message: str,
+    output_type: type[Any],
+) -> Any:
+    """Deterministic test runner — yields canned outputs per
+    ``output_type`` so cross-process subprocess tests can drive the
+    full mini-orchestrator workflow without real LLM credentials.
+
+    Wired in by the ``--fake-llm`` flag at main()-entry. Production
+    code never invokes this directly; production assigns
+    ``context.agent_runner = None`` and drives the real PydanticAI
+    run path.
+    """
+    del agent  # the fake doesn't introspect the PydanticAI Agent
+    return _fake_llm_output(output_type, user_message)
 
 
 def _fake_llm_output(
@@ -1700,6 +1878,7 @@ __all__ = [
     "EXIT_BAD_WORKSPACE",
     "EXIT_OK",
     "EXIT_RESUME_NOT_IMPLEMENTED",
+    "EXIT_RESUME_STUB",
     "EXIT_STEP_FAILED",
     "main",
 ]

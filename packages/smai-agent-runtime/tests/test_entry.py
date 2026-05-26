@@ -34,22 +34,18 @@ from smai_agent_runtime.__main__ import (
 from smai_agent_runtime.harness_builder._main import (
     EXIT_BAD_WORKSPACE,
     EXIT_OK,
-    EXIT_RESUME_NOT_IMPLEMENTED,
+    EXIT_RESUME_STUB,
 )
 
-
-@pytest.fixture(autouse=True)
-def _enable_fake_llm(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Set ``SMAI_AGENT_RUNTIME_FAKE_LLM=1`` for every test in this module.
-
-    Sub-PR C1's body-generation handlers consult this env var to decide
-    whether to call the real LLM or substitute a deterministic stub.
-    These end-to-end / dispatch-wiring tests do not need real LLM
-    outputs; the per-step fake-LLM tests in
-    ``test_body_generation_step.py`` / ``test_baseline_generation_step.py``
-    exercise the agent-call surface via in-process monkeypatch.
-    """
-    monkeypatch.setenv("SMAI_AGENT_RUNTIME_FAKE_LLM", "1")
+# Sub-PR D thread 5 replaced the previous
+# ``SMAI_AGENT_RUNTIME_FAKE_LLM=1`` env-var seam with a
+# dependency-injected :class:`AgentRunner` selected at main()-entry via
+# ``--fake-llm``. The dispatch-wiring tests below append ``--fake-llm``
+# to their argv; the per-step fake-LLM tests in
+# ``test_body_generation_step.py`` / ``test_baseline_generation_step.py``
+# still monkeypatch :func:`_run_agent_sync` directly for finer-grained
+# per-call assertions.
+_FAKE_LLM_ARGV = ["--fake-llm"]
 
 
 # === Programmatic dispatch ===================================================
@@ -75,6 +71,7 @@ def test_harness_builder_runs_workflow_with_workspace(
             "cg-test-001",
             "--workspace",
             str(tmp_path),
+            *_FAKE_LLM_ARGV,
         ]
     )
     assert rc == EXIT_OK, capsys.readouterr().err
@@ -109,6 +106,7 @@ def test_harness_builder_workflow_writes_canned_artifacts(
             "cg-test-002",
             "--workspace",
             str(tmp_path),
+            *_FAKE_LLM_ARGV,
         ]
     )
     assert rc == EXIT_OK
@@ -132,14 +130,22 @@ def test_harness_builder_workflow_writes_canned_artifacts(
     assert manifest_payload["content_hash"]  # freeze_manifest populated
 
 
-def test_harness_builder_resume_flag_is_no_op_stub(
+def test_harness_builder_resume_flag_loads_prior_state_and_exits_stub(
     capsys: pytest.CaptureFixture[str],
     tmp_path: Path,
 ) -> None:
-    """Sub-PR B accepts ``--resume`` at argparse and routes to a no-op
-    stub (architectural hedge per arch §12 item 4). Sub-PR D wires
-    the resume-mode workflow logic.
+    """Sub-PR D wires resume-mode logic: load prior workspace state +
+    conversation_traces, emit a ``resume_loaded`` event, then exit
+    :data:`EXIT_RESUME_STUB` (the architectural hedge per
+    architectural_decisions §12 item 4 — entry signature exists, no
+    workflow logic runs yet).
     """
+    # Stage prior conversation_traces from a hypothetical earlier session.
+    traces_dir = tmp_path / "conversation_traces"
+    traces_dir.mkdir(parents=True, exist_ok=True)
+    (traces_dir / "00_body_build_harness_attempt_0.json").write_text("[]")
+    (traces_dir / "01_baseline_attempt_0.json").write_text("[]")
+
     rc = main(
         [
             "--role",
@@ -149,12 +155,42 @@ def test_harness_builder_resume_flag_is_no_op_stub(
             "--workspace",
             str(tmp_path),
             "--resume",
-            "as-prior-session-id",
+            "agent-session-cg-test-003-deadbeef",
         ]
     )
-    assert rc == EXIT_RESUME_NOT_IMPLEMENTED
+    assert rc == EXIT_RESUME_STUB
     captured = capsys.readouterr()
-    assert "resume_not_implemented" in captured.out
+    assert '"event_type":"resume_loaded"' in captured.out
+    assert '"event_type":"resume_stub"' in captured.out
+    # The loaded_steps payload echoes the prior session's trace files
+    # so the host worker can see which steps' message-history landed.
+    assert "00_body_build_harness_attempt_0" in captured.out
+    assert "01_baseline_attempt_0" in captured.out
+
+
+def test_harness_builder_resume_without_workspace_exits_bad_workspace(
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    """Resume-mode requires a staged workspace path; an absent
+    ``--workspace`` exits :data:`EXIT_BAD_WORKSPACE` with a structured
+    error event (mirrors the non-resume entry's workspace-validation
+    branch)."""
+    rc = main(
+        [
+            "--role",
+            "harness_builder",
+            "--cg-id",
+            "cg-test-003a",
+            "--workspace",
+            str(tmp_path / "does-not-exist"),
+            "--resume",
+            "prior-session",
+        ]
+    )
+    assert rc == EXIT_BAD_WORKSPACE
+    captured = capsys.readouterr()
+    assert '"event_type":"error"' in captured.out
 
 
 def test_harness_builder_missing_workspace_exits_bad_workspace(
@@ -222,19 +258,54 @@ def test_unknown_role_argparse_rejected() -> None:
 # === ``python -m smai_agent_runtime`` subprocess ==============================
 
 
+def test_persist_message_history_writes_trace_file(tmp_path: Path) -> None:
+    """Resume-prep hedge (architectural_decisions §12 #4): the
+    :func:`_persist_message_history` helper dumps the PydanticAI
+    :class:`AgentRunResult`'s ``all_messages_json()`` to
+    ``conversation_traces/<step_name>.json`` so a future resume PR can
+    rehydrate via ``ModelMessagesTypeAdapter.validate_json``.
+    """
+    from smai_agent_runtime.harness_builder._main import _persist_message_history
+
+    class _StubResult:
+        def all_messages_json(self) -> bytes:
+            return b'[{"role":"user","content":"hi"}]'
+
+    _persist_message_history(tmp_path, "00_body_build_harness_attempt_0", _StubResult())
+    trace_path = tmp_path / "conversation_traces" / "00_body_build_harness_attempt_0.json"
+    assert trace_path.exists()
+    assert trace_path.read_bytes() == b'[{"role":"user","content":"hi"}]'
+
+
+def test_persist_message_history_swallows_serialization_failure(tmp_path: Path) -> None:
+    """``_persist_message_history`` is best-effort: a serialization
+    failure on the result object must not abort the calling step. The
+    traces are diagnostic / hedge state, not load-bearing."""
+    from smai_agent_runtime.harness_builder._main import _persist_message_history
+
+    class _BrokenResult:
+        def all_messages_json(self) -> bytes:
+            raise RuntimeError("simulated serialization failure")
+
+    # Must not raise.
+    _persist_message_history(tmp_path, "step", _BrokenResult())
+    # No file should land if serialization failed.
+    assert not (tmp_path / "conversation_traces" / "step.json").exists()
+
+
 def test_python_m_subprocess_runs_workflow(tmp_path: Path) -> None:
     """Invoke the module via ``python -m smai_agent_runtime`` in a
     subprocess to confirm the ``__main__`` shim + the mini-orchestrator
     wire up correctly. This mirrors the container-runtime invocation
     the dispatch round-trip will exercise (the agent-runtime image runs
-    ``python -m smai_agent_runtime ...``). The autouse fixture's env-var
-    setting does not survive across the subprocess boundary, so pass
-    it explicitly here.
-    """
-    import os
+    ``python -m smai_agent_runtime ...``).
 
+    Sub-PR D thread 5: the ``--fake-llm`` flag substitutes the
+    deterministic fake :class:`AgentRunner` at main()-entry (replacing
+    sub-PR C1's ``SMAI_AGENT_RUNTIME_FAKE_LLM=1`` env-var seam — the
+    test invokes the test entry point with the flag rather than
+    flipping a production env-var read)."""
     write_minimal_harness_workspace(tmp_path)
-    env = {**os.environ, "SMAI_AGENT_RUNTIME_FAKE_LLM": "1"}
     proc = subprocess.run(
         [
             sys.executable,
@@ -246,11 +317,11 @@ def test_python_m_subprocess_runs_workflow(tmp_path: Path) -> None:
             "cg-subprocess-test",
             "--workspace",
             str(tmp_path),
+            "--fake-llm",
         ],
         capture_output=True,
         text=True,
         check=False,
-        env=env,
     )
     assert proc.returncode == EXIT_OK, (
         f"unexpected exit code {proc.returncode}; stdout={proc.stdout!r} stderr={proc.stderr!r}"

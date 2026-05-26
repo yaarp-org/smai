@@ -55,6 +55,32 @@ DEFAULT_RUNTIME_CPU_IMAGE = "smai-runtime-cpu:dev"
 DEFAULT_AGENT_RUNTIME_IMAGE = "smai-agent-runtime:dev"
 
 
+class PerRoleRuntime(BaseModel):
+    """Per-role dispatch substrate (architectural_decisions §6 / D3).
+
+    The two sandboxed roles are operator-tunable here; the four inline
+    roles (``planner``, ``supervisor``, ``code_reviewer``,
+    ``contextual_evaluator``) are excluded by construction because §6
+    fixes them as inline by architecture — there is no "sandbox" mode
+    for a single-call structured-output role. Misconfiguration is
+    Pydantic-visible via ``extra="forbid"``: writing
+    ``per_role_runtime: {planner: ...}`` in ``smai.yaml`` raises at
+    config-load with a useful error.
+
+    Default per the 2026-05-25 settled decision: ``"sandbox"`` for
+    both, uniform across ``smai dev`` and ``smai start``. Eliminates
+    the dev/prod divergence that produced the rounds-14-20 thrashing.
+    Operators flip to ``"inline"`` only for the in-process-debug path
+    (no managed substrate involved, no container start cost,
+    message_history visible in the worker process for live
+    introspection)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    harness_builder: Literal["inline", "sandbox"] = "sandbox"
+    technique_implementer: Literal["inline", "sandbox"] = "sandbox"
+
+
 class RetryBackoffConfig(BaseModel):
     """Named backoff configuration for retry-edge gate rules (`05` §6).
 
@@ -202,27 +228,58 @@ class EngineConfig(BaseModel):
     :class:`EngineConfig`. Ignored when :attr:`supervisor_enabled` is
     ``False``."""
 
-    # ---- Per-role agent models (round-7) --------------------------------
+    # ---- Per-role policy (D3 / Step 4 sub-PR D) -------------------------
 
-    role_models: dict[str, str] = Field(default_factory=dict)
-    """Per-role agent-model override map (round-7). Keyed by
+    per_role_runtime: PerRoleRuntime = Field(default_factory=PerRoleRuntime)
+    """Per-role dispatch substrate for the two sandboxed roles
+    (``harness_builder``, ``technique_implementer``) per
+    ``agent_refactor/architectural_decisions.md`` §6 / D3.
+
+    Default ``"sandbox"`` for both, uniform across deployments
+    (2026-05-25 settled decision). Operators flip to ``"inline"`` only
+    for the in-process-debug path. Env form:
+    ``SMAI_ENGINE__PER_ROLE_RUNTIME__HARNESS_BUILDER=inline``."""
+
+    # ---- Per-role agent models (round-7, extended by D3) ----------------
+
+    role_models: dict[str, str | dict[str, str]] = Field(default_factory=dict)
+    """Per-role agent-model override map. Keyed by
     :data:`smai_agents.model_selection.TaskRole` name (``planner`` /
     ``harness_builder`` / ``technique_implementer`` / ``code_reviewer`` /
     ``contextual_evaluator`` / ``supervisor`` / ``screener`` /
-    ``enricher``); each value is a bare model id understood by the
-    configured :attr:`PluginSelection.llm_provider` (cross-provider
-    per-role routing is out of scope — use ``SMAI_MODEL_<ROLE>`` for
-    that). Roles absent from this map fall back to
+    ``enricher``).
+
+    Two value shapes are accepted (D3 per_role_policy.md):
+
+    * **Flat / round-7**: a bare model id understood by the configured
+      :attr:`PluginSelection.llm_provider`. Applies to every step of
+      the role (or every call, for inline roles with no step concept).
+    * **Nested / D3**: a ``{step_type: model_id}`` mapping keyed by
+      D9 ``WorkflowStep.step_type`` Literal values (e.g.
+      ``harness_body_generation``, ``baseline_generation``,
+      ``diagnose_on_failure``, ``technique_body_generation``) plus an
+      optional ``"_default"`` sentinel for a role-level fallback
+      distinct from ``TASK_DEFAULTS``. Per-step granularity, opt-in
+      per role. Validated sandbox-side at mini-orchestrator startup
+      (the orchestrator package does not import the agent-runtime
+      step registry per architectural_decisions §3 dep-graph cleanup).
+
+    Cross-provider per-role routing is out of scope here — use
+    ``SMAI_MODEL_<ROLE>`` / ``SMAI_MODEL_<ROLE>__<STEP>`` for that. Roles
+    absent from this map fall back to
     :data:`smai_agents.model_selection.TASK_DEFAULTS`.
 
-    Precedence (per ``09-cli.md`` §2, round-7): the ``SMAI_MODEL_<ROLE>``
-    env var (equivalently the nested ``SMAI_ENGINE__ROLE_MODELS__<ROLE>``
-    form) wins over this map, which in turn wins over ``TASK_DEFAULTS``.
-    Layered through :func:`smai_cli.config.load_runtime_config` like every
-    other ``EngineConfig`` field; the CLI folds the configured provider
-    name in and hands the resulting map to
-    :func:`smai_agents.model_selection.get_model_for_task` via the
-    per-role :class:`LlmProvider` builder."""
+    Precedence (D3-extended, most specific first):
+    ``SMAI_MODEL_<ROLE>__<STEP>`` env > ``SMAI_MODEL_<ROLE>`` env >
+    ``role_models[role][step]`` (nested) >
+    ``role_models[role]["_default"]`` (nested) > ``role_models[role]``
+    (flat) > ``TASK_DEFAULTS[role]``.
+
+    Layered through :func:`smai_cli.config.load_runtime_config` like
+    every other ``EngineConfig`` field; the CLI's
+    ``_role_models_to_overrides`` widens to the nested shape and hands
+    the resulting map to the inline-role helper (host-side) plus the
+    sandboxed-role override env-projection (sub-PR D thread 2)."""
 
     # ---- Runtime container images (round-4 friction A) -------------------
 
@@ -317,4 +374,4 @@ class EngineConfig(BaseModel):
     rather than silently skipped."""
 
 
-__all__ = ["EngineConfig", "RetryBackoffConfig"]
+__all__ = ["EngineConfig", "PerRoleRuntime", "RetryBackoffConfig"]

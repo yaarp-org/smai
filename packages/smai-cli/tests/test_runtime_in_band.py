@@ -320,6 +320,70 @@ async def test_smai_model_env_overrides_engine_role_models(tmp_path: Path) -> No
         assert getattr(providers["planner"], "model_id", None) == "env-wins-model"
 
 
+def test_role_models_to_overrides_flat_round7_shape() -> None:
+    """Round-7 flat ``{role: model_id}`` projects to
+    ``{role: (provider, model_id)}`` unchanged (backward-compat)."""
+    from smai_cli.runtime import _role_models_to_overrides
+
+    out = _role_models_to_overrides(
+        {"planner": "us.anthropic.claude-sonnet-4-6"},
+        "bedrock",
+    )
+    assert out["planner"] == ("bedrock", "us.anthropic.claude-sonnet-4-6")
+
+
+def test_role_models_to_overrides_nested_d3_shape() -> None:
+    """D3 nested ``{role: {step: model_id}}`` projects to
+    ``{role: {step: (provider, model_id)}}``. The ``_default`` sentinel
+    is preserved verbatim — the inline-role resolver walks it on
+    ``step=None``."""
+    from smai_cli.runtime import _role_models_to_overrides
+
+    out = _role_models_to_overrides(
+        {
+            "harness_builder": {
+                "_default": "us.anthropic.claude-opus-4-6-v1",
+                "diagnose_on_failure": "us.anthropic.claude-sonnet-4-6",
+            },
+        },
+        "bedrock",
+    )
+    nested = out["harness_builder"]
+    assert isinstance(nested, dict)
+    assert nested["_default"] == ("bedrock", "us.anthropic.claude-opus-4-6-v1")
+    assert nested["diagnose_on_failure"] == ("bedrock", "us.anthropic.claude-sonnet-4-6")
+
+
+def test_role_models_to_step_env_emits_role_and_step_vars() -> None:
+    """Host-side projection (sub-PR D thread 2): the sandboxed dispatcher
+    consumes ``engine.role_models`` via env vars per D3. Flat entries
+    emit ``SMAI_MODEL_<ROLE>``; nested entries emit
+    ``SMAI_MODEL_<ROLE>__<STEP>``; the ``_default`` sentinel projects
+    to the role-level shortcut shape so round-7's env layer is
+    seamless on top."""
+    from smai_cli.runtime import _role_models_to_step_env
+
+    env = _role_models_to_step_env(
+        {
+            "planner": "us.anthropic.claude-opus-4-6-v1",  # flat
+            "harness_builder": {
+                "_default": "us.anthropic.claude-opus-4-6-v1",
+                "diagnose_on_failure": "us.anthropic.claude-sonnet-4-6",
+            },
+        },
+        "bedrock",
+    )
+    # flat -> SMAI_MODEL_<ROLE>
+    assert env["SMAI_MODEL_PLANNER"] == "bedrock:us.anthropic.claude-opus-4-6-v1"
+    # nested _default -> SMAI_MODEL_<ROLE>
+    assert env["SMAI_MODEL_HARNESS_BUILDER"] == "bedrock:us.anthropic.claude-opus-4-6-v1"
+    # nested step -> SMAI_MODEL_<ROLE>__<STEP>
+    assert (
+        env["SMAI_MODEL_HARNESS_BUILDER__DIAGNOSE_ON_FAILURE"]
+        == "bedrock:us.anthropic.claude-sonnet-4-6"
+    )
+
+
 def test_experiments_service_constructed_via_runtime_property() -> None:
     """Property access exposes the bound :class:`ExperimentsService`."""
     # Instance-level smoke check; full lifecycle in async tests above.

@@ -30,6 +30,7 @@ operator's shell override always wins over a checked-in config file):
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from typing import Literal
 
 # Per §4 verbatim — eight roles. Five fleet roles plus the supervisor
@@ -80,28 +81,52 @@ class ModelSelectionError(ValueError):
 def get_model_for_task(
     role: TaskRole,
     *,
-    overrides: dict[TaskRole, tuple[str, str]] | None = None,
-    env: dict[str, str] | None = None,
+    step: str | None = None,
+    overrides: Mapping[TaskRole, tuple[str, str] | dict[str, tuple[str, str]]] | None = None,
+    env: Mapping[str, str] | None = None,
 ) -> tuple[str, str]:
-    """Resolve ``(provider_name, model_id)`` for ``role``.
+    """Resolve ``(provider_name, model_id)`` for ``(role[, step])``.
 
-    Resolution order (round-7 reordering — env wins over config):
+    Resolution order (D3-extended; round-7 reordering — env wins over config):
 
-    1. ``env[SMAI_MODEL_<ROLE_UPPER>]`` parsed as ``"<provider>:<model_id>"``.
+    1. ``env[SMAI_MODEL_<ROLE>__<STEP>]`` (if ``step`` given) parsed as
+       ``"<provider>:<model_id>"``. Most specific layer.
+    2. ``env[SMAI_MODEL_<ROLE_UPPER>]`` parsed as ``"<provider>:<model_id>"``.
        Defaults to :data:`os.environ`.
-    2. ``overrides[role]`` — the config-supplied per-role override map
-       (``RuntimeConfig.engine.role_models`` once the CLI has folded in
-       the configured provider name; or a future system-config UI).
-    3. :data:`TASK_DEFAULTS` ``[role]``.
+    3. ``overrides[role][step]`` if ``overrides[role]`` is a step-keyed
+       dict and ``step`` matches an entry.
+    4. ``overrides[role]["_default"]`` if ``overrides[role]`` is a
+       step-keyed dict (D3 ``"_default"`` sentinel; role-level fallback
+       distinct from :data:`TASK_DEFAULTS`).
+    5. ``overrides[role]`` if it is a bare ``(provider, model_id)``
+       tuple (round-7 flat shape).
+    6. :data:`TASK_DEFAULTS` ``[role]``.
+
+    Inline-role callers (planner, code_reviewer, etc.) typically pass
+    ``step=None``; the resolver still walks the nested form's
+    ``"_default"`` sentinel before falling to :data:`TASK_DEFAULTS`.
     """
     env_map = env if env is not None else os.environ
+    if step is not None:
+        step_env_value = env_map.get(_step_env_var_for(role, step))
+        if step_env_value is not None:
+            return _parse_env_value(role, step_env_value)
+
     env_value = env_map.get(_env_var_for(role))
     if env_value is not None:
         return _parse_env_value(role, env_value)
 
     if overrides is not None:
         explicit = overrides.get(role)
-        if explicit is not None:
+        if isinstance(explicit, dict):
+            if step is not None:
+                step_entry = explicit.get(step)
+                if step_entry is not None:
+                    return step_entry
+            default_entry = explicit.get("_default")
+            if default_entry is not None:
+                return default_entry
+        elif explicit is not None:
             return explicit
 
     return TASK_DEFAULTS[role]
@@ -109,6 +134,10 @@ def get_model_for_task(
 
 def _env_var_for(role: TaskRole) -> str:
     return f"{_ENV_VAR_PREFIX}{role.upper()}"
+
+
+def _step_env_var_for(role: TaskRole, step: str) -> str:
+    return f"{_ENV_VAR_PREFIX}{role.upper()}__{step.upper()}"
 
 
 def _parse_env_value(role: TaskRole, raw: str) -> tuple[str, str]:

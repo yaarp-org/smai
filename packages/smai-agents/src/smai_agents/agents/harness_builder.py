@@ -49,7 +49,7 @@ write per DEC-033 #3 is the orchestrator's gate-rule territory (Task
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -637,6 +637,7 @@ def make_dispatch_harness_build_sandboxed(
     technique_contract_artifact_path: Callable[[str, str], str] | None = None,
     harness_publish_key_prefix: Callable[[str], str] | None = None,
     retry_policy: Any | None = None,
+    extra_env: Mapping[str, str] | None = None,
 ) -> _SandboxedHarnessBuilderBundle:
     """Build the sandboxed harness-builder dispatcher bundle (sub-PR B).
 
@@ -727,6 +728,13 @@ def make_dispatch_harness_build_sandboxed(
             "/workspace",
         ]
         env: dict[str, str] = {"SMAI_CG_ID": cg_id}
+        # D3 per-role-per-step model env projection (sub-PR D thread 2):
+        # the host computes ``SMAI_MODEL_<ROLE>__<STEP>`` env vars from
+        # ``EngineConfig.role_models`` + the configured ``llm_provider``
+        # and threads them in at factory-construction time. The
+        # sandbox-side :func:`get_model_for_step` picks them up natively.
+        if extra_env:
+            env.update(extra_env)
         return CommandSpec(
             command=command,
             env=env,

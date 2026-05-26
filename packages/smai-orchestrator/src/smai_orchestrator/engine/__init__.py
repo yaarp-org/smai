@@ -41,6 +41,7 @@ from smai_orchestrator.engine.config import (
     DEFAULT_RUNTIME_CPU_IMAGE,
     DEFAULT_RUNTIME_IMAGE,
     EngineConfig,
+    PerRoleRuntime,
     RetryBackoffConfig,
 )
 from smai_orchestrator.engine.dispatch import (
@@ -98,6 +99,7 @@ __all__ = [
     "GateOutcome",
     "GateRule",
     "Phase1Outcome",
+    "PerRoleRuntime",
     "PhaseTrigger",
     "RetryBackoffConfig",
     "RetryPolicy",

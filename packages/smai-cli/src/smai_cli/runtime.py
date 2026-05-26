@@ -1458,7 +1458,9 @@ class Runtime:
             # arg (``"<provider>:<model_id>"`` form) layers on top; the
             # ``SMAI_MODEL_<ROLE>`` env var (read inside
             # ``get_model_for_task``) wins over both.
-            roles_overrides: dict[TaskRole, tuple[str, str]] = _role_models_to_overrides(
+            roles_overrides: dict[
+                TaskRole, tuple[str, str] | dict[str, tuple[str, str]]
+            ] = _role_models_to_overrides(
                 config.engine.role_models, config.plugins.llm_provider
             )
             if per_role_overrides is not None:
@@ -1706,24 +1708,95 @@ class Runtime:
 
 
 def _role_models_to_overrides(
-    role_models: Mapping[str, str], provider_name: str
-) -> dict[TaskRole, tuple[str, str]]:
+    role_models: Mapping[str, str | Mapping[str, str]], provider_name: str
+) -> dict[TaskRole, tuple[str, str] | dict[str, tuple[str, str]]]:
     """Pair each bare model id in ``engine.role_models`` with the
-    configured ``llm_provider`` name to form the
+    configured ``llm_provider`` name to form the inline-role
     :func:`get_model_for_task` overrides shape.
 
+    Accepts both shapes per D3 (per_role_policy.md):
+
+    * **Flat / round-7**: ``{role: model_id}`` projects to
+      ``{role: (provider, model_id)}``.
+    * **Nested / D3**: ``{role: {step_type: model_id}}`` projects to
+      ``{role: {step_type: (provider, model_id)}}`` (the nested entry's
+      ``"_default"`` key is preserved verbatim for the resolver).
+
     Per-role cross-provider routing is intentionally not expressible
-    here (use ``SMAI_MODEL_<ROLE>`` for that, round-7 brief item B.4
-    backlog) — ``role_models`` values are bare model ids only.
+    here (use ``SMAI_MODEL_<ROLE>`` / ``SMAI_MODEL_<ROLE>__<STEP>``);
+    the configured provider name is folded into every level. The
+    sandboxed-role consumer (``smai-agent-runtime``'s
+    ``get_model_for_step``) reads the env shortcut directly and treats
+    the nested form as its primary input. Inline-role callers continue
+    to use the flat-tuple shape verbatim (no behavior change for
+    round-7 configs).
     """
     from typing import cast as _cast  # noqa: PLC0415
 
-    out: dict[TaskRole, tuple[str, str]] = {}
-    for role, model_id in role_models.items():
-        model_id = model_id.strip()
-        if not model_id:
-            raise ValueError(f"engine.role_models[{role!r}] must be a non-empty model id")
-        out[_cast(TaskRole, role)] = (provider_name, model_id)
+    out: dict[TaskRole, tuple[str, str] | dict[str, tuple[str, str]]] = {}
+    for role, raw_value in role_models.items():
+        if isinstance(raw_value, str):
+            model_id = raw_value.strip()
+            if not model_id:
+                raise ValueError(f"engine.role_models[{role!r}] must be a non-empty model id")
+            out[_cast(TaskRole, role)] = (provider_name, model_id)
+            continue
+        # Nested per-step map. Validate every entry is a non-empty string;
+        # preserve ``"_default"`` sentinel as-is per D3 Position 4.
+        nested: dict[str, tuple[str, str]] = {}
+        for step_key, step_model_id in raw_value.items():
+            stripped = step_model_id.strip()
+            if not stripped:
+                raise ValueError(
+                    f"engine.role_models[{role!r}][{step_key!r}] must be a non-empty model id"
+                )
+            nested[step_key] = (provider_name, stripped)
+        if not nested:
+            raise ValueError(f"engine.role_models[{role!r}] is a nested map but has no entries")
+        out[_cast(TaskRole, role)] = nested
+    return out
+
+
+def _role_models_to_step_env(  # pyright: ignore[reportUnusedFunction]
+    role_models: Mapping[str, str | Mapping[str, str]], provider_name: str
+) -> dict[str, str]:
+    """Project ``engine.role_models`` into the env-var dict the sandboxed
+    mini-orchestrator consumes via :func:`get_model_for_step` (D3).
+
+    For each role, emits:
+
+    * The flat shape ``{role: model_id}`` projects to one
+      ``SMAI_MODEL_<ROLE>=<provider>:<model_id>`` entry — the round-7
+      shortcut.
+    * The nested shape ``{role: {step: model_id, "_default": ...}}``
+      projects to ``SMAI_MODEL_<ROLE>__<STEP>=<provider>:<model_id>``
+      per step. The ``"_default"`` sentinel projects to
+      ``SMAI_MODEL_<ROLE>=<provider>:<model_id>`` so the role-level
+      fallback is the same env shape round-7 expects.
+
+    The provider name is folded in from the deployment's configured
+    ``llm_provider`` — cross-provider per-role routing requires the
+    operator to set the env vars explicitly (out of scope for the
+    config-driven path).
+    """
+    out: dict[str, str] = {}
+    for role, raw_value in role_models.items():
+        role_upper = role.upper()
+        if isinstance(raw_value, str):
+            model_id = raw_value.strip()
+            if not model_id:
+                continue
+            out[f"SMAI_MODEL_{role_upper}"] = f"{provider_name}:{model_id}"
+            continue
+        for step_key, step_model_id in raw_value.items():
+            stripped = step_model_id.strip()
+            if not stripped:
+                continue
+            if step_key == "_default":
+                out[f"SMAI_MODEL_{role_upper}"] = f"{provider_name}:{stripped}"
+            else:
+                step_upper = step_key.upper()
+                out[f"SMAI_MODEL_{role_upper}__{step_upper}"] = f"{provider_name}:{stripped}"
     return out
 
 

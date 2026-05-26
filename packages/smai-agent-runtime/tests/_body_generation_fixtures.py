@@ -28,6 +28,8 @@ class CapturedAgentCall:
 
     user_message: str
     output_type: str
+    workspace: Any = None
+    trace_step_name: str | None = None
 
 
 @dataclass
@@ -49,9 +51,25 @@ class FakeAgentRunner:
         agent: Any,
         user_message: str,
         output_type: type[BaseModel],
+        *,
+        workspace: Any = None,
+        trace_step_name: str | None = None,
+        agent_runner: Any = None,
     ) -> BaseModel:
+        # ``workspace`` + ``trace_step_name`` are sub-PR D thread 1's
+        # resume-prep surface (architectural_decisions §12 #4); the
+        # fake records them so a test can assert the dispatcher passed
+        # the right step-name + workspace for the conversation-trace
+        # persistence. ``agent_runner`` is sub-PR D thread 5's DI seam;
+        # the fake accepts and ignores it (it IS the runner already).
+        del agent_runner
         self.calls.append(
-            CapturedAgentCall(user_message=user_message, output_type=output_type.__name__),
+            CapturedAgentCall(
+                user_message=user_message,
+                output_type=output_type.__name__,
+                workspace=workspace,
+                trace_step_name=trace_step_name,
+            ),
         )
         if self.responses:
             return self.responses[0] if len(self.responses) == 1 else self.responses.pop(0)

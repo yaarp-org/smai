@@ -75,6 +75,12 @@ def test_body_generation_step_writes_module_source(
     # The module source landed on disk at write_to_path.
     written = (tmp_path / "harness" / "__init__.py").read_text()
     assert "def build_harness" in written
+    # Sub-PR D resume-prep: the dispatcher threads workspace +
+    # ``trace_step_name`` so :func:`_run_agent_sync` persists the
+    # message history under ``conversation_traces/`` per
+    # architectural_decisions §12 #4.
+    assert call.workspace == tmp_path
+    assert call.trace_step_name == "00_body_build_harness_attempt_0"
 
 
 def test_body_generation_step_carries_extension_points_into_bundle(

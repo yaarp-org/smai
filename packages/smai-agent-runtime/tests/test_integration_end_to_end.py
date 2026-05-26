@@ -26,7 +26,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
 from _harness_builder_workspace_fixtures import (  # type: ignore[import-not-found]
     write_minimal_harness_workspace,
 )
@@ -34,10 +33,11 @@ from pydantic import TypeAdapter
 from smai_agent_runtime.__main__ import main as entry_main
 from smai_agent_runtime.status import EVENTS_MIRROR_RELPATH, StatusEvent
 
-
-@pytest.fixture(autouse=True)
-def _enable_fake_llm(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SMAI_AGENT_RUNTIME_FAKE_LLM", "1")
+# Sub-PR D thread 5: the previous ``SMAI_AGENT_RUNTIME_FAKE_LLM`` env-var
+# seam was replaced with a dependency-injected :class:`AgentRunner`
+# selected at main()-entry via ``--fake-llm``. Integration tests append
+# it to their argv.
+_FAKE_LLM_ARGV = ["--fake-llm"]
 
 
 def test_end_to_end_workflow_produces_complete_artifact_set(tmp_path: Path) -> None:
@@ -52,6 +52,7 @@ def test_end_to_end_workflow_produces_complete_artifact_set(tmp_path: Path) -> N
             "cg-integration-test",
             "--workspace",
             str(tmp_path),
+            *_FAKE_LLM_ARGV,
         ]
     )
     assert rc == 0
@@ -113,6 +114,7 @@ def test_end_to_end_event_stream_step_kinds_match_workflow(tmp_path: Path) -> No
             "cg-step-kinds",
             "--workspace",
             str(tmp_path),
+            *_FAKE_LLM_ARGV,
         ]
     )
     mirror_path = tmp_path / EVENTS_MIRROR_RELPATH

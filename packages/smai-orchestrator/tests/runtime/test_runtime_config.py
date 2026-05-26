@@ -136,6 +136,70 @@ def test_engine_and_plugins_are_orthogonal() -> None:
     assert flipped_plugins.plugins.metadata_store == "postgres"
 
 
+# ---- D3 / sub-PR D thread 2: per_role_runtime + nested role_models ---------
+
+
+def test_per_role_runtime_defaults_sandbox_for_both_sandboxed_roles() -> None:
+    """D3 / 2026-05-25 settled decision: both sandboxed roles default to
+    ``"sandbox"`` uniformly across deployments. Pydantic-encoded so the
+    default cannot drift through a code-only change."""
+    from smai_orchestrator.engine import PerRoleRuntime
+
+    runtime = EngineConfig().per_role_runtime
+    assert runtime.harness_builder == "sandbox"
+    assert runtime.technique_implementer == "sandbox"
+    # Independent instance constructs the same defaults (not just a
+    # shared reference).
+    assert PerRoleRuntime().harness_builder == "sandbox"
+
+
+def test_per_role_runtime_rejects_inline_role_keys() -> None:
+    """D3 / per_role_policy.md Position 5: misconfiguring an inline role
+    under ``per_role_runtime`` is Pydantic-visible. The ``extra="forbid"``
+    on :class:`PerRoleRuntime` keeps the operator-footgun where a typo
+    on ``planner`` / ``code_reviewer`` would silently fall through to
+    the inline-by-architecture default out of bounds."""
+    from smai_orchestrator.engine import PerRoleRuntime
+
+    with pytest.raises(ValidationError):
+        PerRoleRuntime(planner="sandbox")  # type: ignore[call-arg]
+
+
+def test_role_models_accepts_flat_round7_shape() -> None:
+    """Backward-compat drift-guard: round-7's flat
+    ``{role: model_id}`` configs parse cleanly under the widened
+    union type. No migration is required for existing users
+    (per_role_policy.md Position 6)."""
+    cfg = EngineConfig(
+        role_models={
+            "planner": "us.anthropic.claude-opus-4-6-v1",
+            "harness_builder": "us.anthropic.claude-sonnet-4-6",
+        }
+    )
+    assert cfg.role_models["planner"] == "us.anthropic.claude-opus-4-6-v1"
+
+
+def test_role_models_accepts_nested_d3_shape() -> None:
+    """D3 nested shape parses cleanly. ``_default`` sentinel + step-keyed
+    entries co-exist on the same role; mixed flat + nested co-exist
+    across different roles."""
+    cfg = EngineConfig(
+        role_models={
+            "planner": "us.anthropic.claude-opus-4-6-v1",  # flat
+            "harness_builder": {
+                "_default": "us.anthropic.claude-opus-4-6-v1",
+                "diagnose_on_failure": "us.anthropic.claude-sonnet-4-6",
+            },  # nested
+        }
+    )
+    planner_value = cfg.role_models["planner"]
+    assert isinstance(planner_value, str)
+    harness_value = cfg.role_models["harness_builder"]
+    assert isinstance(harness_value, dict)
+    assert harness_value["_default"] == "us.anthropic.claude-opus-4-6-v1"
+    assert harness_value["diagnose_on_failure"] == "us.anthropic.claude-sonnet-4-6"
+
+
 def test_with_overrides_is_immutable() -> None:
     """``with_overrides`` returns a new instance; the original is
     unchanged (Pydantic's ``model_copy`` semantics)."""

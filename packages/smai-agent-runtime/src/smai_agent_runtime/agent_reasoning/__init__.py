@@ -21,7 +21,13 @@ Two pieces:
 
 from __future__ import annotations
 
-from smai_agent_runtime.agent_reasoning.agents import build_agent
+from smai_agent_runtime.agent_reasoning.agents import (
+    DEFAULT_BEDROCK_CACHE_SETTINGS,
+    NO_BEDROCK_CACHE,
+    BedrockCacheSettings,
+    BedrockCacheTtl,
+    build_agent,
+)
 from smai_agent_runtime.agent_reasoning.model_selection import (
     DEFAULT_BEDROCK_PROVIDER,
     SANDBOXED_ROLE_DEFAULTS,
@@ -31,8 +37,12 @@ from smai_agent_runtime.agent_reasoning.model_selection import (
 )
 
 __all__ = [
+    "DEFAULT_BEDROCK_CACHE_SETTINGS",
     "DEFAULT_BEDROCK_PROVIDER",
+    "BedrockCacheSettings",
+    "BedrockCacheTtl",
     "ModelSelectionError",
+    "NO_BEDROCK_CACHE",
     "SANDBOXED_ROLE_DEFAULTS",
     "SandboxedRole",
     "build_agent",

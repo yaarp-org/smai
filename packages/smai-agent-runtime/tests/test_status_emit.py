@@ -35,10 +35,11 @@ from smai_agent_runtime.status import (
     WorkflowPlanItem,
 )
 
-
-@pytest.fixture(autouse=True)
-def _enable_fake_llm(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SMAI_AGENT_RUNTIME_FAKE_LLM", "1")
+# Sub-PR D thread 5: the entry-point tests below append ``--fake-llm`` to
+# their argv (the prior ``SMAI_AGENT_RUNTIME_FAKE_LLM`` env-var seam was
+# replaced with a dependency-injected :class:`AgentRunner` selected at
+# main()-entry by this flag).
+_FAKE_LLM_ARGV = ["--fake-llm"]
 
 
 # === StatusEmitter unit tests ================================================
@@ -213,6 +214,7 @@ def test_mini_orchestrator_emits_full_event_stream(
             "cg-emit-test",
             "--workspace",
             str(tmp_path),
+            *_FAKE_LLM_ARGV,
         ]
     )
     assert rc == 0
@@ -255,6 +257,7 @@ def test_mini_orchestrator_writes_events_mirror_file(
             "cg-mirror-test",
             "--workspace",
             str(tmp_path),
+            *_FAKE_LLM_ARGV,
         ]
     )
     mirror = tmp_path / EVENTS_MIRROR_RELPATH
@@ -283,6 +286,7 @@ def test_step_start_carries_input_summary(
             "cg-input-summary",
             "--workspace",
             str(tmp_path),
+            *_FAKE_LLM_ARGV,
         ]
     )
     captured = capsys.readouterr()

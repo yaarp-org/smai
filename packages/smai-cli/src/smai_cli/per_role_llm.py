@@ -56,7 +56,7 @@ def build_per_role_llm_providers(
     selection: PluginSelection,
     *,
     env: Mapping[str, str] | None = None,
-    overrides: dict[TaskRole, tuple[str, str]] | None = None,
+    overrides: Mapping[TaskRole, tuple[str, str] | dict[str, tuple[str, str]]] | None = None,
 ) -> dict[str, LlmProvider]:
     """Build the per-role :class:`LlmProvider` map.
 

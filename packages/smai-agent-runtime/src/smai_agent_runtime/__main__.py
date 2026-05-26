@@ -96,10 +96,24 @@ def _build_parser() -> argparse.ArgumentParser:
         "--resume",
         default=None,
         help=(
-            "Prior agent-session id to resume from. Sub-PR B accepts the "
-            "flag at argparse and routes to a no-op stub; the resume-mode "
-            "workflow logic lands in sub-PR D (architectural hedge per "
+            "Prior agent-session id to resume from. Sub-PR D wires the "
+            "resume-mode workflow logic; future PRs add the multi-cycle "
+            "review-feedback loop (architectural hedge per "
             "architectural_decisions §12 item 4)."
+        ),
+    )
+    parser.add_argument(
+        "--fake-llm",
+        action="store_true",
+        default=False,
+        help=(
+            "Test-only seam: substitute a deterministic fake AgentRunner "
+            "for the PydanticAI Agent calls so cross-process subprocess "
+            "tests can drive the mini-orchestrator without real LLM "
+            "credentials. Sub-PR D thread 5 replaced the previous "
+            "SMAI_AGENT_RUNTIME_FAKE_LLM env-var read with this "
+            "dependency-injected flag (env-var-as-mode-switch is the "
+            "kind of smell that hides in production code paths)."
         ),
     )
     return parser
