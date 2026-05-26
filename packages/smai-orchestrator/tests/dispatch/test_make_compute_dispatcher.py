@@ -66,7 +66,7 @@ async def test_dispatcher_calls_stage_then_submit_when_inputs_present(
         inputs=static_workspace_inputs(workspace_dir),
         outputs=WorkspaceOutputs.empty(),
     )
-    outcome = await dispatcher(await make_dispatch_context(compute=compute))
+    outcome = await dispatcher.handler(await make_dispatch_context(compute=compute))
 
     assert outcome.error is None
     assert outcome.submitted_handles == [handle]
@@ -109,7 +109,7 @@ async def test_dispatcher_skips_stage_when_inputs_empty() -> None:
         inputs=WorkspaceInputs.empty(),
         outputs=WorkspaceOutputs.empty(),
     )
-    outcome = await dispatcher(await make_dispatch_context(compute=compute))
+    outcome = await dispatcher.handler(await make_dispatch_context(compute=compute))
 
     assert outcome.error is None
     assert outcome.submitted_handles == [handle]
@@ -140,7 +140,7 @@ async def test_dispatcher_skips_stage_when_resolver_returns_none() -> None:
         inputs=WorkspaceInputs(resolver=_none_resolver),
         outputs=WorkspaceOutputs.empty(),
     )
-    await dispatcher(await make_dispatch_context(compute=compute))
+    await dispatcher.handler(await make_dispatch_context(compute=compute))
 
     kinds = [c.kind for c in compute.calls]
     assert kinds == ["submit"], kinds
@@ -174,7 +174,7 @@ async def test_dispatcher_factory_workspace_overrides_caller_plugin_options(
         inputs=static_workspace_inputs(workspace_dir),
         outputs=WorkspaceOutputs.empty(),
     )
-    await dispatcher(await make_dispatch_context(compute=compute))
+    await dispatcher.handler(await make_dispatch_context(compute=compute))
 
     submit_call = next(c for c in compute.calls if c.kind == "submit")
     workspace_arg = submit_call.payload["plugin_options"]["workspace"]
@@ -197,7 +197,7 @@ async def test_dispatcher_propagates_submit_failure() -> None:
         outputs=WorkspaceOutputs.empty(),
     )
     with pytest.raises(ComputeUnavailable, match="substrate offline"):
-        await dispatcher(await make_dispatch_context(compute=compute))
+        await dispatcher.handler(await make_dispatch_context(compute=compute))
 
 
 async def test_format_stderr_tail_short_input_returns_unchanged() -> None:

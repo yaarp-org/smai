@@ -381,6 +381,16 @@ agent_sessions_table: Table = Table(
     Column("output_token_rate_usd_per_million", Float(), nullable=True),
     Column("started_at", DateTime(timezone=True), nullable=False),
     Column("ended_at", DateTime(timezone=True), nullable=True),
+    # Cross-reference to the sandbox the session ran in (sandboxed roles
+    # only — harness_builder, technique_implementer). NULL for inline
+    # roles (planner, supervisor, reviewers). Lets operator queries
+    # correlate a cost-ledger row with ``Compute.logs(handle)`` after
+    # the parent record's ``*_job_handle`` is overwritten by a later
+    # re-dispatch. JSON-shaped to match ``cgs.harness_job_handle`` /
+    # ``entries.implementation_job_handle`` / ``runs.compute_job_handle``
+    # (see harness-handle note on ``cgs.harness_job_handle`` for the
+    # ``none_as_null=True`` rationale). Migration 0006.
+    Column("compute_job_handle", JSON(none_as_null=True), nullable=True),
     Index("ix_agent_sessions_parent", "parent_kind", "parent_id", "started_at"),
 )
 

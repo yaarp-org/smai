@@ -205,7 +205,7 @@ The Alembic env carries **two branches**:
 
 | Branch label | Head revision | Applied by |
 |--------------|---------------|------------|
-| `default` | `0004_cg_impl_phase_attempt` | Every reference plugin's `migrate()` at boot; `smai migrate` (no flag); `smai dev`. |
+| `default` | `0006_agent_session_handle` | Every reference plugin's `migrate()` at boot; `smai migrate` (no flag); `smai dev`. |
 | `tenant_aware` | `0002_tenant_aware_schema` | `PostgresStore(tenant_aware=True).migrate()`; `smai migrate --upgrade-to=tenant_aware`. |
 
 The `tenant_aware` branch is a **separate-root** revision with
@@ -217,19 +217,22 @@ decoupled from the opt-in extension.
 
 ### Default-branch revisions
 
-The `default` branch is a linear chain `0001 → 0003 → 0004` (0002 is
-the off-branch tenant_aware extension above):
+The `default` branch is a linear chain `0001 → 0003 → 0004 → 0005 → 0006`
+(0002 is the off-branch tenant_aware extension above):
 
 | Revision | Adds |
 |----------|------|
 | `0001_initial_schema` | The full v1 schema declared in :mod:`.metadata` (applied via `create_all(checkfirst=True)`). |
 | `0003_cg_symbolic_id` | Nullable `cgs.symbolic_id VARCHAR(128)` — preserves the planner's human-readable CG draft id after the round-9 fix made the primary CG `id` a fresh ULID-shaped string. |
 | `0004_cg_impl_phase_attempt` | `cgs.implementation_phase_attempt INTEGER` (default 0) — the CG-level retry counter the round-10 `RetryPolicy` on the `implementing` dispatch state reads. |
+| `0005_entry_dispatch_attempt` | `entries.entry_dispatch_attempt INTEGER` (default 0) — the entry-level dispatch retry counter the round-11 `RetryPolicy` on `cg_entries.implementing` reads. |
+| `0006_agent_session_handle` | Nullable `agent_sessions.compute_job_handle JSON` — denormalized cross-reference from the cost-ledger row to the sandbox the session ran in (sandboxed roles only). Agent-refactor Step 4 sub-PR B. |
 
-Both 0003 and 0004 use the dual-mode add-column pattern documented in
-"Adding a new revision" above (offline-unconditional / online
-inspect-and-skip) so they are no-ops on a fresh database that 0001's
-`create_all` already brought to the canonical shape.
+Revisions 0003 / 0004 / 0005 / 0006 all use the dual-mode add-column
+pattern documented in "Adding a new revision" above
+(offline-unconditional / online inspect-and-skip) so they are no-ops
+on a fresh database that 0001's `create_all` already brought to the
+canonical shape.
 
 ### What 0002 adds
 

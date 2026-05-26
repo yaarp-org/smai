@@ -626,6 +626,260 @@ def make_dispatch_harness_build(
     return _dispatch
 
 
+# === Sandboxed dispatch handler (agent_refactor Step 4 sub-PR B) =============
+
+
+def make_dispatch_harness_build_sandboxed(
+    *,
+    workspace_root: Path,
+    agent_runtime_image: str | None = None,
+    harness_contract_artifact_path: Callable[[str], str] | None = None,
+    technique_contract_artifact_path: Callable[[str, str], str] | None = None,
+    harness_publish_key_prefix: Callable[[str], str] | None = None,
+    retry_policy: Any | None = None,
+) -> _SandboxedHarnessBuilderBundle:
+    """Build the sandboxed harness-builder dispatcher bundle (sub-PR B).
+
+    The new dispatch shape introduced by agent_refactor Step 4. Returns a
+    :class:`_SandboxedHarnessBuilderBundle` (mirroring
+    :class:`smai_orchestrator.dispatch.DispatcherBundle`) the spec author
+    can wire onto :class:`DispatchAction.handler` /
+    :attr:`DispatchAction.post_terminal_handler`:
+
+    * :attr:`handler` — pre-materializes the per-CG workspace
+      (harness contract, baseline technique contract, harness API
+      reference, runtime templates) and submits the
+      ``smai-agent-runtime`` container running
+      ``python -m smai_agent_runtime --role harness_builder --cg-id <id>``
+      via :func:`smai_orchestrator.dispatch.make_compute_dispatcher`. On
+      successful submit also opens an ``agent_sessions`` telemetry row
+      with the :class:`JobHandle` cross-reference (D2).
+    * :attr:`post_terminal_handler` — invoked by phase-1 on terminal
+      success. Calls :meth:`Compute.harvest_workspace` (no-op under
+      bind-mount semantics, volume read-back under upload-download)
+      and publishes the resulting workspace files (``harness/``,
+      ``techniques/``, ``validation_results.json``, ``manifest.json``,
+      ``conversation_traces/``) to :class:`ArtifactStore` via
+      :func:`publish_workspace_outputs` so the downstream gates can
+      read them.
+
+    Sub-PR B keeps :func:`make_dispatch_harness_build` (the in-process
+    shape) intact so the production orchestrator path keeps working;
+    sub-PR D handles the cutover + deletion. Both factories coexist on
+    main during the refactor.
+    """
+    from smai_orchestrator.dispatch import (  # noqa: PLC0415
+        CommandSpec,
+        WorkspaceInputs,
+        WorkspaceOutputs,
+        make_compute_dispatcher,
+    )
+
+    def _default_contract_path(cg_id: str) -> str:
+        return DEFAULT_HARNESS_CONTRACT_KEY_TEMPLATE.format(cg_id=cg_id)
+
+    def _default_technique_contract_path(cg_id: str, entry_id: str) -> str:
+        return DEFAULT_TECHNIQUE_CONTRACT_KEY_TEMPLATE.format(cg_id=cg_id, entry_id=entry_id)
+
+    def _default_publish_prefix(cg_id: str) -> str:
+        return DEFAULT_HARNESS_MANIFEST_KEY_TEMPLATE.format(cg_id=cg_id).rsplit("/", 1)[0]
+
+    contract_path_fn = harness_contract_artifact_path or _default_contract_path
+    technique_contract_path_fn = (
+        technique_contract_artifact_path or _default_technique_contract_path
+    )
+    publish_prefix_fn = harness_publish_key_prefix or _default_publish_prefix
+    image_name = agent_runtime_image or _DEFAULT_AGENT_RUNTIME_IMAGE
+
+    async def _resolve_image(ctx: Any) -> str:
+        # Stateless image lookup, but doubles as the per-dispatch
+        # workspace-materialization site: the engine invokes
+        # ``image_resolver`` exactly once per dispatch and runs it
+        # BEFORE ``inputs.resolver`` (which calls
+        # ``Compute.stage_workspace``), so writing the contract /
+        # template files here guarantees they land on disk before the
+        # substrate-side staging reads them. The engine has no
+        # separate "before-stage" hook today, so piggybacking on
+        # ``image_resolver`` is the right seam.
+        cg_id = ctx.entity_id
+        workspace_path = workspace_root / cg_id
+        await _materialize_harness_builder_workspace(
+            workspace_path=workspace_path,
+            cg_id=cg_id,
+            artifact_store=ctx.artifact_store,
+            metadata_store=ctx.metadata_store,
+            contract_key=contract_path_fn(cg_id),
+            technique_contract_path_fn=technique_contract_path_fn,
+        )
+        return image_name
+
+    async def _build_command(ctx: Any) -> Any:
+        cg_id = ctx.entity_id
+        command = [
+            "python",
+            "-m",
+            "smai_agent_runtime",
+            "--role",
+            "harness_builder",
+            "--cg-id",
+            cg_id,
+            "--workspace",
+            "/workspace",
+        ]
+        env: dict[str, str] = {"SMAI_CG_ID": cg_id}
+        return CommandSpec(
+            command=command,
+            env=env,
+            gpu=False,
+            timeout_seconds=3600,
+        )
+
+    async def _resolve_workspace_input(ctx: Any) -> Path:
+        return workspace_root / ctx.entity_id
+
+    async def _resolve_workspace_output(ctx: Any) -> Path:
+        return workspace_root / ctx.entity_id
+
+    bundle = make_compute_dispatcher(
+        role="harness_builder",
+        image_resolver=_resolve_image,
+        command_builder=_build_command,
+        inputs=WorkspaceInputs(resolver=_resolve_workspace_input),
+        outputs=WorkspaceOutputs(destination=_resolve_workspace_output),
+        retry_policy=retry_policy,
+    )
+
+    inner_handler = bundle.handler
+    inner_post_terminal = bundle.post_terminal_handler
+
+    async def _handler_with_session_open(ctx: Any) -> Any:
+        outcome = await inner_handler(ctx)
+        if outcome.error is None and outcome.submitted_handles:
+            # D2: cross-reference the cost-ledger row with the
+            # sandbox JobHandle so post-hoc operator queries can
+            # walk from `agent_sessions` to `Compute.logs(handle)`
+            # even after the parent record's ``harness_job_handle``
+            # is overwritten by a later re-dispatch.
+            await open_agent_session(
+                ctx.metadata_store,
+                parent_kind="cg",
+                parent_id=ctx.entity_id,
+                agent_role="harness_builder",
+                llm=ctx.llm,
+                compute_job_handle=outcome.submitted_handles[0],
+            )
+        return outcome
+
+    async def _post_terminal_with_publish(ctx: Any) -> None:
+        if inner_post_terminal is not None:
+            await inner_post_terminal(ctx)
+        cg_id = ctx.entity_id
+        workspace_path = workspace_root / cg_id
+        if not workspace_path.exists():
+            return
+        await publish_workspace_outputs(
+            artifact_store=ctx.artifact_store,
+            workspace_path=workspace_path,
+            key_prefix=publish_prefix_fn(cg_id),
+            roots=[
+                "harness",
+                "techniques",
+                "validation_results.json",
+                "manifest.json",
+                "conversation_traces",
+            ],
+        )
+
+    return _SandboxedHarnessBuilderBundle(
+        handler=_handler_with_session_open,
+        post_terminal_handler=_post_terminal_with_publish,
+    )
+
+
+# Default agent-runtime image. Mirrors
+# :data:`smai_orchestrator.engine.config.DEFAULT_AGENT_RUNTIME_IMAGE`;
+# duplicated as a literal here to avoid an import-back-edge through
+# the orchestrator package (this module sits in smai-agents which
+# smai-orchestrator already depends on transitively).
+_DEFAULT_AGENT_RUNTIME_IMAGE = "smai-agent-runtime:dev"
+
+
+class _SandboxedHarnessBuilderBundle:
+    """Mirror of :class:`smai_orchestrator.dispatch.DispatcherBundle`.
+
+    Constructed here so callers of
+    :func:`make_dispatch_harness_build_sandboxed` need not import the
+    orchestrator-side bundle type. Field shape identical: spec author
+    destructures ``.handler`` and ``.post_terminal_handler`` and wires
+    them onto :class:`DispatchAction`.
+    """
+
+    __slots__ = ("handler", "post_terminal_handler")
+
+    def __init__(
+        self,
+        *,
+        handler: Callable[[Any], Awaitable[Any]],
+        post_terminal_handler: Callable[[Any], Awaitable[None]] | None,
+    ) -> None:
+        self.handler = handler
+        self.post_terminal_handler = post_terminal_handler
+
+
+async def _materialize_harness_builder_workspace(  # noqa: PLR0913
+    *,
+    workspace_path: Path,
+    cg_id: str,
+    artifact_store: Any,
+    metadata_store: Any,
+    contract_key: str,
+    technique_contract_path_fn: Callable[[str, str], str],
+) -> None:
+    """Stage the harness-builder sandbox's workspace contents.
+
+    Writes the harness contract, baseline technique contract, runtime
+    templates, and harness-API reference into ``workspace_path`` so
+    :meth:`Compute.stage_workspace` reads from a ready-to-run
+    workspace. Mirrors :func:`run_harness_builder_session`'s pre-loop
+    materialization but skips the prompt-config / tool-registry shape
+    — those live inside the sandbox now.
+
+    Raises :class:`smai_core.plugins.ArtifactNotFound` if the contract
+    or baseline technique contract is missing, and :class:`LookupError`
+    if no baseline entry exists. The engine's
+    ``_handle_dispatch_failure`` catches the raise and rolls the CG
+    back; the round-10 retry policy bounds the loop.
+    """
+    raw = await artifact_store.get(contract_key)
+    harness_contract = HarnessContract.model_validate_json(raw)
+
+    baseline_entry = await _find_baseline_entry(metadata_store, cg_id)
+    if baseline_entry is None:
+        raise LookupError(
+            f"No baseline entry (is_baseline=True) found for CG {cg_id!r}; "
+            "every CG materialized via the planner / orchestrator should "
+            "have exactly one."
+        )
+    baseline_contract_key = technique_contract_path_fn(cg_id, baseline_entry.id)
+    raw_t = await artifact_store.get(baseline_contract_key)
+    baseline_technique_contract = TechniqueContract.model_validate_json(raw_t)
+
+    create_workspace_skeleton(workspace_path)
+    write_template_files(workspace_path)
+
+    contract_path = workspace_path / WORKSPACE_HARNESS_CONTRACT_PATH
+    contract_path.parent.mkdir(parents=True, exist_ok=True)
+    contract_path.write_text(harness_contract.model_dump_json(indent=2))
+
+    technique_contract_path = workspace_path / WORKSPACE_TECHNIQUE_CONTRACT_PATH
+    technique_contract_path.parent.mkdir(parents=True, exist_ok=True)
+    technique_contract_path.write_text(baseline_technique_contract.model_dump_json(indent=2))
+
+    api_reference_path = workspace_path / WORKSPACE_HARNESS_API_REFERENCE_PATH
+    api_reference_path.parent.mkdir(parents=True, exist_ok=True)
+    api_reference_path.write_text(build_harness_api_reference())
+
+
 async def _find_baseline_entry(metadata_store: Any, cg_id: str) -> Any:
     """Return the ``is_baseline=True`` :class:`EntryRecord` for ``cg_id`` (or
     ``None`` if no such entry exists).
@@ -665,5 +919,6 @@ __all__ = [
     "WORKSPACE_TECHNIQUE_CONTRACT_PATH",
     "SessionRunner",
     "make_dispatch_harness_build",
+    "make_dispatch_harness_build_sandboxed",
     "run_harness_builder_session",
 ]

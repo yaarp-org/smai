@@ -1,54 +1,161 @@
 """Entry-point dispatch tests.
 
-Per Step 3 of the agent-layer refactor (see
-``designs/smai/agent_refactor/implementation_plan.md`` Step 3 acceptance
-criteria): ``python -m smai_agent_runtime --role harness_builder --cg-id
-<id>`` must exit with a clear "not yet implemented" error and NOT an
-import error.
+Sub-PR B of the agent-layer refactor Step 4 replaced the harness_builder
+"not yet implemented" stub with a real mini-orchestrator skeleton that
+iterates the sub-PR-A workflow generator with FAKE per-step handlers.
+The technique_implementer surface is still a stub (Step 7 fills it).
 
 These tests exercise the dispatch wiring in
-:mod:`smai_agent_runtime.__main__`. Step 4 of the refactor will replace
-the harness_builder stub with the real mini-orchestrator; Step 7 will
-do the same for technique_implementer. Until then the per-role
-``main`` raises :class:`RoleNotImplementedError` and the entry point
-exits with :data:`EXIT_NOT_IMPLEMENTED` (64).
+:mod:`smai_agent_runtime.__main__` plus the sub-PR B harness_builder
+entry behavior (success path with workspace, error paths with missing
+arguments, resume-mode no-op stub).
 """
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
+from _harness_builder_workspace_fixtures import (  # type: ignore[import-not-found]
+    write_minimal_harness_workspace,
+)
 from smai_agent_runtime.__main__ import (
     EXIT_INTERNAL_ERROR,
     EXIT_NOT_IMPLEMENTED,
     main,
 )
+from smai_agent_runtime.harness_builder._main import (
+    EXIT_BAD_WORKSPACE,
+    EXIT_OK,
+    EXIT_RESUME_NOT_IMPLEMENTED,
+)
 
 # === Programmatic dispatch ===================================================
 
 
-def test_harness_builder_stub_exits_not_implemented(
+def test_harness_builder_runs_workflow_with_workspace(
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    """Sub-PR B: with a properly-staged workspace the mini-orchestrator
+    iterates the generated workflow and exits :data:`EXIT_OK`. Fake
+    handlers write canned outputs; sub-PR C replaces them with real
+    PydanticAI agent calls.
+    """
+    write_minimal_harness_workspace(tmp_path)
+    rc = main(
+        [
+            "--role",
+            "harness_builder",
+            "--cg-id",
+            "cg-test-001",
+            "--workspace",
+            str(tmp_path),
+        ]
+    )
+    assert rc == EXIT_OK, capsys.readouterr().err
+    captured = capsys.readouterr()
+    # status.json landed in outputs/ with the per-step outcomes
+    status_payload = json.loads((tmp_path / "outputs" / "status.json").read_text())
+    assert status_payload["succeeded"] is True
+    assert status_payload["cg_id"] == "cg-test-001"
+    # 3 body + baseline + validation + diagnose + manifest = 7
+    assert len(status_payload["step_outcomes"]) >= 5
+    # session_start status line surfaces on stdout
+    assert "session_start" in captured.out
+    assert "session_end_success" in captured.out
+
+
+def test_harness_builder_workflow_writes_canned_artifacts(
+    tmp_path: Path,
+) -> None:
+    """Sub-PR B fake handlers materialize canned files into the
+    workspace so the post-terminal harvest has something to publish."""
+    write_minimal_harness_workspace(tmp_path)
+    rc = main(
+        [
+            "--role",
+            "harness_builder",
+            "--cg-id",
+            "cg-test-002",
+            "--workspace",
+            str(tmp_path),
+        ]
+    )
+    assert rc == EXIT_OK
+    # body-generation steps wrote to harness/__init__.py
+    harness_body = (tmp_path / "harness" / "__init__.py").read_text()
+    assert "build_harness" in harness_body
+    assert "run_training_loop" in harness_body
+    assert "evaluate" in harness_body
+    # baseline step wrote to techniques/baseline.py
+    baseline_body = (tmp_path / "techniques" / "baseline.py").read_text()
+    assert "baseline" in baseline_body
+    # validation step wrote a passing payload at the workspace root
+    validation_payload = json.loads((tmp_path / "validation_results.json").read_text())
+    assert validation_payload["succeeded"] is True
+    # manifest step wrote manifest.json
+    manifest_payload = json.loads((tmp_path / "manifest.json").read_text())
+    assert "runtime_template_version" in manifest_payload
+
+
+def test_harness_builder_resume_flag_is_no_op_stub(
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    """Sub-PR B accepts ``--resume`` at argparse and routes to a no-op
+    stub (architectural hedge per arch §12 item 4). Sub-PR D wires
+    the resume-mode workflow logic.
+    """
+    rc = main(
+        [
+            "--role",
+            "harness_builder",
+            "--cg-id",
+            "cg-test-003",
+            "--workspace",
+            str(tmp_path),
+            "--resume",
+            "as-prior-session-id",
+        ]
+    )
+    assert rc == EXIT_RESUME_NOT_IMPLEMENTED
+    captured = capsys.readouterr()
+    assert "resume_not_implemented" in captured.out
+
+
+def test_harness_builder_missing_workspace_exits_bad_workspace(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """``--role harness_builder --cg-id <id>`` exits with
-    :data:`EXIT_NOT_IMPLEMENTED` (64) and surfaces a recognizable
-    "not yet implemented" message — NOT an import error or
-    AttributeError. Step 4 of the refactor replaces this path with the
-    real mini-orchestrator.
-    """
-    rc = main(["--role", "harness_builder", "--cg-id", "cg-test-001"])
-    assert rc == EXIT_NOT_IMPLEMENTED
+    """Sub-PR B: a missing or absent ``--workspace`` argv exits
+    :data:`EXIT_BAD_WORKSPACE` rather than crashing on the contract
+    read. Surfaces a clear diagnostic so the host worker can log
+    "wiring bug" instead of "container crashed"."""
+    rc = main(["--role", "harness_builder", "--cg-id", "cg-test-004"])
+    assert rc == EXIT_BAD_WORKSPACE
     captured = capsys.readouterr()
-    assert "not yet implemented" in captured.err
-    assert "harness_builder" in captured.err
+    assert "--workspace" in captured.out or "workspace" in captured.out
+
+
+def test_harness_builder_missing_cg_id_exits_bad_workspace(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """``--cg-id`` is required per-role (argparse can't reject it
+    upstream); the entry surfaces the missing arg cleanly."""
+    rc = main(["--role", "harness_builder", "--workspace", "/tmp"])
+    assert rc == EXIT_BAD_WORKSPACE
+    captured = capsys.readouterr()
+    assert "--cg-id" in captured.out
 
 
 def test_technique_implementer_stub_exits_not_implemented(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Same shape as harness_builder; replaced in Step 7."""
+    """Step 7 fills technique_implementer; sub-PR B leaves it as the
+    Step 3 stub."""
     rc = main(["--role", "technique_implementer", "--entry-id", "entry-test-001"])
     assert rc == EXIT_NOT_IMPLEMENTED
     captured = capsys.readouterr()
@@ -71,20 +178,6 @@ def test_planner_role_rejected_with_inline_role_pointer(
     assert "planner" in captured.err
 
 
-def test_harness_builder_missing_cg_id_surfaces_not_implemented(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """``--cg-id`` is per-role (argparse can't reject it upstream); the
-    stub diagnoses the missing arg cleanly rather than dropping into
-    an AttributeError downstream.
-    """
-    rc = main(["--role", "harness_builder"])
-    assert rc == EXIT_NOT_IMPLEMENTED
-    captured = capsys.readouterr()
-    assert "harness_builder" in captured.err
-    assert "--cg-id" in captured.err
-
-
 def test_unknown_role_argparse_rejected() -> None:
     """A typo on ``--role`` gets argparse's "invalid choice" rejection,
     NOT this module's stub error. Confirms the dispatch table is a
@@ -99,13 +192,14 @@ def test_unknown_role_argparse_rejected() -> None:
 # === ``python -m smai_agent_runtime`` subprocess ==============================
 
 
-def test_python_m_subprocess_exits_with_expected_code() -> None:
+def test_python_m_subprocess_runs_workflow(tmp_path: Path) -> None:
     """Invoke the module via ``python -m smai_agent_runtime`` in a
-    subprocess to confirm the ``__main__`` shim wires up correctly.
-    This is the acceptance path the Step 3 docker-run smoke test
-    exercises inside the image; running it here without the image
-    confirms the wiring at the Python layer.
+    subprocess to confirm the ``__main__`` shim + the sub-PR B
+    mini-orchestrator wire up correctly. This mirrors the
+    container-runtime invocation the dispatch round-trip will exercise
+    (the agent-runtime image runs `python -m smai_agent_runtime ...`).
     """
+    write_minimal_harness_workspace(tmp_path)
     proc = subprocess.run(
         [
             sys.executable,
@@ -115,18 +209,21 @@ def test_python_m_subprocess_exits_with_expected_code() -> None:
             "harness_builder",
             "--cg-id",
             "cg-subprocess-test",
+            "--workspace",
+            str(tmp_path),
         ],
         capture_output=True,
         text=True,
         check=False,
     )
-    assert proc.returncode == EXIT_NOT_IMPLEMENTED, (
+    assert proc.returncode == EXIT_OK, (
         f"unexpected exit code {proc.returncode}; stdout={proc.stdout!r} stderr={proc.stderr!r}"
     )
-    assert "not yet implemented" in proc.stderr
-    # No Python traceback survives — the entry point catches the raise
-    # and prints a clean diagnostic instead.
+    # No Python traceback survives — the entry point catches and prints
+    # a clean diagnostic instead.
     assert "Traceback" not in proc.stderr
+    # status emit lines visible on stdout
+    assert "session_end_success" in proc.stdout
 
 
 # === Internal-error fallthrough ==============================================

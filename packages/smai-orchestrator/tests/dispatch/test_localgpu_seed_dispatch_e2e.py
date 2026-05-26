@@ -128,7 +128,7 @@ async def test_make_compute_dispatcher_real_localgpu_success_roundtrip() -> None
     )
 
     ctx = await make_dispatch_context(compute=compute)
-    outcome = await dispatcher(ctx)
+    outcome = await dispatcher.handler(ctx)
 
     assert outcome.error is None
     assert len(outcome.submitted_handles) == 1
@@ -189,7 +189,7 @@ async def test_make_compute_dispatcher_real_localgpu_failure_surfaces_stderr() -
     )
 
     ctx = await make_dispatch_context(compute=compute)
-    outcome = await dispatcher(ctx)
+    outcome = await dispatcher.handler(ctx)
     assert outcome.error is None  # submit itself succeeded
     handle = outcome.submitted_handles[0]
 

@@ -34,6 +34,7 @@ async def open_agent_session(
     parent_id: str,
     agent_role: str,
     llm: object,
+    compute_job_handle: object | None = None,
 ) -> str | None:
     """Create the ``agent_sessions`` row at dispatch start; return its id.
 
@@ -41,17 +42,30 @@ async def open_agent_session(
     provider ``name`` and ``capabilities.model_id`` are read best-effort.
     Returns ``None`` if the store doesn't support the method (or any
     error) — callers treat ``None`` as "no telemetry, carry on".
+
+    ``compute_job_handle`` is the sandbox :class:`JobHandle` for
+    sandboxed-role dispatches (harness_builder, technique_implementer);
+    inline-role callers leave it ``None``. Threaded through to the
+    Protocol's optional kwarg so post-hoc operator queries can correlate
+    the cost-ledger row with ``Compute.logs(handle)`` even after the
+    parent record's ``*_job_handle`` is overwritten by a later
+    re-dispatch (agent_refactor design note D2). Typed as ``object``
+    here so this leaf helper avoids a runtime smai-core ``JobHandle``
+    import — the store Protocol validates the actual type.
     """
     provider_name = getattr(llm, "name", "(unknown)")
     model_id = getattr(getattr(llm, "capabilities", None), "model_id", "(unknown)")
     try:
-        return await metadata_store.create_agent_session(
-            parent_kind=parent_kind,
-            parent_id=parent_id,
-            agent_role=agent_role,
-            llm_provider=str(provider_name),
-            model_id=str(model_id),
-        )
+        kwargs: dict[str, object] = {
+            "parent_kind": parent_kind,
+            "parent_id": parent_id,
+            "agent_role": agent_role,
+            "llm_provider": str(provider_name),
+            "model_id": str(model_id),
+        }
+        if compute_job_handle is not None:
+            kwargs["compute_job_handle"] = compute_job_handle
+        return await metadata_store.create_agent_session(**kwargs)  # type: ignore[arg-type]
     except Exception:  # noqa: BLE001 — telemetry must not break dispatch
         return None
 

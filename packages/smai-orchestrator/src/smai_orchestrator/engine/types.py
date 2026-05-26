@@ -188,6 +188,45 @@ class DispatchOutcome(BaseModel):
 DispatchHandler = Callable[[DispatchContext], Awaitable[DispatchOutcome]]
 
 
+class PostTerminalContext(BaseModel):
+    """Read-only context the post-terminal hook receives (`05` §3.1 +
+    agent_refactor Step 4 sub-PR B).
+
+    Built by :func:`smai_orchestrator.engine.phase1.phase1_step` after a
+    terminal-success CAS and handed to the dispatch action's
+    :attr:`DispatchAction.post_terminal_handler` if one is configured.
+    The hook performs side-effecting work that must happen exactly once
+    per successful terminal observation (workspace harvest, in
+    practice). It MUST NOT write entity state — state writes are the
+    engine's territory.
+
+    The ``dispatch_context`` field is a synthetic
+    :class:`DispatchContext` reconstructed from the post-terminal
+    entity. The hook's resolvers (e.g.
+    :attr:`WorkspaceOutputs.destination`) consume it the same way the
+    dispatch handler does so callers can share resolver implementations
+    between dispatch and post-terminal.
+
+    Best-effort by contract: the engine wraps the hook call in a
+    try/except so a hook failure does not block the state-machine
+    transition. The hook MAY raise; the engine logs and continues.
+    """
+
+    model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
+
+    entity_kind: EntityKind
+    entity_id: str
+    compute: Compute
+    metadata_store: MetadataStore
+    artifact_store: ArtifactStore
+    config: EngineConfig
+    job_handle: JobHandle
+    dispatch_context: DispatchContext
+
+
+PostTerminalHandler = Callable[[PostTerminalContext], Awaitable[None]]
+
+
 class RetryPolicy(BaseModel):
     """Declarative retry bookkeeping for a :class:`DispatchAction` (round 10).
 
@@ -286,6 +325,22 @@ class DispatchAction(BaseModel):
     pool: str
     handle_field: str | None = None
     retry_policy: RetryPolicy | None = None
+    post_terminal_handler: PostTerminalHandler | None = None
+    """Optional hook invoked once on phase-1's terminal-success CAS.
+
+    Wires workspace-harvest (and other "host attests-and-persists"
+    side effects per architectural_decisions §7) onto a dispatch
+    action without leaking the concern into the spec author's gate
+    rules. ``None`` (the default) means "no post-terminal hook" — the
+    seed-run shape. :func:`make_compute_dispatcher` populates this
+    field via its returned :class:`DispatcherBundle` when
+    :attr:`WorkspaceOutputs.destination` is non-``None``.
+
+    Best-effort: phase-1 wraps the call in a try/except so a hook
+    failure does not block the state-machine transition. Operator
+    debugging surfaces the failure via the engine's logger and the
+    transition_log audit trail (unaffected by the hook).
+    """
 
 
 class StateDef(BaseModel):

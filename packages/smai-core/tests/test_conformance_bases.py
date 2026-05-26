@@ -191,6 +191,7 @@ _METADATA_EXPECTED_METHODS = {
     "test_transaction_rolls_back_on_exception",
     "test_agent_session_crud_round_trip",
     "test_get_agent_session_missing_returns_none",
+    "test_agent_session_compute_job_handle_round_trip",
     "test_append_transition_log_persists",
     "test_append_transition_log_transactional",
     "test_scheduling_query_returns_cursor_page",

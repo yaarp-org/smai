@@ -340,6 +340,48 @@ class MetadataStoreConformance:
     async def test_get_agent_session_missing_returns_none(self, store: MetadataStore) -> None:
         assert await store.get_agent_session("no-such-session-id") is None
 
+    async def test_agent_session_compute_job_handle_round_trip(self, store: MetadataStore) -> None:
+        """Agent-refactor Step 4 sub-PR B (D2):
+        ``agent_sessions.compute_job_handle`` round-trips a
+        :class:`JobHandle` so post-hoc operator queries can correlate a
+        cost-ledger row with ``Compute.logs(handle)`` even after the
+        parent record's ``*_job_handle`` is overwritten by a later
+        re-dispatch.
+
+        Asserts: passing ``compute_job_handle`` at create time persists
+        it; default-omit preserves NULL for inline roles; the round-tripped
+        value equals the original.
+        """
+        from smai_core.plugins import JobHandle  # noqa: PLC0415
+
+        handle = JobHandle(
+            plugin="test-substrate",
+            handle="job-handle-d2-round-trip",
+            metadata={"region": "us-west-1"},
+        )
+        session_with_handle = await store.create_agent_session(
+            parent_kind="cg",
+            parent_id="cg_obs_d2_handle",
+            agent_role="harness_builder",
+            llm_provider="fake-provider",
+            model_id="fake-model",
+            compute_job_handle=handle,
+        )
+        loaded = await store.get_agent_session(session_with_handle)
+        assert loaded is not None
+        assert getattr(loaded, "compute_job_handle", None) == handle
+
+        session_inline = await store.create_agent_session(
+            parent_kind="proposal",
+            parent_id="proposal_obs_d2_inline",
+            agent_role="planner",
+            llm_provider="fake-provider",
+            model_id="fake-model",
+        )
+        loaded_inline = await store.get_agent_session(session_inline)
+        assert loaded_inline is not None
+        assert getattr(loaded_inline, "compute_job_handle", "MISSING") is None
+
     async def test_append_transition_log_persists(self, store: MetadataStore) -> None:
         """``append_transition_log`` writes a row that a raw select sees."""
         await store.append_transition_log(

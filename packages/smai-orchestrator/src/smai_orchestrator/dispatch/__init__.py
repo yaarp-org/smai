@@ -16,6 +16,7 @@ same machinery the engine already provides; the factory wires them.
 
 from smai_orchestrator.dispatch._factory import (
     CommandSpec,
+    DispatcherBundle,
     WorkspaceInputs,
     WorkspaceOutputs,
     format_stderr_tail,
@@ -24,6 +25,7 @@ from smai_orchestrator.dispatch._factory import (
 
 __all__ = [
     "CommandSpec",
+    "DispatcherBundle",
     "WorkspaceInputs",
     "WorkspaceOutputs",
     "format_stderr_tail",

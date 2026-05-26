@@ -68,13 +68,13 @@ def test_head_revision_is_latest_default_revision() -> None:
     ``0003_cg_symbolic_id`` to add the CG record's
     ``implementation_phase_attempt`` counter. Round 11 added
     ``0005_entry_dispatch_attempt`` downstream of that to add the
-    ``EntryRecord.entry_dispatch_attempt`` counter (the per-entry
-    declarative retry-bookkeeping primitive for the entry-spec
-    ``implementing`` dispatch action's :class:`RetryPolicy`).
-    The tenant_aware branch (``0002``) sits on a separate root and does
-    not affect the default head.
+    ``EntryRecord.entry_dispatch_attempt`` counter. Agent-refactor
+    Step 4 sub-PR B (D2) added ``0006_agent_session_handle``
+    downstream of that for the ``agent_sessions.compute_job_handle``
+    cross-reference column. The tenant_aware branch (``0002``) sits on
+    a separate root and does not affect the default head.
     """
-    assert get_head_revision() == "0005_entry_dispatch_attempt"
+    assert get_head_revision() == "0006_agent_session_handle"
 
 
 async def test_upgrade_to_head_creates_every_table() -> None:

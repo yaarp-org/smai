@@ -34,6 +34,7 @@ from contextlib import AbstractAsyncContextManager
 from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
 
 from smai_core.plugins._common import CursorPage, EntityKind, LeaseToken
+from smai_core.plugins.compute import JobHandle
 from smai_core.plugins.metadata_store._capabilities import MetadataStoreCapabilities
 
 if TYPE_CHECKING:
@@ -258,6 +259,7 @@ class MetadataStore(Protocol):
         agent_role: str,
         llm_provider: str,
         model_id: str,
+        compute_job_handle: JobHandle | None = None,
     ) -> str:
         """Insert an ``agent_sessions`` row at dispatch start; return its id.
 
@@ -266,6 +268,15 @@ class MetadataStore(Protocol):
         backlogged), and the token / turn counters at ``0``. The
         returned id is a ULID-shaped string matching the id convention
         used elsewhere.
+
+        ``compute_job_handle`` cross-references the sandbox the session
+        ran in for sandboxed roles (harness_builder,
+        technique_implementer). Inline-role dispatches (planner,
+        supervisor, reviewers) leave it ``None``. Lets operator queries
+        correlate a cost-ledger row with ``Compute.logs(handle)`` after
+        the parent record's ``*_job_handle`` is overwritten by a later
+        re-dispatch (agent_refactor D2 design note). Persisted via
+        migration 0006.
         """
         ...
 

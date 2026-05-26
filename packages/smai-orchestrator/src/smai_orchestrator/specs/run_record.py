@@ -104,6 +104,7 @@ from smai_orchestrator.engine.types import (
     ConcurrencyPool,
     DispatchAction,
     DispatchContext,
+    DispatchHandler,
     EdgeDef,
     GateContext,
     GateOutcome,
@@ -317,7 +318,7 @@ def _make_dispatch_run_compute_submit(
     gpu_image: str,
     cpu_image: str,
     retry_policy: RetryPolicy | None = None,
-) -> Callable[[DispatchContext], Awaitable[Any]]:
+) -> DispatchHandler:
     """``submitted`` on-entry dispatch — submits the per-(entry × seed)
     training job to :class:`Compute`.
 
@@ -398,7 +399,7 @@ def _make_dispatch_run_compute_submit(
         }
         return CommandSpec(command=command, env=env, gpu=gpu)
 
-    return make_compute_dispatcher(
+    bundle = make_compute_dispatcher(
         # Seed runs are infrastructure, not an agent role — naming the
         # role ``"seed_run"`` here keeps the per-role-policy lookup
         # site uniform across dispatchers without picking an existing
@@ -410,6 +411,11 @@ def _make_dispatch_run_compute_submit(
         outputs=WorkspaceOutputs.empty(),
         retry_policy=retry_policy,
     )
+    # Seed-run dispatch declares ``outputs=empty()`` so the bundle's
+    # ``post_terminal_handler`` is ``None``. The runtime image publishes
+    # metrics directly to :class:`ArtifactStore` via env-configured keys
+    # — no workspace harvest is needed on terminal-success.
+    return bundle.handler
 
 
 # === Public factories ========================================================

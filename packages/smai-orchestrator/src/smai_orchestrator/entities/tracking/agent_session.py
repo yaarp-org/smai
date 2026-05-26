@@ -24,6 +24,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, field_validator
+from smai_core.plugins import JobHandle
 
 from smai_orchestrator.entities.tracking._common import validate_id_format
 
@@ -42,6 +43,15 @@ class AgentSessionRecord(BaseModel):
     ``str`` rather than a ``Literal`` for forward-compat — see
     ``smai_store_sqlite._records.AgentSessionParentKind`` for the
     candidate enumeration.
+
+    ``compute_job_handle`` cross-references the sandbox the session ran
+    in for sandboxed roles (harness_builder, technique_implementer).
+    NULL for inline roles (planner, supervisor, reviewers) and for
+    legacy pre-Step-4-sub-PR-B rows. Lets operator queries correlate a
+    cost-ledger row with ``Compute.logs(handle)`` retrieval after the
+    parent record's ``*_job_handle`` has been overwritten by a later
+    re-dispatch. Persisted as a JSON column via migration 0006 (per
+    agent_refactor design note D2 / ``agent_session_jobhandle.md``).
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -61,6 +71,8 @@ class AgentSessionRecord(BaseModel):
 
     started_at: datetime
     ended_at: datetime | None = None
+
+    compute_job_handle: JobHandle | None = None
 
     _validate_ids = field_validator("id", "parent_id")(validate_id_format)
 

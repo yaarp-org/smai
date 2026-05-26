@@ -33,6 +33,7 @@ extended in this PR).
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -43,6 +44,8 @@ from smai_orchestrator.engine.types import (
     DispatchContext,
     DispatchHandler,
     DispatchOutcome,
+    PostTerminalContext,
+    PostTerminalHandler,
     RetryPolicy,
 )
 
@@ -168,6 +171,35 @@ def format_stderr_tail(logs: str, *, max_lines: int = STDERR_TAIL_LINES) -> str:
 # === Factory =================================================================
 
 
+@dataclass(frozen=True)
+class DispatcherBundle:
+    """A dispatch handler plus its optional post-terminal-success hook.
+
+    Returned by :func:`make_compute_dispatcher`. The two callables are
+    a pair: the handler submits the Compute job; the post-terminal
+    handler (if any) runs once on phase-1's terminal-success
+    observation, after the engine has CAS'd the entity into the
+    success-target state. The pairing exists so the factory can wire a
+    workspace-harvest invocation alongside the submit shape without
+    requiring callers to thread the :class:`WorkspaceOutputs`
+    declaration through the engine themselves.
+
+    Sub-PR B (agent-refactor Step 4): introduced so the
+    harness_builder dispatch can declare ``outputs`` (harness/,
+    techniques/baseline.py, etc.) and have phase-1 invoke
+    :meth:`Compute.harvest_workspace` on success without leaking the
+    harvest concern into the spec author's wiring beyond a single
+    field on :class:`DispatchAction`.
+
+    :attr:`post_terminal_handler` is ``None`` when
+    :attr:`WorkspaceOutputs.destination` is ``None`` (the seed-run
+    shape — no harvest configured).
+    """
+
+    handler: DispatchHandler
+    post_terminal_handler: PostTerminalHandler | None = None
+
+
 def make_compute_dispatcher(
     *,
     role: str,
@@ -176,7 +208,7 @@ def make_compute_dispatcher(
     inputs: WorkspaceInputs,
     outputs: WorkspaceOutputs,
     retry_policy: RetryPolicy | None = None,
-) -> DispatchHandler:
+) -> DispatcherBundle:
     """Produce a :data:`DispatchHandler` that submits a :class:`Compute`
     job per the unified shape (agent_refactor §3 / §5).
 
@@ -215,8 +247,13 @@ def make_compute_dispatcher(
             ``compute_dispatch_decisions.md`` §3.
 
     Returns:
-        :data:`DispatchHandler` — an async callable of
-        ``DispatchContext -> DispatchOutcome``.
+        :class:`DispatcherBundle` carrying the
+        :data:`DispatchHandler` and the optional
+        :data:`PostTerminalHandler`. Callers wire the handler onto
+        :attr:`DispatchAction.handler` and the post-terminal handler
+        onto :attr:`DispatchAction.post_terminal_handler`. When
+        :attr:`WorkspaceOutputs.destination` is ``None`` the bundle's
+        :attr:`post_terminal_handler` is ``None`` (seed-run shape).
     """
     # ``retry_policy`` is part of the documented factory signature
     # (compute_dispatch §3) but is not consumed by the handler body —
@@ -254,13 +291,56 @@ def make_compute_dispatcher(
             **plugin_options,
         )
 
-        # ``outputs`` is the spec author's declaration of what gets
-        # harvested on terminal. The harvest itself happens in phase-1
-        # (post-terminal observation); the factory's submit-time half
-        # only validates the shape exists. ``outputs`` is reserved on
-        # the signature for symmetry with ``inputs`` and so the wire-up
-        # point exists when later steps add the harvest hook.
+        # ``outputs`` declares what gets harvested on terminal. The
+        # harvest itself fires in phase-1 (post-terminal observation)
+        # via the bundle's ``post_terminal_handler`` below; the
+        # factory's submit-time half only stages the inputs side.
 
         return DispatchOutcome(submitted_handles=[handle])
 
-    return _dispatch
+    post_terminal: PostTerminalHandler | None = (
+        _make_workspace_harvest_handler(outputs) if outputs.destination is not None else None
+    )
+
+    return DispatcherBundle(handler=_dispatch, post_terminal_handler=post_terminal)
+
+
+def _make_workspace_harvest_handler(outputs: WorkspaceOutputs) -> PostTerminalHandler:
+    """Build the :data:`PostTerminalHandler` that calls
+    :meth:`Compute.harvest_workspace` on terminal-success observation.
+
+    Sub-PR B's harvest path is the bind-mount-substrate happy path:
+    LocalGpu's :meth:`Compute.stage_workspace` is identity on its host
+    path and :meth:`Compute.harvest_workspace` is a no-op (the host
+    already sees what the container wrote via the mount). The handler
+    re-derives the :class:`WorkspaceHandle` from the destination path
+    via a fresh ``stage_workspace`` call rather than persisting the
+    original handle across dispatch ↔ phase-1; this works under
+    bind-mount semantics by construction.
+
+    Upload-download substrates (Modal) require the original
+    :class:`WorkspaceHandle` (with the substrate's volume identifier)
+    to harvest. Sub-PR B does not persist the workspace handle across
+    the dispatch ↔ phase-1 boundary — the persisted entity carries
+    only the :class:`JobHandle`. A future sub-PR that exercises Modal
+    against this hook needs handle persistence (D2's note on Modal
+    ``Sandbox.from_id`` covers the equivalent for the JobHandle side).
+    TODO at the architectural_decisions §7 "host attests-and-persists"
+    boundary.
+
+    Best-effort: any exception is allowed to escape so phase-1 can
+    catch and log without blocking the state-machine transition.
+    Phase-1 wraps the call in a try/except for that reason.
+    """
+
+    async def _post_terminal(ctx: PostTerminalContext) -> None:
+        if outputs.destination is None:  # defensive — bundle skips this case
+            return
+        dest = await outputs.destination(ctx.dispatch_context)
+        if dest is None:
+            return
+        dest.mkdir(parents=True, exist_ok=True)
+        handle = await ctx.compute.stage_workspace(dest)
+        await ctx.compute.harvest_workspace(handle, dest)
+
+    return _post_terminal

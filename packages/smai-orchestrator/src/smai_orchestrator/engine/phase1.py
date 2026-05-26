@@ -28,6 +28,7 @@ step.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Literal
@@ -50,10 +51,14 @@ from smai_orchestrator.engine._metadata_ops import (
 from smai_orchestrator.engine.config import EngineConfig
 from smai_orchestrator.engine.dispatch import reset_orphan
 from smai_orchestrator.engine.types import (
+    DispatchContext,
     EdgeDef,
     EngineSpec,
     GateContext,
+    PostTerminalContext,
 )
+
+_LOG = logging.getLogger(__name__)
 
 # Per-state cost-record handler shape. Spec authors may register one
 # of these on a state's terminal phase-1 transition; the engine fires
@@ -264,7 +269,83 @@ async def phase1_step(  # noqa: PLR0913
             )
         )
 
+    # Post-terminal hook (agent_refactor Step 4 sub-PR B): on terminal
+    # success, fire the dispatch action's optional post-terminal handler
+    # so workspace-harvest / "host attests-and-persists" side effects
+    # (architectural_decisions §7) run once per successful observation.
+    # Best-effort by contract — phase-1 swallows exceptions so a hook
+    # failure cannot block the state-machine transition (the transition
+    # already committed above).
+    if fires_on == "job_succeeded" and action.post_terminal_handler is not None:
+        await _invoke_post_terminal_handler(
+            handler=action.post_terminal_handler,
+            entity_kind=spec.entity_kind,
+            entity_id=entity_id,
+            entity_state=entity_state,
+            entity_version=entity_version,
+            compute=compute,
+            metadata_store=metadata_store,
+            artifact_store=artifact_store,
+            config=config,
+            job_handle=handle,
+        )
+
     return Phase1Outcome(status="advanced", fired_edge=fired, job_status=job_status)
+
+
+async def _invoke_post_terminal_handler(  # noqa: PLR0913
+    *,
+    handler: Callable[[PostTerminalContext], Awaitable[None]],
+    entity_kind: str,
+    entity_id: str,
+    entity_state: str,
+    entity_version: int,
+    compute: Compute,
+    metadata_store: MetadataStore,
+    artifact_store: ArtifactStore,
+    config: EngineConfig,
+    job_handle: JobHandle,
+) -> None:
+    """Build a :class:`PostTerminalContext` and run the hook best-effort.
+
+    The synthetic :class:`DispatchContext` carries the pre-transition
+    ``entity_state`` / ``entity_version`` (the values that drove the
+    dispatch into this in-progress state). Hooks that need post-CAS
+    state read fresh from ``metadata_store``; the synthetic context is
+    for symmetry with dispatch-time resolvers (sub-PR B's
+    :attr:`WorkspaceOutputs.destination` only reads ``entity_id``).
+    """
+    dispatch_ctx = DispatchContext(
+        entity_kind=entity_kind,  # type: ignore[arg-type]
+        entity_id=entity_id,
+        entity_state=entity_state,
+        entity_version=entity_version,
+        metadata_store=metadata_store,
+        artifact_store=artifact_store,
+        compute=compute,
+        llm=None,
+        config=config,
+    )
+    ctx = PostTerminalContext(
+        entity_kind=entity_kind,  # type: ignore[arg-type]
+        entity_id=entity_id,
+        compute=compute,
+        metadata_store=metadata_store,
+        artifact_store=artifact_store,
+        config=config,
+        job_handle=job_handle,
+        dispatch_context=dispatch_ctx,
+    )
+    try:
+        await handler(ctx)
+    except Exception:  # noqa: BLE001 — best-effort post-terminal side effect
+        _LOG.exception(
+            "post_terminal_handler raised for %s %r in state %r; "
+            "state-machine transition already committed",
+            entity_kind,
+            entity_id,
+            entity_state,
+        )
 
 
 async def _best_effort_failure_tail(

@@ -82,6 +82,26 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help=("Entry id (required for ``--role technique_implementer``)."),
     )
+    parser.add_argument(
+        "--workspace",
+        default=None,
+        help=(
+            "In-container bind-mount path of the staged workspace "
+            "(e.g. ``/workspace``). Required for sandboxed roles "
+            "(harness_builder, technique_implementer) at the sub-PR B "
+            "boundary of the agent-layer refactor."
+        ),
+    )
+    parser.add_argument(
+        "--resume",
+        default=None,
+        help=(
+            "Prior agent-session id to resume from. Sub-PR B accepts the "
+            "flag at argparse and routes to a no-op stub; the resume-mode "
+            "workflow logic lands in sub-PR D (architectural hedge per "
+            "architectural_decisions §12 item 4)."
+        ),
+    )
     return parser
 
 

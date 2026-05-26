@@ -74,6 +74,7 @@ from smai_core.plugins import (
     ConflictError,
     CursorPage,
     EntityKind,
+    JobHandle,
     LeaseLostError,
     LeaseToken,
     MetadataStoreCapabilities,
@@ -434,8 +435,12 @@ async def _do_create_agent_session(
     agent_role: str,
     llm_provider: str,
     model_id: str,
+    compute_job_handle: JobHandle | None = None,
 ) -> None:
     now = datetime.now(UTC)
+    handle_payload: dict[str, Any] | None = (
+        compute_job_handle.model_dump(mode="json") if compute_job_handle is not None else None
+    )
     await conn.execute(
         insert(agent_sessions_table).values(
             id=session_id,
@@ -453,6 +458,7 @@ async def _do_create_agent_session(
             output_token_rate_usd_per_million=None,
             started_at=now,
             ended_at=None,
+            compute_job_handle=handle_payload,
         )
     )
 
@@ -491,6 +497,8 @@ async def _do_get_agent_session(
     row = result.mappings().first()
     if row is None:
         return None
+    raw_handle = row["compute_job_handle"] if "compute_job_handle" in row else None
+    handle = JobHandle.model_validate(raw_handle) if raw_handle is not None else None
     return AgentSessionRecord(
         id=row["id"],
         parent_kind=row["parent_kind"],
@@ -504,6 +512,7 @@ async def _do_get_agent_session(
         turn_count=int(row["turn_count"] or 0),
         started_at=_parse_dt(row["started_at"]),
         ended_at=_parse_dt(row["ended_at"]) if row["ended_at"] is not None else None,
+        compute_job_handle=handle,
     )
 
 
@@ -1132,6 +1141,7 @@ class PostgresStore:
         agent_role: str,
         llm_provider: str,
         model_id: str,
+        compute_job_handle: JobHandle | None = None,
     ) -> str:
         session_id = f"as-{uuid4().hex}"
         async with self._engine.begin() as conn:
@@ -1143,6 +1153,7 @@ class PostgresStore:
                 agent_role=agent_role,
                 llm_provider=llm_provider,
                 model_id=model_id,
+                compute_job_handle=compute_job_handle,
             )
         return session_id
 
