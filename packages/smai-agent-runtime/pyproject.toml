@@ -14,6 +14,10 @@ dependencies = [
     "anthropic>=0.40.0",
     "openai>=1.50.0",
     "boto3>=1.35.0",
+    # Per-step prompt YAMLs render the initial-user-message via Jinja2
+    # with StrictUndefined (sub-PR C1 prompt loader).
+    "jinja2>=3.0",
+    "pyyaml>=6.0",
 ]
 
 [build-system]
@@ -26,3 +30,11 @@ smai-runtime = { workspace = true }
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/smai_agent_runtime"]
+
+# Per-step prompt YAMLs ship as package resources so
+# importlib.resources.files() can read them at load time. Hatchling
+# defaults include them via the package directive above, but
+# force-include keeps them robust against future default changes
+# (mirrors the smai-agents prompt-tree handling).
+[tool.hatch.build.targets.wheel.force-include]
+"src/smai_agent_runtime/prompts" = "smai_agent_runtime/prompts"

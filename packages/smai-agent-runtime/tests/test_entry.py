@@ -1,14 +1,18 @@
 """Entry-point dispatch tests.
 
-Sub-PR B of the agent-layer refactor Step 4 replaced the harness_builder
-"not yet implemented" stub with a real mini-orchestrator skeleton that
-iterates the sub-PR-A workflow generator with FAKE per-step handlers.
-The technique_implementer surface is still a stub (Step 7 fills it).
+Sub-PR B replaced the Step 3 "not yet implemented" stub with a real
+mini-orchestrator skeleton iterating the sub-PR-A workflow generator
+with FAKE per-step handlers. Sub-PR C1 replaced two of those fakes
+(harness body generation, baseline generation) with real PydanticAI
+Agent calls. The other three step types (validation, diagnose,
+manifest_emit) still run sub-PR B's fake handlers (sub-PR C2 fills them).
 
 These tests exercise the dispatch wiring in
-:mod:`smai_agent_runtime.__main__` plus the sub-PR B harness_builder
-entry behavior (success path with workspace, error paths with missing
-arguments, resume-mode no-op stub).
+:mod:`smai_agent_runtime.__main__` plus the sub-PR C1 harness_builder
+entry behavior end-to-end. They rely on the deterministic-fake-LLM
+substitution toggle (``SMAI_AGENT_RUNTIME_FAKE_LLM=1``) so the
+cross-process subprocess test can drive the workflow without real
+Bedrock credentials.
 """
 
 from __future__ import annotations
@@ -32,6 +36,21 @@ from smai_agent_runtime.harness_builder._main import (
     EXIT_OK,
     EXIT_RESUME_NOT_IMPLEMENTED,
 )
+
+
+@pytest.fixture(autouse=True)
+def _enable_fake_llm(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Set ``SMAI_AGENT_RUNTIME_FAKE_LLM=1`` for every test in this module.
+
+    Sub-PR C1's body-generation handlers consult this env var to decide
+    whether to call the real LLM or substitute a deterministic stub.
+    These end-to-end / dispatch-wiring tests do not need real LLM
+    outputs; the per-step fake-LLM tests in
+    ``test_body_generation_step.py`` / ``test_baseline_generation_step.py``
+    exercise the agent-call surface via in-process monkeypatch.
+    """
+    monkeypatch.setenv("SMAI_AGENT_RUNTIME_FAKE_LLM", "1")
+
 
 # === Programmatic dispatch ===================================================
 
@@ -194,12 +213,17 @@ def test_unknown_role_argparse_rejected() -> None:
 
 def test_python_m_subprocess_runs_workflow(tmp_path: Path) -> None:
     """Invoke the module via ``python -m smai_agent_runtime`` in a
-    subprocess to confirm the ``__main__`` shim + the sub-PR B
-    mini-orchestrator wire up correctly. This mirrors the
-    container-runtime invocation the dispatch round-trip will exercise
-    (the agent-runtime image runs `python -m smai_agent_runtime ...`).
+    subprocess to confirm the ``__main__`` shim + the mini-orchestrator
+    wire up correctly. This mirrors the container-runtime invocation
+    the dispatch round-trip will exercise (the agent-runtime image runs
+    ``python -m smai_agent_runtime ...``). The autouse fixture's env-var
+    setting does not survive across the subprocess boundary, so pass
+    it explicitly here.
     """
+    import os
+
     write_minimal_harness_workspace(tmp_path)
+    env = {**os.environ, "SMAI_AGENT_RUNTIME_FAKE_LLM": "1"}
     proc = subprocess.run(
         [
             sys.executable,
@@ -215,6 +239,7 @@ def test_python_m_subprocess_runs_workflow(tmp_path: Path) -> None:
         capture_output=True,
         text=True,
         check=False,
+        env=env,
     )
     assert proc.returncode == EXIT_OK, (
         f"unexpected exit code {proc.returncode}; stdout={proc.stdout!r} stderr={proc.stderr!r}"

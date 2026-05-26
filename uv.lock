@@ -3704,9 +3704,11 @@ source = { editable = "packages/smai-agent-runtime" }
 dependencies = [
     { name = "anthropic" },
     { name = "boto3" },
+    { name = "jinja2" },
     { name = "openai" },
     { name = "pydantic" },
     { name = "pydantic-ai" },
+    { name = "pyyaml" },
     { name = "smai-core" },
     { name = "smai-runtime" },
 ]
@@ -3715,9 +3717,11 @@ dependencies = [
 requires-dist = [
     { name = "anthropic", specifier = ">=0.40.0" },
     { name = "boto3", specifier = ">=1.35.0" },
+    { name = "jinja2", specifier = ">=3.0" },
     { name = "openai", specifier = ">=1.50.0" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pydantic-ai", specifier = ">=0.0.13" },
+    { name = "pyyaml", specifier = ">=6.0" },
     { name = "smai-core", editable = "packages/smai-core" },
     { name = "smai-runtime", editable = "packages/smai-runtime" },
 ]

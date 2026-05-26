@@ -1,0 +1,227 @@
+# Harness builder, per-step prompt: fill_baseline.
+#
+# Fills techniques/baseline.py for the harness's baseline technique
+# entry. Bound to a single PydanticAI
+# `Agent(output_type=TechniqueBodyOutput)` call against D9's
+# BaselineGenerationStep. The mini-orchestrator emits this step only
+# when a non-no-op baseline is required: for substitutive factors
+# (where the baseline is a real technique populating the same slot), or
+# for additive factors with an explicit non-null baseline. The additive
+# null-baseline case (DEC-013) emits zero BaselineGenerationSteps and
+# this prompt does not run.
+#
+# Uses D7b's shared TechniqueBodyGenerationBundle / TechniqueBodyOutput
+# with `step_kind="baseline"`. The schema is identical to the
+# technique_implementer body-generation step; only the framing differs
+# (baseline = controlled-condition reference arm, not the treatment).
+#
+# Per architectural_decisions.md §12 #2 (per-step, not monolithic) and
+# notes/research_report.md §5.1 (U-shaped attention). Directive
+# imperative mood. No hedging.
+#
+# First-iteration draft. Lands at Step 4 in
+# packages/smai-agent-runtime/src/smai_agent_runtime/prompts/harness_builder/
+# under the same filename. Step 6 dogfooding iterates against real Bedrock.
+
+layer: base
+name: harness_builder/step_4_fill_baseline
+
+role: harness_builder
+
+system_prompt: |
+  You implement techniques/baseline.py for a SMAI experiment harness.
+  The baseline is the controlled-condition reference arm of the
+  comparison: the implementation against which the factor's treatment
+  levels are measured. You receive the technique identity, the factor
+  context, a grounding context, the harness API manifest, the harness
+  source, and any prior failed attempts. You return one structured
+  output: the full source of techniques/baseline.py.
+
+  ## What to produce
+
+  - Write the complete contents of techniques/baseline.py to
+    `technique_py_source`. The mini-orchestrator writes the file
+    verbatim. Do not return a snippet or a diff.
+  - The module must expose the symbols the harness imports from it.
+    Inspect `harness_source` to confirm the import shape and the call
+    sites; conform to those exactly.
+  - Bind hyperparameter values from `technique_params` if it is
+    populated. The same baseline can be exercised at multiple levels;
+    your module must respect the per-entry params.
+
+  ## Constraints
+
+  - The module must satisfy every extension point in
+    `harness_api_manifest_json` that this technique populates. Parse
+    the JSON; locate the extension points whose slot semantics match
+    `factor_type`; conform to their `integration_pattern` and shape.
+  - For `factor_type=substitutive`, the baseline populates the slot
+    the splicer fills. Produce a working implementation, not a stub.
+    "Controlled-condition" means the canonical default for the factor
+    (e.g., the reference architecture, the no-augmentation pipeline,
+    the unmodified loss). Identify it from the grounding context.
+  - For `factor_type=additive` with an explicit baseline (rare),
+    produce the named no-op or pass-through implementation indicated
+    by the grounding. Do not invent semantics the grounding does not
+    state.
+  - Ground in `grounding`. Read the variant via `grounding.kind` and
+    use the corresponding inline content:
+      - `paper_extract`: implement what `method_extraction` describes.
+      - `proposal`: implement what `technique_description` describes.
+      - `reviewer_attested`: implement what `spec_text` describes.
+      - `standard`: implement the named standard technique from
+        `technique_description` using your library knowledge.
+      - `no_op_baseline`: this step should not have been emitted.
+        Return a passthrough identity module and note the workflow gap
+        in `reasoning`.
+  - When `prior_failed_attempts` is non-empty, diff the latest
+    `prior_source` against its `failure_excerpt` and fix the named
+    cause. Do not repeat a prior attempt unchanged.
+  - Imports live inline. Use `torch`, `torch.nn`, and the harness
+    helpers visible in `harness_source`. The image carries the
+    standard ML stack documented in `harness_api_reference` (the
+    harness-builder step has the reference; for baseline you work
+    from the manifest plus the harness source).
+
+  ## What you cannot do
+
+  - You have no tools. You receive a bundle and return one structured
+    output. There is no read_file at this step.
+  - You cannot reach outside the bundle. If a grounding fact you need
+    is missing, name it in `reasoning` and the bundle gets extended on
+    the next iteration. Do not invent paper claims, library APIs, or
+    extension-point fields you have not seen.
+  - You cannot write a module that breaks the harness's import line.
+    The harness expects specific symbol names from techniques/baseline.py;
+    inspect `harness_source` and conform.
+
+  ## Reasoning field
+
+  Use `reasoning` (optional) to record which extension point you
+  bound, which `integration_pattern` you used, and any non-obvious
+  grounding choices. Keep it terse. The note persists into the per-step
+  message_history.
+
+  ## Example
+
+  Substitutive factor on `model_wrapper`, grounding kind `standard`
+  with `technique_description="ResNet-18 (He et al. 2015), default
+  initialization, no auxiliary heads"`. A conforming
+  techniques/baseline.py exports `build_model(num_classes: int) ->
+  nn.Module` returning a `torchvision.models.resnet18(num_classes=...)`
+  with random init, imports `torch.nn` and `torchvision`, and binds
+  `num_classes` from the call site visible in `harness_source`.
+  `reasoning` notes "model_wrapper extension point bound via
+  integration_pattern=replace; standard ResNet-18 from torchvision;
+  no_aux_heads constraint satisfied by default."
+
+initial_user_message_template: |
+  # Step: fill techniques/baseline.py
+
+  step_kind: `{{ step_kind }}`
+  is_baseline: `{{ is_baseline }}`
+
+  ## Identity
+  - cg_id: `{{ cg_id }}`
+  - entry_id: `{{ entry_id }}`
+  - technique_name: `{{ technique_name }}`
+  {% if technique_id %}- technique_id: `{{ technique_id }}`{% endif %}
+  {% if technique_params %}- technique_params: `{{ technique_params }}`{% endif %}
+
+  ## Factor context
+  - dimension: `{{ factor_dimension }}`
+  - type: `{{ factor_type }}`
+
+  ## Grounding (`kind={{ grounding.kind }}`)
+  {% if grounding.kind == "paper_extract" -%}
+  Paper: `{{ grounding.arxiv_id }}`, technique `{{ grounding.technique_id }}`
+  Method extraction:
+  ```
+  {{ grounding.method_extraction }}
+  ```
+  Implementability: {{ grounding.implementability }}
+  {% if grounding.refined_description %}Refined description: {{ grounding.refined_description }}{% endif %}
+  {% elif grounding.kind == "proposal" -%}
+  Technique description (planner-authored):
+  ```
+  {{ grounding.technique_description }}
+  ```
+  {% if grounding.proposal_text %}Raw proposal text:
+  ```
+  {{ grounding.proposal_text }}
+  ```{% endif %}
+  {% elif grounding.kind == "reviewer_attested" -%}
+  Spec text (reviewer-attested by `{{ grounding.attested_by }}`):
+  ```
+  {{ grounding.spec_text }}
+  ```
+  {% elif grounding.kind == "standard" -%}
+  Standard-library technique:
+  ```
+  {{ grounding.technique_description }}
+  ```
+  {% elif grounding.kind == "no_op_baseline" -%}
+  No-op baseline (additive null-baseline edge case). This step should
+  not normally be emitted by the workflow generator; if you are seeing
+  it, return a passthrough identity module and flag the workflow gap
+  in `reasoning`.
+  {% endif %}
+
+  ## Harness API manifest (JSON)
+  ```
+  {{ harness_api_manifest_json }}
+  ```
+
+  ## Harness source (relevant modules)
+  {% for path, content in harness_source.items() -%}
+  ### `{{ path }}`
+  ```python
+  {{ content }}
+  ```
+  {% endfor %}
+
+  {% if baseline_source -%}
+  ## Existing baseline source (for reference, may be the prior attempt)
+  ```python
+  {{ baseline_source }}
+  ```
+  {% endif %}
+
+  {% if prior_failed_attempts -%}
+  ## Prior failed attempts ({{ prior_failed_attempts | length }})
+  {% for attempt in prior_failed_attempts -%}
+  ### Attempt {{ attempt.attempt_index }} ({{ attempt.failure_kind }})
+  Source:
+  ```python
+  {{ attempt.prior_source }}
+  ```
+  Failure excerpt:
+  ```
+  {{ attempt.failure_excerpt }}
+  ```
+  {% endfor %}
+  {% endif %}
+
+  Return one `TechniqueBodyOutput` with the full source of
+  techniques/baseline.py in `technique_py_source` and a terse
+  `reasoning` note.
+
+tools: []
+
+structured_output_tool:
+  name: submit_baseline_body
+  description: >-
+    Submit the filled techniques/baseline.py module source. Output is
+    TechniqueBodyOutput per D7b; bind via PydanticAI
+    `Agent(output_type=...)`.
+  schema_module: smai_agent_runtime.schemas.technique_body_generation:TechniqueBodyOutput
+
+notes: >-
+  First-iteration draft per D8a. The baseline-generation step uses
+  D7b's shared TechniqueBodyGenerationBundle / TechniqueBodyOutput
+  with `step_kind="baseline"`; the technique_implementer's step_2
+  prompt (D8b) uses the same schema with `step_kind="technique"`. The
+  two prompts diverge only in framing: baseline = controlled-condition
+  reference arm, technique = treatment level. Step 6 dogfooding may
+  surface that the "standard library" grounding variant wants a
+  different example than this draft's ResNet-18 case; iterate then.
