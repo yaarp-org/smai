@@ -321,6 +321,46 @@ class LlmProviderConformance:
             pass
         assert fixture_messages == snapshot, "call() mutated its input messages list"
 
+    async def test_credentials_for_subprocess_shape(self, provider: LlmProvider) -> None:
+        """``credentials_for_subprocess`` MUST return a non-empty mapping
+        of env-var names to env-var values when credentials are
+        available, or raise :class:`LlmProviderAuthError` when not.
+
+        This is the second Protocol method, added for the
+        substrate-dispatch path (agent_refactor Step 4). The dispatcher
+        merges the returned dict into the sandboxed agent-runtime
+        container's env. The actual *values* are secrets and not
+        asserted here; the conformance suite only verifies the shape
+        contract — keys are non-empty strings, values are non-empty
+        strings, and the dict is not empty unless an auth error was
+        raised.
+
+        Plugins MAY skip-collect this test when their construction path
+        requires real credentials that the local conformance subclass
+        doesn't have (e.g., a Bedrock-on-fake-client subclass with no
+        AWS credentials in the host env).
+        """
+        try:
+            env = await provider.credentials_for_subprocess()
+        except LlmProviderAuthError:
+            # Acceptable per the Protocol: provider with no resolvable
+            # credentials raises rather than returning an empty dict.
+            return
+        assert isinstance(env, dict), (
+            f"credentials_for_subprocess() must return a dict; got {type(env).__name__}"
+        )
+        assert env, (
+            "credentials_for_subprocess() returned an empty dict; "
+            "raise LlmProviderAuthError instead"
+        )
+        for key, value in env.items():
+            assert isinstance(key, str) and key, (
+                f"env-var name must be a non-empty str; got {key!r}"
+            )
+            assert isinstance(value, str) and value, (
+                f"env-var value must be a non-empty str; got {value!r} for key {key!r}"
+            )
+
 
 # ---- private fault-injection adapter ----------------------------------------
 #

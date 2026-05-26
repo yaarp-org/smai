@@ -186,20 +186,39 @@ class _StubMetadataStore:
 
 
 class _StubLlm:
-    """Single-method :class:`LlmProvider` stand-in carrying name +
-    capabilities so ``open_agent_session`` can read the provider /
-    model identifiers."""
+    """:class:`LlmProvider` Protocol stand-in carrying name + capabilities
+    so ``open_agent_session`` can read the provider / model identifiers.
+
+    Sub-PR F (2026-05-26): expanded from the original single-attribute
+    stub to a fuller Protocol implementor so pyright accepts it where
+    ``LlmProvider`` is the declared type. ``call`` and
+    ``credentials_for_subprocess`` raise / return empty stubs since the
+    sandboxed-dispatch tests never exercise them on this fake.
+    """
 
     name: str = "stub-llm"
+    capabilities: LlmCapabilities = LlmCapabilities(
+        model_id="stub-model",
+        supports_caching=False,
+        context_window=200_000,
+        max_output_tokens=4096,
+    )
 
-    @property
-    def capabilities(self) -> LlmCapabilities:
-        return LlmCapabilities(
-            model_id="stub-model",
-            supports_caching=False,
-            context_window=200_000,
-            max_output_tokens=4096,
-        )
+    async def call(
+        self,
+        system: str,
+        messages: list[NormalizedMessage],
+        tools: object = None,
+        max_tokens: int = 4096,
+        temperature: float | None = None,
+        cache_config: object = None,
+    ) -> Any:
+        del system, messages, tools, max_tokens, temperature, cache_config
+        raise NotImplementedError("stub")
+
+    async def credentials_for_subprocess(self) -> dict[str, str]:
+        # Sub-PR F: second Protocol method.
+        return {}
 
     async def stream(
         self,

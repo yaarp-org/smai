@@ -28,6 +28,7 @@ Per-call:
 from __future__ import annotations
 
 import asyncio
+import os
 from collections import deque
 from collections.abc import Awaitable, Callable
 from typing import Any, ClassVar, cast
@@ -35,6 +36,7 @@ from typing import Any, ClassVar, cast
 from smai_core.plugins import (
     CacheConfig,
     LlmCapabilities,
+    LlmProviderAuthError,
     LlmProviderError,
     LlmProviderInvalidRequest,
     ModelResponse,
@@ -154,6 +156,32 @@ class OpenAIProvider:
             await self._sleep(self._transient_backoff_seconds)
             response = await self._send(request)
         return from_openai_response(response)
+
+    async def credentials_for_subprocess(self) -> dict[str, str]:
+        """Return the OpenAI API key as the env var the SDK reads.
+
+        Per the :class:`smai_core.plugins.LlmProvider` Protocol's
+        substrate-dispatch contract: the orchestrator calls this
+        per-dispatch and merges the result into the sandboxed
+        agent-runtime container's env. The OpenAI SDK reads
+        ``OPENAI_API_KEY`` from the env if no explicit ``api_key``
+        argument is passed to the client constructor — the same chain
+        :func:`_build_openai_client` relies on at host-side construction.
+
+        Resolution order: the live client's ``.api_key`` attribute (when
+        set by the SDK from any source) takes precedence over the host's
+        ``OPENAI_API_KEY`` env var. Either source is acceptable; absence
+        of both raises :class:`LlmProviderAuthError`.
+        """
+        api_key = cast("Any", getattr(self._client, "api_key", None))
+        if not api_key:
+            api_key = os.environ.get("OPENAI_API_KEY")
+        if not api_key:
+            raise LlmProviderAuthError(
+                "no OpenAI API key available on the host; "
+                "set OPENAI_API_KEY before dispatching a sandboxed agent role"
+            )
+        return {"OPENAI_API_KEY": str(api_key)}
 
     # --- internal -----------------------------------------------------------
 

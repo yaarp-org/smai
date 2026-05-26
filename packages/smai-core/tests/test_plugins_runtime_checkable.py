@@ -58,6 +58,13 @@ class _ConformingLlm:
     ) -> ModelResponse:
         raise NotImplementedError
 
+    async def credentials_for_subprocess(self) -> dict[str, str]:
+        # Sub-PR F: second Protocol method. Empty dict acceptable for
+        # a runtime-checkable conformance test that only asserts method
+        # presence (the real-Protocol contract permits raising
+        # LlmProviderAuthError instead).
+        return {}
+
 
 class _NonConformingLlm:
     """Missing the ``call`` method → fails ``isinstance``."""

@@ -204,6 +204,48 @@ class BedrockProvider:
             response = await self._send(request)
         return from_converse_response(response)
 
+    async def credentials_for_subprocess(self) -> dict[str, str]:
+        """Resolve AWS credentials via the boto3 default chain and return
+        them as env vars suitable for projecting into a sandbox container.
+
+        Per the :class:`smai_core.plugins.LlmProvider` Protocol's
+        substrate-dispatch contract: the orchestrator calls this
+        per-dispatch and merges the result into the agent-runtime
+        container's env so PydanticAI's Bedrock client inside the sandbox
+        can authenticate. Resolution happens via a fresh ``boto3.Session``
+        rather than the cached ``self._client`` because the client may be
+        a fake (conformance tests inject one) and because boto3 chains
+        SSO / profile / instance-metadata to a frozen access-key pair
+        only through ``session.get_credentials().get_frozen_credentials()``.
+
+        Raises :class:`LlmProviderAuthError` if the chain returns no
+        credentials.
+        """
+        try:
+            import boto3  # noqa: PLC0415  # pyright: ignore[reportMissingTypeStubs]
+        except ImportError as exc:  # pragma: no cover — declared dep
+            raise LlmProviderError(
+                "smai-llm-bedrock requires boto3; install with `pip install smai-llm-bedrock`"
+            ) from exc
+        session = cast("Any", boto3).Session(region_name=self._region)
+        creds = await asyncio.to_thread(session.get_credentials)
+        if creds is None:
+            raise LlmProviderAuthError(
+                "no AWS credentials resolved via the boto3 default chain on the host; "
+                "configure ~/.aws/credentials, AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY, "
+                "or an SSO / IAM-role-based profile before dispatching a sandboxed agent role"
+            )
+        frozen = await asyncio.to_thread(creds.get_frozen_credentials)
+        env: dict[str, str] = {
+            "AWS_REGION": self._region,
+            "AWS_DEFAULT_REGION": self._region,
+            "AWS_ACCESS_KEY_ID": frozen.access_key,
+            "AWS_SECRET_ACCESS_KEY": frozen.secret_key,
+        }
+        if frozen.token:
+            env["AWS_SESSION_TOKEN"] = frozen.token
+        return env
+
     # --- internal -----------------------------------------------------------
 
     def _build_converse_request(

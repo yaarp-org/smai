@@ -97,6 +97,10 @@ class _UnimplementedLlmProvider:
     ) -> ModelResponse:
         raise NotImplementedError("stub provider")
 
+    async def credentials_for_subprocess(self) -> dict[str, str]:
+        # Sub-PR F: second Protocol method (substrate-dispatch surface).
+        raise NotImplementedError("stub provider")
+
 
 class _UnimplementedMetadataStore:
     """Protocol-conforming stub for :class:`MetadataStore`.

@@ -71,6 +71,12 @@ class FakeLlmProvider:
             usage=TokenUsage(input_tokens=1, output_tokens=1),
         )
 
+    async def credentials_for_subprocess(self) -> dict[str, str]:
+        # Test fake: no real credentials. Sub-PR F's substrate-dispatch
+        # contract permits returning {} when no creds are available
+        # (the dispatcher only merges the dict, never inspects it).
+        return {}
+
 
 # Sanity check at import time; if the Protocol drifts we fail fast
 # rather than at first test invocation.

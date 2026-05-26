@@ -312,3 +312,111 @@ async def test_post_terminal_handler_publishes_workspace(tmp_path: Path) -> None
     kinds = [c.kind for c in compute.calls]
     assert "stage_workspace" in kinds  # invoked by the inner harvest
     assert "harvest_workspace" in kinds
+
+
+@pytest.mark.asyncio
+async def test_llm_credentials_project_into_container_env(tmp_path: Path) -> None:
+    """Sub-PR F: when ``llm_for_credentials`` is passed, the dispatcher
+    calls :meth:`LlmProvider.credentials_for_subprocess` per-dispatch and
+    merges the result into the container env. This closes the
+    round-21-finding-1 gap (Bedrock UserError on region_name missing).
+    """
+    artifact_store = _RecordingArtifactStore()
+    cg_id = "cg-sandbox-creds"
+    await artifact_store.put(
+        DEFAULT_HARNESS_CONTRACT_KEY_TEMPLATE.format(cg_id=cg_id),
+        make_contract().model_dump_json().encode(),
+    )
+    await artifact_store.put(
+        DEFAULT_TECHNIQUE_CONTRACT_KEY_TEMPLATE.format(cg_id=cg_id, entry_id="entry-baseline"),
+        make_technique_contract().model_dump_json().encode(),
+    )
+
+    class _CredentialsLlm(_StubLlm):
+        call_count: int = 0
+
+        async def credentials_for_subprocess(self) -> dict[str, str]:
+            type(self).call_count += 1
+            return {
+                "AWS_REGION": "us-east-1",
+                "AWS_ACCESS_KEY_ID": "AKIA-test",
+                "AWS_SECRET_ACCESS_KEY": "secret-test",
+                "AWS_SESSION_TOKEN": "session-test",
+            }
+
+    creds_llm = _CredentialsLlm()
+    compute = RecordingCompute()
+    bundle = make_dispatch_harness_build_sandboxed(
+        workspace_root=tmp_path,
+        extra_env={"SMAI_MODEL_HARNESS_BUILDER": "bedrock:us.anthropic.claude-sonnet-4-6"},
+        llm_for_credentials=creds_llm,
+    )
+    ctx = _StubDispatchContext(
+        entity_kind="cg",
+        entity_id=cg_id,
+        entity_state="implementing",
+        entity_version=1,
+        metadata_store=_StubMetadataStore(),
+        artifact_store=artifact_store,
+        compute=compute,
+        llm=_StubLlm(),
+        config=_StubEngineConfig(),
+    )
+    await bundle.handler(ctx)
+
+    assert _CredentialsLlm.call_count == 1, "credentials should be resolved per-dispatch"
+    submit_payload = next(c.payload for c in compute.calls if c.kind == "submit")
+    env = submit_payload["env"]
+    # AWS credentials projected (the round-21 fix payload).
+    assert env["AWS_REGION"] == "us-east-1"
+    assert env["AWS_ACCESS_KEY_ID"] == "AKIA-test"
+    assert env["AWS_SECRET_ACCESS_KEY"] == "secret-test"
+    assert env["AWS_SESSION_TOKEN"] == "session-test"
+    # SMAI_CG_ID still present.
+    assert env["SMAI_CG_ID"] == cg_id
+    # extra_env (model selection) merged after credentials, so it wins
+    # for any colliding keys — the per-step model env doesn't collide
+    # with AWS_*, but the merge order is asserted at the credentials-
+    # vs-model overlap-free boundary.
+    assert env["SMAI_MODEL_HARNESS_BUILDER"] == "bedrock:us.anthropic.claude-sonnet-4-6"
+
+
+@pytest.mark.asyncio
+async def test_no_credentials_when_llm_for_credentials_is_none(tmp_path: Path) -> None:
+    """The credentials projection is opt-in: when ``llm_for_credentials``
+    is ``None`` (default), the dispatcher does not attempt to resolve
+    credentials. Tests using fake LLM providers without auth state
+    continue to pass.
+    """
+    artifact_store = _RecordingArtifactStore()
+    cg_id = "cg-sandbox-no-creds"
+    await artifact_store.put(
+        DEFAULT_HARNESS_CONTRACT_KEY_TEMPLATE.format(cg_id=cg_id),
+        make_contract().model_dump_json().encode(),
+    )
+    await artifact_store.put(
+        DEFAULT_TECHNIQUE_CONTRACT_KEY_TEMPLATE.format(cg_id=cg_id, entry_id="entry-baseline"),
+        make_technique_contract().model_dump_json().encode(),
+    )
+
+    compute = RecordingCompute()
+    bundle = make_dispatch_harness_build_sandboxed(workspace_root=tmp_path)
+    ctx = _StubDispatchContext(
+        entity_kind="cg",
+        entity_id=cg_id,
+        entity_state="implementing",
+        entity_version=1,
+        metadata_store=_StubMetadataStore(),
+        artifact_store=artifact_store,
+        compute=compute,
+        llm=_StubLlm(),
+        config=_StubEngineConfig(),
+    )
+    await bundle.handler(ctx)
+
+    submit_payload = next(c.payload for c in compute.calls if c.kind == "submit")
+    env = submit_payload["env"]
+    # No AWS_* / ANTHROPIC_API_KEY / OPENAI_API_KEY when no provider passed.
+    assert not any(
+        k.startswith("AWS_") or k in ("ANTHROPIC_API_KEY", "OPENAI_API_KEY") for k in env
+    ), env

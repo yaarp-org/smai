@@ -43,7 +43,7 @@ from pathlib import Path
 from typing import Any
 
 from smai_core import HarnessContract, TechniqueContract
-from smai_core.plugins import ArtifactStore
+from smai_core.plugins import ArtifactStore, LlmProvider
 from smai_runtime import (
     HARNESS_CONTRACT_FILENAME,
     TECHNIQUE_CONTRACT_FILENAME,
@@ -102,6 +102,7 @@ def make_dispatch_harness_build_sandboxed(
     harness_publish_key_prefix: Callable[[str], str] | None = None,
     retry_policy: Any | None = None,
     extra_env: Mapping[str, str] | None = None,
+    llm_for_credentials: LlmProvider | None = None,
 ) -> _SandboxedHarnessBuilderBundle:
     """Build the sandboxed harness-builder dispatcher bundle (sub-PR B).
 
@@ -132,6 +133,18 @@ def make_dispatch_harness_build_sandboxed(
     Sub-PR E cutover: this is the sole harness-builder dispatch path on
     main — the round-14 in-process predecessor (``run_harness_builder_session``
     + ``make_dispatch_harness_build``) was deleted alongside the cutover.
+
+    Args:
+        ...
+        llm_for_credentials: Optional :class:`LlmProvider` whose
+            :meth:`credentials_for_subprocess` is called per-dispatch to
+            project provider credentials into the sandbox container env.
+            Sub-PR F (round-21 dogfooding finding): without this the
+            sandboxed PydanticAI / boto3 inside the container has no
+            credentials and fails at client construction. Optional only
+            so existing fake-LLM tests that don't need real provider
+            auth can omit it; production deployments MUST set it via
+            :func:`smai_cli.runtime.Runtime` wiring.
     """
     from smai_orchestrator.dispatch import (  # noqa: PLC0415
         CommandSpec,
@@ -192,11 +205,23 @@ def make_dispatch_harness_build_sandboxed(
             "/workspace",
         ]
         env: dict[str, str] = {"SMAI_CG_ID": cg_id}
+        # Sub-PR F (credential-flow gap): project the configured
+        # :class:`LlmProvider`'s subprocess credentials into the sandbox
+        # env so PydanticAI / the provider SDK inside the container can
+        # authenticate. Called per-dispatch so chain-derived credentials
+        # (boto3 SSO tokens, STS session tokens) refresh as they rotate
+        # on the host. Per ``compute_dispatch_decisions.md`` §4: LLM
+        # credentials are explicitly part of the sandbox's trust envelope.
+        if llm_for_credentials is not None:
+            env.update(await llm_for_credentials.credentials_for_subprocess())
         # D3 per-role-per-step model env projection (sub-PR D thread 2):
         # the host computes ``SMAI_MODEL_<ROLE>__<STEP>`` env vars from
         # ``EngineConfig.role_models`` + the configured ``llm_provider``
         # and threads them in at factory-construction time. The
         # sandbox-side :func:`get_model_for_step` picks them up natively.
+        # ``extra_env`` wins over credentials so an operator-supplied
+        # override (e.g., a test fixture's explicit AWS_REGION) takes
+        # precedence over the chain-resolved value.
         if extra_env:
             env.update(extra_env)
         return CommandSpec(

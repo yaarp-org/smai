@@ -5,11 +5,21 @@ Per ``designs/smai/07-plugin-interfaces.md`` §4 and DEC-020 (model abstraction
 layer carry-forward; v1's normalized conversation representation lifts
 substantively into v2).
 
-The Protocol is single-method — ``call(...)`` — by deliberate design (per
-§4.3): the agent loop's between-turn deterministic logic (context truncation,
-status writes, lint-on-write, validation polling, nudge injection) is engine
-code, not plugin code; keeping ``call()`` as the only Protocol method
-preserves the engine's ownership of the loop.
+The Protocol's agent-loop surface is single-method — ``call(...)`` — by
+deliberate design (per §4.3): the agent loop's between-turn deterministic
+logic (context truncation, status writes, lint-on-write, validation
+polling, nudge injection) is engine code, not plugin code; keeping
+``call()`` as the only agent-loop method preserves the engine's
+ownership of the loop.
+
+A second method, ``credentials_for_subprocess()``, exists for the
+substrate-dispatch path (agent_refactor Step 4): when the orchestrator
+dispatches a sandboxed agent role as a Compute job, it needs to project
+LLM credentials into the sandbox container's env. That projection is
+provider-specific (Bedrock's AWS quad vs. Anthropic / OpenAI single
+api_key), so credential extraction lives on the plugin. This is
+qualitatively different from agent-loop concerns and so does not
+violate the single-method-for-the-loop principle.
 
 Provider-specific shapes (Bedrock's ``Message`` / ``ContentBlock``,
 Anthropic's ``MessageParam``, OpenAI's ``ChatCompletionMessageParam``) are
@@ -273,5 +283,43 @@ class LlmProvider(Protocol):
         * Mutate the input ``messages`` list (the agent loop reuses it).
         * Apply context truncation (that is agent-loop concern).
         * Do retries beyond the documented transient pattern.
+        """
+        ...
+
+    async def credentials_for_subprocess(self) -> dict[str, str]:
+        """Return env vars projecting this provider's credentials into a
+        child process (e.g., the sandboxed agent-runtime container).
+
+        Needed by the substrate-dispatch path: when the orchestrator
+        dispatches a sandboxed agent role (harness_builder /
+        technique_implementer) as a Compute job, the sandbox needs
+        provider credentials to call the model itself. The dispatcher
+        calls this method per-dispatch and merges the result into the
+        container's env. Per ``compute_dispatch_decisions.md`` §4 the
+        LLM credentials are explicitly part of the sandbox's trust
+        envelope; the host attests for ArtifactStore / MetadataStore
+        but the sandbox owns its own LLM auth surface.
+
+        Implementations MUST:
+
+        * Return a dict whose keys are env-var names the provider's
+          SDK reads from a fresh process (e.g., ``"AWS_REGION"``,
+          ``"AWS_ACCESS_KEY_ID"``, ``"ANTHROPIC_API_KEY"``,
+          ``"OPENAI_API_KEY"``).
+        * Resolve any chain-based credentials to a static snapshot
+          (e.g., boto3 SSO / profile / instance-metadata to a frozen
+          ``aws_access_key_id`` + ``aws_secret_access_key`` pair, plus
+          ``aws_session_token`` when the chain produced one).
+        * Raise :class:`LlmProviderAuthError` if credentials cannot be
+          resolved.
+
+        Implementations MUST NOT:
+
+        * Log the returned dict. The values are secrets.
+        * Persist the returned dict beyond the caller's immediate use.
+
+        Called per-dispatch (not cached) so chain-derived credentials
+        (SSO tokens, STS session tokens) refresh naturally as they
+        rotate on the host.
         """
         ...

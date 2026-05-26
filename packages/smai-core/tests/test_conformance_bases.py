@@ -99,8 +99,10 @@ def _test_methods(cls: type) -> list[str]:
     )
 
 
-# Per ``07-plugin-interfaces.md`` §4.7. The 11 LlmProvider contract methods
-# enumerated in the conformance base file's docstring.
+# Per ``07-plugin-interfaces.md`` §4.7. 11 LlmProvider contract methods
+# plus sub-PR F's ``test_credentials_for_subprocess_shape`` (second
+# Protocol method's shape contract) = 12 enumerated in the conformance
+# base file's docstring.
 _LLM_EXPECTED_METHODS = {
     "test_normalized_round_trip",
     "test_capability_caching_honesty",
@@ -113,6 +115,7 @@ _LLM_EXPECTED_METHODS = {
     "test_transient_retry_once",
     "test_tool_use_round_trip",
     "test_input_messages_not_mutated",
+    "test_credentials_for_subprocess_shape",
 }
 
 

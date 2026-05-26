@@ -231,6 +231,10 @@ class StubLlmProvider:
             raise AssertionError(f"StubLlmProvider {self.name!r}: ran out of canned responses")
         return self._responses.popleft()
 
+    async def credentials_for_subprocess(self) -> dict[str, str]:
+        # Sub-PR F: substrate-dispatch credential surface.
+        return {}
+
 
 # === SmokeFakeCompute =========================================================
 

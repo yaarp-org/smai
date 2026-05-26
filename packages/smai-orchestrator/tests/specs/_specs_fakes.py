@@ -124,6 +124,12 @@ class StubLlmProvider:
         )
         return self._responses.popleft()
 
+    async def credentials_for_subprocess(self) -> dict[str, str]:
+        # Sub-PR F: substrate-dispatch credential surface. Stub returns
+        # empty dict — these spec tests never dispatch to a sandbox that
+        # would consume credentials.
+        return {}
+
 
 # === In-memory ArtifactStore (when SqliteStore + LocalFsStore are unavailable) ===
 

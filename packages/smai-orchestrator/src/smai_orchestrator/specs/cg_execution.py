@@ -1068,6 +1068,7 @@ def build_cg_execution_spec(
     require_human_approval: bool = False,
     evaluation_dispatch_trace: list[str] | None = None,
     harness_builder_extra_env: Mapping[str, str] | None = None,
+    llm_for_harness_builder: LlmProvider | None = None,
 ) -> PipelineSpec:
     """Build the SMAI CG-execution :class:`PipelineSpec`.
 
@@ -1162,6 +1163,7 @@ def build_cg_execution_spec(
         workspace_root=workspace_root,
         retry_policy=implementation_phase_retry_policy,
         extra_env=harness_builder_extra_env,
+        llm_for_credentials=llm_for_harness_builder,
     )
 
     states: list[StateDef] = [

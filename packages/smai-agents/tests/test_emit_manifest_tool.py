@@ -54,6 +54,10 @@ class _NoopProvider:
         del args, kwargs
         raise AssertionError("emit_manifest tests do not exercise LLM calls")
 
+    async def credentials_for_subprocess(self) -> dict[str, str]:
+        # Sub-PR F: substrate-dispatch credential surface.
+        return {}
+
 
 def _make_workspace_with_harness(workspace: Path, files: dict[str, bytes]) -> None:
     """Lay down ``harness/<file>`` for every entry in ``files``."""

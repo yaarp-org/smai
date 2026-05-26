@@ -1496,6 +1496,14 @@ class Runtime:
             # Register the SMAI Phase-2 specs (CG-execution + entry).
             llm_for_code_reviewer = plugins.llm_providers["code_reviewer"]
             llm_for_contextual_evaluator = plugins.llm_providers["contextual_evaluator"]
+            # Sub-PR F (credential-flow gap): the sandboxed
+            # harness-builder needs the host's LLM credentials projected
+            # into its container env. The configured provider for the
+            # harness_builder role is the source; the dispatcher calls
+            # :meth:`LlmProvider.credentials_for_subprocess` per-dispatch
+            # so chain-derived credentials (boto3 SSO / STS tokens)
+            # refresh as they rotate on the host.
+            llm_for_harness_builder = plugins.llm_providers["harness_builder"]
             # Sub-PR E cutover: project ``engine.role_models`` into the
             # ``SMAI_MODEL_<ROLE>[__<STEP>]`` env-var shape the
             # sandboxed mini-orchestrator's :func:`get_model_for_step`
@@ -1519,6 +1527,7 @@ class Runtime:
                 # ``technique_implementer_inline_runner`` stays until
                 # Step 7 ports that role.
                 harness_builder_extra_env=harness_builder_extra_env,
+                llm_for_harness_builder=llm_for_harness_builder,
                 technique_implementer_inline_runner=technique_implementer_inline_runner,
             )
             # Register the :class:`RunRecord` sub-state-machine spec

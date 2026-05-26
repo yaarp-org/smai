@@ -138,6 +138,10 @@ class _StubLlm:
             )
         return self._responses.popleft()
 
+    async def credentials_for_subprocess(self) -> dict[str, str]:
+        # Sub-PR F: substrate-dispatch credential surface.
+        return {}
+
 
 class _SuccessFakeCompute:
     """``Compute`` whose ``status`` always reports succeeded — same shape

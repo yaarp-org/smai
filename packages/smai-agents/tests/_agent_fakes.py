@@ -77,6 +77,10 @@ class StubLlmProvider:
         )
         return self._responses.popleft()
 
+    async def credentials_for_subprocess(self) -> dict[str, str]:
+        # Sub-PR F: substrate-dispatch credential surface.
+        return {}
+
 
 class StubArtifactStore:
     """In-memory :class:`ArtifactStore` for unit tests."""

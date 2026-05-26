@@ -110,6 +110,7 @@ def register_smai_specs(
     require_human_approval: bool = False,
     evaluation_dispatch_trace: list[str] | None = None,
     harness_builder_extra_env: Mapping[str, str] | None = None,
+    llm_for_harness_builder: LlmProvider | None = None,
     technique_implementer_inline_runner: Any = None,
 ) -> tuple[PipelineSpec, PipelineSpec]:
     """Construct and register both CG-side SMAI specs into the process registry.
@@ -154,6 +155,7 @@ def register_smai_specs(
         require_human_approval=require_human_approval,
         evaluation_dispatch_trace=evaluation_dispatch_trace,
         harness_builder_extra_env=harness_builder_extra_env,
+        llm_for_harness_builder=llm_for_harness_builder,
     )
     entry_spec = build_cg_entries_spec(
         workspace_root=workspace_root,

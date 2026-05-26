@@ -91,6 +91,10 @@ class _StubLlmProvider:
             usage=TokenUsage(input_tokens=1, output_tokens=1),
         )
 
+    async def credentials_for_subprocess(self) -> dict[str, str]:
+        # Sub-PR F: substrate-dispatch credential surface.
+        return {}
+
 
 class _FakeCompute:
     """No-op :class:`Compute` shim — the L1 tests never drive jobs."""
