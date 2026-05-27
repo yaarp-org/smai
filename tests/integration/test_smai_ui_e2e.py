@@ -54,11 +54,11 @@ from _4_n3_helpers import (  # type: ignore[import-not-found]
     wait_for_state_change,
 )
 from httpx import ASGITransport, AsyncClient
-from smai_agents import AgentOutcome, AgentSession
 from smai_api import make_api_app
 from smai_artifacts_localfs import LocalFsStore
 from smai_cli.runtime import Runtime
 from smai_core import EvaluationResult
+from smai_inline_agents import AgentOutcome, AgentSession
 from smai_orchestrator import (
     DEFAULT_TASK_ROLES,
     PluginOverrides,

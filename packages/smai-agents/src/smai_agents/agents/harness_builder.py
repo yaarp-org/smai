@@ -44,6 +44,7 @@ from typing import Any
 
 from smai_core import HarnessContract, TechniqueContract
 from smai_core.plugins import ArtifactStore, LlmProvider
+from smai_inline_agents.agent_session_telemetry import open_agent_session
 from smai_runtime import (
     HARNESS_CONTRACT_FILENAME,
     TECHNIQUE_CONTRACT_FILENAME,
@@ -51,7 +52,6 @@ from smai_runtime import (
     write_template_files,
 )
 
-from smai_agents.agent_session_telemetry import open_agent_session
 from smai_agents.agents.artifact_publish import publish_workspace_outputs
 from smai_agents.agents.harness_api_reference import (
     WORKSPACE_HARNESS_API_REFERENCE_PATH,

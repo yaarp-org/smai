@@ -68,6 +68,7 @@ from pathlib import Path
 from pydantic import BaseModel
 from smai_core import HarnessContract
 from smai_core.plugins import ToolResultContent
+from smai_inline_agents.tools import Tool, ToolContext
 from smai_runtime import (
     HARNESS_API_MANIFEST_FILENAME,
     MANIFEST_SCHEMA_VERSION,
@@ -78,8 +79,6 @@ from smai_runtime import (
     compute_harness_version_hash,
     freeze_manifest,
 )
-
-from smai_agents.tools import Tool, ToolContext
 
 EMIT_HARNESS_MANIFEST_TOOL_NAME = "emit_harness_manifest"
 

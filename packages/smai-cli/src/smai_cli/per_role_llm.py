@@ -35,8 +35,8 @@ import os
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, cast
 
-from smai_agents.model_selection import TaskRole, get_model_for_task
 from smai_core.plugins import LlmProvider
+from smai_inline_agents.model_selection import TaskRole, get_model_for_task
 from smai_orchestrator import DEFAULT_TASK_ROLES, PluginSelection
 
 if TYPE_CHECKING:

@@ -340,8 +340,8 @@ def make_planner_session_runner(*, finalized: bool = True):  # type: ignore[no-u
     artifact key should use :func:`build_finalized_buffer_payload` and
     pre-write the artifact directly.
     """
-    from smai_agents.loop import AgentOutcome  # noqa: PLC0415
     from smai_core.plugins import TokenUsage  # noqa: PLC0415
+    from smai_inline_agents.loop import AgentOutcome  # noqa: PLC0415
 
     async def _runner(_session: Any) -> AgentOutcome:
         del _session

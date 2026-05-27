@@ -99,7 +99,6 @@ from typing import Any
 
 import pytest
 import yaml
-from smai_agents import AgentOutcome, AgentSession
 from smai_artifacts_localfs import LocalFsStore
 from smai_cli.runtime import (
     EXPERIMENT_PLAN_KEY_TEMPLATE,
@@ -129,6 +128,7 @@ from smai_core.plugins import (
     ToolUseContent,
     WorkspaceHandle,
 )
+from smai_inline_agents import AgentOutcome, AgentSession
 from smai_orchestrator import (
     DEFAULT_TASK_ROLES,
     PluginOverrides,

@@ -40,7 +40,6 @@ from typing import Any, TypeVar, cast
 from uuid import uuid4
 
 import yaml
-from smai_agents.model_selection import TaskRole
 from smai_core import (
     ContractArtifactSet,
     DslDocumentAdapter,
@@ -54,6 +53,7 @@ from smai_core import (
 )
 from smai_core.plugins import ArtifactStore, CursorPage, MetadataStore
 from smai_events import EventBroker, InProcessEventChannel
+from smai_inline_agents.model_selection import TaskRole
 from smai_orchestrator import (
     CG_EXECUTION_SPEC_NAME,
     DEFAULT_TASK_ROLES,

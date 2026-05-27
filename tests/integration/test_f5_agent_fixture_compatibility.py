@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any  # noqa: F401  # used in canned response builders
 
 import pytest
-from smai_agents import (
+from smai_inline_agents import (
     AgentLoopConfig,
     AgentSession,
     ToolRegistry,
@@ -237,8 +237,8 @@ async def test_anthropic_provider_round_trips_tool_result_messages(
     # Register a no-op echo tool alongside finish so the first turn
     # has somewhere to dispatch.
     from pydantic import BaseModel
-    from smai_agents import Tool, ToolContext
     from smai_core.plugins import ToolResultContent
+    from smai_inline_agents import Tool, ToolContext
 
     class _EchoInput(BaseModel):
         text: str

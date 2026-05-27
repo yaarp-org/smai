@@ -4,6 +4,7 @@ members = [
     "packages/smai-runtime",
     "packages/smai-agent-runtime",
     "packages/smai-agents",
+    "packages/smai-inline-agents",
     "packages/smai-orchestrator",
     "packages/smai-cli",
     "packages/smai",

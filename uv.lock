@@ -22,6 +22,7 @@ members = [
     "smai-compute-runpod",
     "smai-core",
     "smai-events",
+    "smai-inline-agents",
     "smai-llm-anthropic",
     "smai-llm-bedrock",
     "smai-llm-openai",
@@ -3731,10 +3732,9 @@ name = "smai-agents"
 version = "0.1.0"
 source = { editable = "packages/smai-agents" }
 dependencies = [
-    { name = "jinja2" },
     { name = "pydantic" },
-    { name = "pyyaml" },
     { name = "smai-core" },
+    { name = "smai-inline-agents" },
     { name = "smai-runtime" },
 ]
 
@@ -3745,10 +3745,9 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "jinja2", specifier = ">=3.1" },
     { name = "pydantic", specifier = ">=2.0" },
-    { name = "pyyaml", specifier = ">=6.0" },
     { name = "smai-core", editable = "packages/smai-core" },
+    { name = "smai-inline-agents", editable = "packages/smai-inline-agents" },
     { name = "smai-runtime", editable = "packages/smai-runtime" },
 ]
 
@@ -4058,6 +4057,35 @@ dev = [
     { name = "pytest", specifier = ">=8" },
     { name = "pytest-asyncio", specifier = ">=0.23" },
 ]
+
+[[package]]
+name = "smai-inline-agents"
+version = "0.1.0"
+source = { editable = "packages/smai-inline-agents" }
+dependencies = [
+    { name = "jinja2" },
+    { name = "pydantic" },
+    { name = "pyyaml" },
+    { name = "smai-core" },
+    { name = "smai-runtime" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "smai-llm-bedrock" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "jinja2", specifier = ">=3.1" },
+    { name = "pydantic", specifier = ">=2.0" },
+    { name = "pyyaml", specifier = ">=6.0" },
+    { name = "smai-core", editable = "packages/smai-core" },
+    { name = "smai-runtime", editable = "packages/smai-runtime" },
+]
+
+[package.metadata.requires-dev]
+dev = [{ name = "smai-llm-bedrock", editable = "plugins/smai-llm-bedrock" }]
 
 [[package]]
 name = "smai-llm-anthropic"

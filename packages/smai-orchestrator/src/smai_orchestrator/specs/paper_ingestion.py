@@ -574,7 +574,7 @@ def make_dispatch_paper_screener(
     screen_result_key_fn = screen_result_key_for or _default_screen_result_key
 
     async def _dispatch(ctx: DispatchContext) -> DispatchOutcome:
-        from smai_agents.agents.screener import (  # noqa: PLC0415
+        from smai_inline_agents.agents.screener import (  # noqa: PLC0415
             ScreenerInput,
             run_paper_screening,
         )
@@ -653,7 +653,7 @@ def make_dispatch_paper_planner_and_enrich(
     method_extraction_key_fn = method_extraction_key_for or _default_method_extraction_key
 
     async def _dispatch(ctx: DispatchContext) -> DispatchOutcome:
-        from smai_agents.agents.planner import (  # noqa: PLC0415
+        from smai_inline_agents.agents.planner import (  # noqa: PLC0415
             PlannerInput,
             run_planner_session,
         )
@@ -700,7 +700,7 @@ def make_dispatch_paper_planner_and_enrich(
         # Translate :class:`EngineConfig` supervisor settings (Task
         # 3.G4) into the loop's :class:`AgentLoopConfig`. Mirrors
         # :mod:`smai_agents.agents.planner.make_dispatch_planner`.
-        from smai_agents.loop import AgentLoopConfig  # noqa: PLC0415
+        from smai_inline_agents.loop import AgentLoopConfig  # noqa: PLC0415
 
         engine_config = getattr(ctx, "config", None)
         if (
@@ -803,7 +803,7 @@ async def _run_enrichment_loop(
       technique blocked (no method extraction; downstream consumers
       treat as non-runnable).
     """
-    from smai_agents.agents.enricher import (  # noqa: PLC0415
+    from smai_inline_agents.agents.enricher import (  # noqa: PLC0415
         EnricherInput,
         run_technique_enrichment,
     )

@@ -341,7 +341,7 @@ def _make_dispatch_planner(
     """
 
     async def _dispatch(ctx: DispatchContext) -> DispatchOutcome:
-        from smai_agents.agents.planner import (  # noqa: PLC0415
+        from smai_inline_agents.agents.planner import (  # noqa: PLC0415
             make_dispatch_planner,
         )
 

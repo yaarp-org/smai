@@ -441,7 +441,7 @@ def test_default_task_roles_match_smai_agents() -> None:
     only because uv-workspace puts every package on ``sys.path`` for
     test runs).
     """
-    from smai_agents.model_selection import TaskRole
+    from smai_inline_agents.model_selection import TaskRole
 
     # ``TaskRole`` is a typing.Literal; introspect via __args__.
     expected = tuple(TaskRole.__args__)  # type: ignore[attr-defined]

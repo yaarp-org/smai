@@ -11,8 +11,8 @@ from __future__ import annotations
 from typing import cast
 
 import pytest
-from smai_agents.model_selection import TASK_DEFAULTS, TaskRole
 from smai_cli.per_role_llm import UnsupportedLlmProvider, build_per_role_llm_providers
+from smai_inline_agents.model_selection import TASK_DEFAULTS, TaskRole
 from smai_orchestrator import DEFAULT_TASK_ROLES, PluginSelection
 
 

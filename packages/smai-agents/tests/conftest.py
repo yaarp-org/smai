@@ -1,13 +1,10 @@
-"""Pytest configuration for smai-agents tests.
+"""Pytest configuration for the still-in-smai-agents sandboxed-dispatcher tests.
 
-Adds this tests/ directory to ``sys.path`` so per-test modules can
-import the shared :mod:`_agent_fakes` and :mod:`_helpers` modules by
-name. Mirrors the pattern in ``smai-llm-bedrock/tests/conftest.py``.
-
-The fakes module is named ``_agent_fakes`` (rather than ``_fakes``) to
-avoid colliding with the bedrock plugin's ``tests/_fakes.py`` when the
-two test suites run in the same pytest session — Python's module
-cache resolves whichever directory comes first on ``sys.path``.
+Step 8 Wave 1 moved the inline-agents test fixtures + tests to
+:mod:`smai-inline-agents.tests`. The few sandboxed-dispatcher tests
+that remain here keep their own conftest so :mod:`_harness_builder_sandboxed_fixtures`
+is importable by sibling tests under ``--import-mode=importlib``.
+Wave 2 dissolves this directory entirely.
 """
 
 from __future__ import annotations

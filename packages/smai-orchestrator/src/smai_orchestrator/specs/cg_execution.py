@@ -116,8 +116,8 @@ from smai_orchestrator.entities.tracking import (
 from smai_orchestrator.runtime.spec import PipelineSpec
 
 if TYPE_CHECKING:  # pragma: no cover — type-only imports
-    from smai_agents.schemas.code_review import CodeReviewResult
-    from smai_agents.schemas.contextual_verdict import ContextualVerdict
+    from smai_inline_agents.schemas.code_review import CodeReviewResult
+    from smai_inline_agents.schemas.contextual_verdict import ContextualVerdict
 
 
 # === Constants ==============================================================
@@ -281,12 +281,12 @@ async def _load_or_compute_code_review(
     """
     # Lazy imports per the smai-orchestrator → smai-agents dep direction
     # (implementation_plan.md §2.1).
-    from smai_agents.agents.code_reviewer import (  # noqa: PLC0415
+    from smai_inline_agents.agents.code_reviewer import (  # noqa: PLC0415
         CodeReviewerInput,
         EntryUnderReview,
         run_code_review,
     )
-    from smai_agents.schemas.code_review import (  # noqa: PLC0415
+    from smai_inline_agents.schemas.code_review import (  # noqa: PLC0415
         CodeReviewResult,
     )
 
@@ -899,7 +899,7 @@ def _make_dispatch_evaluation(
         if dispatch_trace is not None:
             dispatch_trace.append("contextual_evaluator")
 
-        from smai_agents.agents.contextual_evaluator import (  # noqa: PLC0415
+        from smai_inline_agents.agents.contextual_evaluator import (  # noqa: PLC0415
             CGMetadata,
             ContextualEvaluatorEntry,
             ContextualEvaluatorInput,
