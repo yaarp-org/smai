@@ -363,3 +363,76 @@ def test_unexpected_exception_routes_to_internal_error(
     captured = capsys.readouterr()
     assert "crashed" in captured.err
     assert "ValueError" in captured.err
+
+
+# === Round-22 Bug 3: session.cost usage accumulator =========================
+
+
+def test_usage_accumulator_starts_at_zero() -> None:
+    """The accumulator's counters initialize to zero so a session that
+    never invokes the agent (e.g. fake-LLM tests that short-circuit at
+    the body-gen step's input-validation guard) still emits a sensible
+    session.cost rather than crashing.
+    """
+    from smai_agent_runtime.harness_builder._main import _UsageAccumulator
+
+    acc = _UsageAccumulator()
+    assert acc.input_tokens == 0
+    assert acc.output_tokens == 0
+    assert acc.cache_read_tokens == 0
+    assert acc.cache_write_tokens == 0
+    assert acc.turn_count == 0
+    assert acc.tool_errors_fired == 0
+
+
+def test_usage_accumulator_folds_pydantic_ai_run_usage() -> None:
+    """``add_run_usage`` reads the fields PydanticAI's
+    :class:`RunUsage` exposes — ``input_tokens`` / ``output_tokens`` /
+    ``cache_read_tokens`` / ``cache_write_tokens`` / ``requests`` — and
+    folds each into the running total. The mapping from ``requests`` to
+    ``turn_count`` is the load-bearing rename (one PydanticAI request
+    = one LLM round-trip = one "turn" in the session.cost surface).
+    """
+    from smai_agent_runtime.harness_builder._main import _UsageAccumulator
+
+    class _StubRunUsage:
+        input_tokens = 100
+        output_tokens = 50
+        cache_read_tokens = 200
+        cache_write_tokens = 25
+        requests = 1
+
+    acc = _UsageAccumulator()
+    acc.add_run_usage(_StubRunUsage())
+    acc.add_run_usage(_StubRunUsage())
+
+    assert acc.input_tokens == 200
+    assert acc.output_tokens == 100
+    assert acc.cache_read_tokens == 400
+    assert acc.cache_write_tokens == 50
+    assert acc.turn_count == 2
+
+
+def test_usage_accumulator_tolerates_missing_or_invalid_fields() -> None:
+    """Partial usage objects (a provider that doesn't expose every
+    field) should not crash the session.cost emit. ``add_run_usage``
+    treats missing / None / non-int values as zero so the totals stay
+    sane.
+    """
+    from smai_agent_runtime.harness_builder._main import _UsageAccumulator
+
+    class _PartialUsage:
+        input_tokens = 100
+        # output_tokens missing
+        cache_read_tokens = None  # type: ignore[assignment]
+        cache_write_tokens = "bogus"  # type: ignore[assignment]
+        requests = 1
+
+    acc = _UsageAccumulator()
+    acc.add_run_usage(_PartialUsage())
+
+    assert acc.input_tokens == 100
+    assert acc.output_tokens == 0
+    assert acc.cache_read_tokens == 0
+    assert acc.cache_write_tokens == 0
+    assert acc.turn_count == 1

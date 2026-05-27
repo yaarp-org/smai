@@ -55,6 +55,7 @@ class FakeAgentRunner:
         workspace: Any = None,
         trace_step_name: str | None = None,
         agent_runner: Any = None,
+        usage_accumulator: Any = None,
     ) -> BaseModel:
         # ``workspace`` + ``trace_step_name`` are sub-PR D thread 1's
         # resume-prep surface (architectural_decisions §12 #4); the
@@ -62,7 +63,9 @@ class FakeAgentRunner:
         # the right step-name + workspace for the conversation-trace
         # persistence. ``agent_runner`` is sub-PR D thread 5's DI seam;
         # the fake accepts and ignores it (it IS the runner already).
-        del agent_runner
+        # ``usage_accumulator`` is the Round-22 Bug-3 fix's seam — also
+        # ignored (the fake has no RunUsage to fold in).
+        del agent_runner, usage_accumulator
         self.calls.append(
             CapturedAgentCall(
                 user_message=user_message,

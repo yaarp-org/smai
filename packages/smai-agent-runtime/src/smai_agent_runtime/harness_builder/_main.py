@@ -167,6 +167,75 @@ class _StepOutcome:
 
 
 @dataclass
+class _UsageAccumulator:
+    """Per-session token / turn accumulator for the session.cost emit.
+
+    Round-21 / Round-22 noted ``session.cost`` was emitting hardcoded
+    zeros even after multiple real PydanticAI runs because nothing was
+    aggregating PydanticAI's :class:`pydantic_ai.usage.RunUsage` across
+    the agent-reasoning steps. The accumulator instance lives on
+    :class:`_DispatchContext` so :func:`_run_agent_sync` can mutate it
+    on every real (non-fake) run, and ``main()`` reads the totals at
+    ``session.cost`` emit time.
+    """
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    turn_count: int = 0
+    tool_errors_fired: int = 0
+
+    def add_run_usage(self, usage: Any) -> None:
+        """Fold a PydanticAI :class:`RunUsage` into the running totals.
+
+        Best-effort: missing or non-int fields fall back to zero so a
+        provider that returns a partial usage object doesn't crash the
+        whole session.cost path. ``requests`` maps onto ``turn_count``
+        because each agent-reasoning step issues exactly one
+        :meth:`Agent.run_sync` call but PydanticAI may internally retry
+        on transient failures; ``requests`` reflects the actual count
+        of LLM round-trips, which is what the cost surface tracks.
+        """
+        self.input_tokens += _safe_int(getattr(usage, "input_tokens", 0))
+        self.output_tokens += _safe_int(getattr(usage, "output_tokens", 0))
+        self.cache_read_tokens += _safe_int(getattr(usage, "cache_read_tokens", 0))
+        self.cache_write_tokens += _safe_int(getattr(usage, "cache_write_tokens", 0))
+        self.turn_count += _safe_int(getattr(usage, "requests", 0))
+
+
+def _safe_int(value: Any) -> int:
+    """Return ``int(value)`` or 0 for None / non-numeric values."""
+    if value is None:
+        return 0
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _emit_accumulated_session_cost(
+    emitter: StatusEmitter,
+    accumulator: _UsageAccumulator,
+) -> None:
+    """Project the accumulator's totals onto the StatusEmitter's session.cost.
+
+    Single call site per workflow exit (success + failure paths in main()
+    both go through this helper) so the cost-emission code path stays
+    DRY and the technique_implementer mini-orchestrator can call the
+    same helper via the cross-module import.
+    """
+    emitter.emit_session_cost(
+        input_tokens=accumulator.input_tokens,
+        output_tokens=accumulator.output_tokens,
+        cache_read_tokens=accumulator.cache_read_tokens,
+        cache_write_tokens=accumulator.cache_write_tokens,
+        turn_count=accumulator.turn_count,
+        tool_errors_fired=accumulator.tool_errors_fired,
+    )
+
+
+@dataclass
 class _DispatchContext:
     """Per-session immutable context the dispatcher threads through every step."""
 
@@ -189,6 +258,10 @@ class _DispatchContext:
     # In-process tests still monkeypatch :func:`_run_agent_sync`
     # directly for finer-grained per-call assertions.
     agent_runner: AgentRunner | None = None
+    # Token-usage accumulator. Mutated by :func:`_run_agent_sync` on
+    # every real PydanticAI run; read at ``session.cost`` emit time.
+    # Round-22 follow-up (closes Bug 3: session.cost emits zeros).
+    usage_accumulator: _UsageAccumulator = field(default_factory=_UsageAccumulator)
 
 
 def main(args: argparse.Namespace) -> int:
@@ -302,14 +375,7 @@ def main(args: argparse.Namespace) -> int:
             # / manifest-emit failures stay fail-fast since no
             # downstream step is designed to handle them.
             if not isinstance(step, ValidationStep):
-                emitter.emit_session_cost(
-                    input_tokens=0,
-                    output_tokens=0,
-                    cache_read_tokens=0,
-                    cache_write_tokens=0,
-                    turn_count=0,
-                    tool_errors_fired=0,
-                )
+                _emit_accumulated_session_cost(emitter, context.usage_accumulator)
                 emitter.emit_session_end(
                     outcome="failure",
                     last_completed_step_index=last_succeeded_index,
@@ -318,14 +384,7 @@ def main(args: argparse.Namespace) -> int:
                 _write_status_summary(workspace, args.cg_id, outcomes, succeeded=False)
                 return EXIT_STEP_FAILED
 
-    emitter.emit_session_cost(
-        input_tokens=0,
-        output_tokens=0,
-        cache_read_tokens=0,
-        cache_write_tokens=0,
-        turn_count=0,
-        tool_errors_fired=0,
-    )
+    _emit_accumulated_session_cost(emitter, context.usage_accumulator)
     emitter.emit_session_end(
         outcome="success",
         last_completed_step_index=last_succeeded_index,
@@ -685,6 +744,7 @@ def _run_body_generation_step(
                 workspace=context.workspace,
                 trace_step_name=(f"{index:02d}_body_{step.function_name}_attempt_{attempt_index}"),
                 agent_runner=context.agent_runner,
+                usage_accumulator=context.usage_accumulator,
             )
         except _AgentRunError as exc:
             return _StepOutcome(
@@ -823,6 +883,7 @@ def _run_baseline_step(
                 workspace=context.workspace,
                 trace_step_name=f"{index:02d}_baseline_attempt_{attempt_index}",
                 agent_runner=context.agent_runner,
+                usage_accumulator=context.usage_accumulator,
             )
         except _AgentRunError as exc:
             return _StepOutcome(
@@ -1109,6 +1170,7 @@ def _run_diagnose_step(
                 workspace=context.workspace,
                 trace_step_name=f"{index:02d}_diagnose_attempt_{attempt_index}",
                 agent_runner=context.agent_runner,
+                usage_accumulator=context.usage_accumulator,
             )
         except _AgentRunError as exc:
             return _StepOutcome(
@@ -1753,6 +1815,7 @@ def _run_agent_sync(
     workspace: Path | None = None,
     trace_step_name: str | None = None,
     agent_runner: AgentRunner | None = None,
+    usage_accumulator: _UsageAccumulator | None = None,
 ) -> _AgentOutputT:
     """Invoke an :class:`AgentRunner` synchronously and unwrap the output.
 
@@ -1767,11 +1830,17 @@ def _run_agent_sync(
     resume-prep architectural hedge (architectural_decisions §12 #4).
     The fake-runner path skips trace persistence — fakes have no
     PydanticAI :class:`AgentRunResult` to serialize.
+
+    When ``usage_accumulator`` is supplied (real PydanticAI path only),
+    the run's :class:`pydantic_ai.usage.RunUsage` is folded into the
+    accumulator so the session.cost emit at workflow end reflects real
+    token / turn totals instead of zeros (closes Round-22 Bug 3).
     """
     if agent_runner is not None:
         # DI: tests / --fake-llm path substitutes a runner that returns
         # a canned output directly. No trace persistence (no
-        # AgentRunResult to project).
+        # AgentRunResult to project) and no usage accounting (the fake
+        # has no RunUsage).
         canned = agent_runner(agent, user_message, output_type)
         if not isinstance(canned, output_type):
             raise _AgentRunError(
@@ -1790,6 +1859,13 @@ def _run_agent_sync(
             f"agent returned output of type {type(output).__name__!r}, "
             f"expected {output_type.__name__!r}"
         )
+    if usage_accumulator is not None:
+        try:
+            run_usage = result.usage()
+        except (AttributeError, RuntimeError):
+            run_usage = None
+        if run_usage is not None:
+            usage_accumulator.add_run_usage(run_usage)
     if workspace is not None and trace_step_name is not None:
         _persist_message_history(workspace, trace_step_name, result)
     return output

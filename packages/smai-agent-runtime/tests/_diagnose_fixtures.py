@@ -48,6 +48,7 @@ class DiagnoseFakeAgentRunner:
         workspace: Any = None,
         trace_step_name: str | None = None,
         agent_runner: Any = None,
+        usage_accumulator: Any = None,
     ) -> BaseModel:
         # Sub-PR D's resume-prep surface (architectural_decisions §12 #4):
         # accept and ignore the trace-persistence kwargs. The fake does
@@ -55,8 +56,9 @@ class DiagnoseFakeAgentRunner:
         # to serialize); the unit test for that path lives in
         # ``test_entry.py``'s _persist_message_history coverage.
         # ``agent_runner`` is the thread-5 DI seam — also ignored (the
-        # fake IS the runner).
-        del workspace, trace_step_name, agent_runner
+        # fake IS the runner). ``usage_accumulator`` is the Round-22
+        # Bug-3 fix's seam — also ignored (the fake has no RunUsage).
+        del workspace, trace_step_name, agent_runner, usage_accumulator
         self.calls.append(
             CapturedDiagnoseCall(
                 user_message=user_message,

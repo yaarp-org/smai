@@ -56,6 +56,7 @@ from smai_agent_runtime.harness_builder._main import (  # noqa: PLC2701
     EXIT_STEP_FAILED,
     AgentRunner,
     _AgentRunError,  # pyright: ignore[reportPrivateUsage]
+    _emit_accumulated_session_cost,  # pyright: ignore[reportPrivateUsage]
     _emit_status_line,  # pyright: ignore[reportPrivateUsage]
     _fake_agent_runner,  # pyright: ignore[reportPrivateUsage]
     _input_summary_for,  # pyright: ignore[reportPrivateUsage]
@@ -67,6 +68,7 @@ from smai_agent_runtime.harness_builder._main import (  # noqa: PLC2701
     _run_ruff_check,  # pyright: ignore[reportPrivateUsage]
     _run_validation_step,  # pyright: ignore[reportPrivateUsage]
     _StepOutcome,  # pyright: ignore[reportPrivateUsage]
+    _UsageAccumulator,  # pyright: ignore[reportPrivateUsage]
     _write_status_summary,  # pyright: ignore[reportPrivateUsage]
 )
 from smai_agent_runtime.prompts import load_step_prompt
@@ -123,10 +125,16 @@ class _DispatchContext:
     status: StatusEmitter | None = None
     body_step_kinds: dict[int, str] | None = None
     agent_runner: AgentRunner | None = None
+    # Token-usage accumulator. Mirrors the harness_builder context's
+    # field; mutated by :func:`_run_agent_sync` on every real run and
+    # read at ``session.cost`` emit time (closes Round-22 Bug 3).
+    usage_accumulator: _UsageAccumulator | None = None
 
     def __post_init__(self) -> None:
         if self.body_step_kinds is None:
             self.body_step_kinds = {}
+        if self.usage_accumulator is None:
+            self.usage_accumulator = _UsageAccumulator()
 
 
 def main(args: argparse.Namespace) -> int:
@@ -262,14 +270,8 @@ def main(args: argparse.Namespace) -> int:
             # finding): ValidationStep failures fall through to
             # diagnose; everything else is terminal.
             if not isinstance(step, ValidationStep):
-                emitter.emit_session_cost(
-                    input_tokens=0,
-                    output_tokens=0,
-                    cache_read_tokens=0,
-                    cache_write_tokens=0,
-                    turn_count=0,
-                    tool_errors_fired=0,
-                )
+                assert context.usage_accumulator is not None  # noqa: S101 — __post_init__ guarantees
+                _emit_accumulated_session_cost(emitter, context.usage_accumulator)
                 emitter.emit_session_end(
                     outcome="failure",
                     last_completed_step_index=last_succeeded_index,
@@ -278,14 +280,8 @@ def main(args: argparse.Namespace) -> int:
                 _write_status_summary(workspace, args.entry_id, outcomes, succeeded=False)
                 return EXIT_STEP_FAILED
 
-    emitter.emit_session_cost(
-        input_tokens=0,
-        output_tokens=0,
-        cache_read_tokens=0,
-        cache_write_tokens=0,
-        turn_count=0,
-        tool_errors_fired=0,
-    )
+    assert context.usage_accumulator is not None  # noqa: S101 — __post_init__ guarantees
+    _emit_accumulated_session_cost(emitter, context.usage_accumulator)
     emitter.emit_session_end(
         outcome="success",
         last_completed_step_index=last_succeeded_index,
@@ -463,6 +459,7 @@ def _run_technique_body_generation_step(
                 workspace=context.workspace,
                 trace_step_name=f"{index:02d}_technique_attempt_{attempt_index}",
                 agent_runner=context.agent_runner,
+                usage_accumulator=context.usage_accumulator,
             )
         except _AgentRunError as exc:
             return _StepOutcome(
