@@ -89,19 +89,21 @@ _ABI_BY_RUNTIME_VERSION: dict[str, tuple[_AbiFunction, ...]] = {
     "1.0.0": (
         _AbiFunction(
             name="build_harness",
-            signature="def build_harness(config: dict) -> Harness:",
+            signature="def build_harness(config: dict) -> HarnessComponents:",
             write_to_path="harness/__init__.py",
         ),
         _AbiFunction(
             name="run_training_loop",
             signature=(
-                "def run_training_loop(harness: Harness, technique: Technique) -> TrainingResult:"
+                "def run_training_loop(components: HarnessComponents, config: dict, seed: int):"
             ),
             write_to_path="harness/__init__.py",
         ),
         _AbiFunction(
             name="evaluate",
-            signature="def evaluate(harness: Harness, result: TrainingResult) -> Metrics:",
+            signature=(
+                "def evaluate(trained_model, components: HarnessComponents, config: dict) -> dict:"
+            ),
             write_to_path="harness/__init__.py",
         ),
     ),

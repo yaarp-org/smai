@@ -174,6 +174,18 @@ class StepEndEvent(_BaseEvent):
     outcome: StepOutcome
     failure_reason: str | None = None
     duration_seconds: float = Field(..., ge=0.0)
+    captured_stderr: str | None = Field(
+        default=None,
+        description=(
+            "Tail of the subprocess stderr the step captured on failure. "
+            "Only ValidationStep populates this today (round-21 finding: "
+            "the validation subprocess's stderr was captured to "
+            "_StepOutcome.captured_stderr but never surfaced past the "
+            "mini-orchestrator, leaving the host parser blind to the "
+            "runner diagnostic). Mirrors the round-20 host-side "
+            "container-stderr pattern at one level deeper."
+        ),
+    )
 
 
 class StepTurnEvent(_BaseEvent):
@@ -295,6 +307,7 @@ class StatusEmitter:
         outcome: StepOutcome,
         duration_seconds: float,
         failure_reason: str | None = None,
+        captured_stderr: str | None = None,
     ) -> StepEndEvent:
         event = StepEndEvent(
             event_seq=self._next_seq(),
@@ -305,6 +318,7 @@ class StatusEmitter:
             outcome=outcome,
             failure_reason=failure_reason,
             duration_seconds=duration_seconds,
+            captured_stderr=captured_stderr,
         )
         self._write(event)
         return event

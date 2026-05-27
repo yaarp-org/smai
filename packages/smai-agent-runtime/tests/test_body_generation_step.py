@@ -55,7 +55,7 @@ def test_body_generation_step_writes_module_source(
     step = HarnessBuilderBodyGenerationStep(
         function_index=0,
         function_name="build_harness",
-        function_signature="def build_harness(config: dict) -> Harness:",
+        function_signature="def build_harness(config: dict) -> HarnessComponents:",
         write_to_path="harness/__init__.py",
     )
     outcome = _run_body_generation_step(step, index=0, context=_make_context(tmp_path))
@@ -97,7 +97,7 @@ def test_body_generation_step_carries_extension_points_into_bundle(
     step = HarnessBuilderBodyGenerationStep(
         function_index=0,
         function_name="build_harness",
-        function_signature="def build_harness(config: dict) -> Harness:",
+        function_signature="def build_harness(config: dict) -> HarnessComponents:",
         write_to_path="harness/__init__.py",
     )
     _run_body_generation_step(step, index=0, context=_make_context(tmp_path))
@@ -127,7 +127,7 @@ def test_body_generation_step_substitutive_factor_role(
     step = HarnessBuilderBodyGenerationStep(
         function_index=0,
         function_name="build_harness",
-        function_signature="def build_harness(config: dict) -> Harness:",
+        function_signature="def build_harness(config: dict) -> HarnessComponents:",
         write_to_path="harness/__init__.py",
     )
     _run_body_generation_step(step, index=0, context=_make_context(tmp_path))
@@ -157,7 +157,7 @@ def test_body_generation_step_retries_on_lint_failure(
     step = HarnessBuilderBodyGenerationStep(
         function_index=0,
         function_name="build_harness",
-        function_signature="def build_harness(config: dict) -> Harness:",
+        function_signature="def build_harness(config: dict) -> HarnessComponents:",
         write_to_path="harness/__init__.py",
     )
     outcome = _run_body_generation_step(step, index=0, context=_make_context(tmp_path))
@@ -189,7 +189,7 @@ def test_body_generation_step_budget_exhaustion(
     step = HarnessBuilderBodyGenerationStep(
         function_index=0,
         function_name="build_harness",
-        function_signature="def build_harness(config: dict) -> Harness:",
+        function_signature="def build_harness(config: dict) -> HarnessComponents:",
         write_to_path="harness/__init__.py",
     )
     outcome = _run_body_generation_step(step, index=0, context=_make_context(tmp_path))
@@ -218,7 +218,7 @@ def test_body_generation_step_function_name_mismatch_fails(
     step = HarnessBuilderBodyGenerationStep(
         function_index=0,
         function_name="build_harness",
-        function_signature="def build_harness(config: dict) -> Harness:",
+        function_signature="def build_harness(config: dict) -> HarnessComponents:",
         write_to_path="harness/__init__.py",
     )
     outcome = _run_body_generation_step(step, index=0, context=_make_context(tmp_path))

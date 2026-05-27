@@ -395,7 +395,7 @@ def test_body_generation_agent_does_not_register_read_file(
     step = HarnessBuilderBodyGenerationStep(
         function_index=0,
         function_name="build_harness",
-        function_signature="def build_harness(config: dict) -> Harness:",
+        function_signature="def build_harness(config: dict) -> HarnessComponents:",
         write_to_path="harness/__init__.py",
     )
     _run_body_generation_step(step, index=0, context=_make_context(tmp_path))

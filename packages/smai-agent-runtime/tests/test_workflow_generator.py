@@ -269,3 +269,71 @@ def test_step_registry_contains_every_concrete_step_type() -> None:
         "apply_review_feedback",
     }
     assert set(STEP_REGISTRY.keys()) == expected
+
+
+# === ABI drift guard (round-21) ==============================================
+
+
+def test_abi_function_signatures_use_real_smai_runtime_type_names() -> None:
+    """Round-21 finding (2026-05-26): the generator originally hardcoded
+    function signatures using ``Harness`` / ``Technique`` /
+    ``TrainingResult`` / ``Metrics`` — none of which the ``smai_runtime``
+    package exports. The agent dutifully wrote ``from smai_runtime
+    import Harness`` and the validation subprocess crashed with
+    ``ImportError``.
+
+    Drift guard: every type name referenced in
+    ``_ABI_BY_RUNTIME_VERSION[RUNTIME_TEMPLATE_VERSION]`` must be one of
+    (1) a Python built-in (``dict``, ``int``, ``str``, ``None``,
+    ``Any``, ...), (2) a public export of ``smai_runtime``, or (3) a
+    parameter name (not a type annotation at all, e.g. the trailing
+    ``trained_model`` argument).
+
+    The test parses each signature, extracts type-annotation tokens,
+    and asserts each is either a builtin or importable from
+    ``smai_runtime``.
+    """
+    import re  # noqa: PLC0415
+
+    import smai_runtime  # noqa: PLC0415
+    from smai_agent_runtime.workflow.generator import (  # noqa: PLC0415
+        _ABI_BY_RUNTIME_VERSION,
+    )
+
+    exported = set(getattr(smai_runtime, "__all__", []))
+    if not exported:
+        exported = {name for name in dir(smai_runtime) if not name.startswith("_")}
+    builtins = {
+        "dict",
+        "list",
+        "tuple",
+        "set",
+        "int",
+        "float",
+        "str",
+        "bool",
+        "bytes",
+        "None",
+        "Any",
+        "object",
+    }
+
+    # Match ``: TypeName`` (parameter type) or ``-> TypeName`` (return type).
+    # Type names start with a letter and may include underscores or further
+    # qualifiers; subscripted generics (``dict[str, int]``) are stripped to
+    # the base.
+    type_token_re = re.compile(r"(?:->|:)\s*([A-Za-z_][A-Za-z0-9_]*)")
+
+    abi = _ABI_BY_RUNTIME_VERSION[RUNTIME_TEMPLATE_VERSION]
+    failures: list[str] = []
+    for fn in abi:
+        for token in type_token_re.findall(fn.signature):
+            if token in builtins or token in exported:
+                continue
+            failures.append(
+                f"function {fn.name!r} references type {token!r} which is "
+                f"neither a Python builtin nor a public export of smai_runtime; "
+                f"signature: {fn.signature!r}"
+            )
+
+    assert not failures, "\n".join(failures)

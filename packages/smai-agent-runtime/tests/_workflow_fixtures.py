@@ -57,25 +57,31 @@ def make_contract(
 V1_ABI: tuple[_AbiFunction, ...] = (
     _AbiFunction(
         name="build_harness",
-        signature="def build_harness(config: dict) -> Harness:",
+        signature="def build_harness(config: dict) -> HarnessComponents:",
         write_to_path="harness/__init__.py",
     ),
     _AbiFunction(
         name="run_training_loop",
         signature=(
-            "def run_training_loop(harness: Harness, technique: Technique) -> TrainingResult:"
+            "def run_training_loop(components: HarnessComponents, config: dict, seed: int):"
         ),
         write_to_path="harness/__init__.py",
     ),
     _AbiFunction(
         name="evaluate",
-        signature="def evaluate(harness: Harness, result: TrainingResult) -> Metrics:",
+        signature=(
+            "def evaluate(trained_model, components: HarnessComponents, config: dict) -> dict:"
+        ),
         write_to_path="harness/__init__.py",
     ),
 )
 """Mirror of the generator's v1 ABI — used by 3-function-shape tests
 that want to assert against the same names without coupling to the
-generator's internal table."""
+generator's internal table. Type names match the real ``smai_runtime``
+exports (round-21 finding: the prior values used ``Harness`` /
+``Technique`` / ``TrainingResult`` / ``Metrics``, none of which the
+runtime exports — the agent produced ``from smai_runtime import
+Harness`` and validation crashed with ``ImportError``)."""
 
 
 SYNTHETIC_5_ABI: tuple[_AbiFunction, ...] = V1_ABI + (
@@ -86,7 +92,7 @@ SYNTHETIC_5_ABI: tuple[_AbiFunction, ...] = V1_ABI + (
     ),
     _AbiFunction(
         name="postrun_telemetry",
-        signature="def postrun_telemetry(result: TrainingResult) -> dict[str, float]:",
+        signature="def postrun_telemetry(metrics: dict) -> dict[str, float]:",
         write_to_path="harness/__init__.py",
     ),
 )

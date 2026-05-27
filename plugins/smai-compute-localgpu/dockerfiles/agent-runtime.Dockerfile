@@ -18,8 +18,25 @@
 # is the third image in the smai-compute-localgpu lineup per D4 of the
 # agent-layer refactor design notes.
 #
+# Round-21 (2026-05-26) composition: the agent-runtime image is now a
+# strict superset of ``smai-runtime-cpu:dev`` — it inherits the ML stack
+# (torch / torchvision / numpy / scipy / einops / timm) plus the
+# baked-in smai-core + smai-runtime packages, and adds the agent
+# substrate on top (PydanticAI + provider SDKs + ruff + smai-agent-
+# runtime). This matches architectural_decisions.md §1's design intent
+# ("validation subprocess inside the agent sandbox"): the validation
+# subprocess ``python experiment.py --mode validation`` imports the
+# harness module, which transitively imports ``torch`` — so the
+# sandbox must carry the ML deps the harness expects. Prior to round 21
+# this image was a lean PydanticAI-only base and the validation
+# subprocess crashed with ``ModuleNotFoundError: No module named
+# 'torch'`` on the first attempt with a real ML harness.
+#
 # Build with::
 #
+#     # The smai-runtime-cpu:dev base must be built first.
+#     docker build -t smai-runtime-cpu:dev \
+#         -f plugins/smai-compute-localgpu/dockerfiles/runtime-cpu.Dockerfile .
 #     docker build -t smai-agent-runtime:dev \
 #         -f plugins/smai-compute-localgpu/dockerfiles/agent-runtime.Dockerfile .
 #
@@ -32,77 +49,58 @@
 # code 64 (EXIT_NOT_IMPLEMENTED); a non-stub exit (0 success or 70
 # crash) indicates a downstream wiring bug.
 #
-# Linux bind-mount caveat (shared with the other two images): the
+# Linux bind-mount caveat (inherited from the base image): the
 # container runs as the non-root ``smai`` user (uid 1000). On Linux a
 # workspace directory bind-mounted at ``/workspace`` must be writable by
 # uid 1000 (``chmod -R a+rwX`` it, or run smai as uid 1000); on macOS /
 # Docker Desktop the virtiofs mount is writable regardless of host uid.
 #
-# Round-19 install discipline applies verbatim: smai-core then
-# smai-runtime then smai-agent-runtime, pip-installed in dep-graph
-# order because the workspace packages are not on PyPI. The
-# smai-runtime dep is load-bearing — the mini-orchestrator imports
-# ``smai_runtime.runner`` for the validation smoke and the
-# ``HarnessAPIManifest`` shape for the agent-reasoning input bundles
-# (per D4 §3).
+# Round-19 install discipline applies verbatim: smai-core, smai-runtime
+# (both inherited from the base) plus smai-agent-runtime (added here)
+# are pip-installed in dep-graph order because the workspace packages
+# are not on PyPI. The smai-runtime dep is load-bearing — the mini-
+# orchestrator imports ``smai_runtime.runner`` for the validation smoke
+# and the ``HarnessAPIManifest`` shape for the agent-reasoning input
+# bundles (per D4 §3).
 
-FROM python:3.11-slim-bookworm
+FROM smai-runtime-cpu:dev
 
-ENV DEBIAN_FRONTEND=noninteractive
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        ca-certificates=\* \
-        curl=\* \
-        git=\* \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
-
-# Pin pip / setuptools / wheel so workspace-package + PydanticAI wheel
-# resolution is reproducible across rebuilds.
-RUN pip install --no-cache-dir --upgrade \
-    pip==24.3.1 \
-    setuptools==75.6.0 \
-    wheel==0.45.1
+# Inherited from smai-runtime-cpu:dev: python:3.11-slim-bookworm base,
+# pip 24.3.1 / setuptools 75.6.0 / wheel 0.45.1, the ML stack
+# (torch 2.5.1 / torchvision 0.20.1 / numpy 2.1.3 / scipy 1.14.1 /
+# einops 0.8.0 / timm 1.0.12), smai-core, smai-runtime, the ``smai``
+# user, and ``WORKDIR /workspace``. We add the agent substrate on top.
+#
+# Switch back to root temporarily for the pip installs; the base image
+# ends with ``USER smai`` so the layer additions need root.
+USER root
 
 # Agent substrate + provider SDKs. Pinned per D4 §3 — PydanticAI is
 # pre-1.0-numbered but moving fast; provider SDK majors do break
 # compatibly only across long horizons. Bumps land in this Dockerfile
 # and are reviewed (same discipline as the runtime Dockerfiles'
 # torch / numpy / etc. pins).
+#
+# ``ruff`` is the lint-on-write gate the mini-orchestrator runs after
+# each body-generation step (per architectural_decisions §6 / Step 4
+# task 7); without it on PATH the workflow loops on
+# "ruff invocation error: ruff binary not on PATH" until the lint-retry
+# budget exhausts (round-21 finding 2026-05-26).
 # hadolint ignore=DL3013
 RUN pip install --no-cache-dir \
         pydantic-ai==1.102.0 \
         anthropic==0.97.0 \
         openai==2.33.0 \
-        boto3==1.42.97
+        boto3==1.42.97 \
+        ruff==0.15.12
 
-# smai-core + smai-runtime + smai-agent-runtime per Round 19. Required
-# because the mini-orchestrator inside this image imports
-# ``smai_runtime.runner`` (validation smoke) and the ``HarnessAPIManifest``
-# shape (agent-reasoning input bundles), and pulls workspace types from
-# smai-core. Order matters: pip resolves the workspace-only deps locally
-# only when the earlier package is already installed (the workspace
-# packages are not published to PyPI). Non-editable install (smaller
-# layer, no ``__editable__`` indirection); source removed in the same
-# RUN so it does not survive in the image layer. Build context is the
-# repo root (see header build command).
-COPY packages/smai-core/ /tmp/smai-core/
-COPY packages/smai-runtime/ /tmp/smai-runtime/
+# smai-agent-runtime on top of the inherited smai-core + smai-runtime.
+# Workspace mount-point and ``smai`` user already set by the base.
 COPY packages/smai-agent-runtime/ /tmp/smai-agent-runtime/
-RUN pip install --no-cache-dir /tmp/smai-core \
-    && pip install --no-cache-dir /tmp/smai-runtime \
-    && pip install --no-cache-dir /tmp/smai-agent-runtime \
-    && rm -rf /tmp/smai-core /tmp/smai-runtime /tmp/smai-agent-runtime
+RUN pip install --no-cache-dir /tmp/smai-agent-runtime \
+    && rm -rf /tmp/smai-agent-runtime
 
-# Workspace mount-point per ``10-runtime-and-templates.md`` §8.5 —
-# Step 4 of the refactor will bind-mount the agent's per-session
-# workspace here via the host-side ``stage_workspace`` Protocol.
-WORKDIR /workspace
-
-# Default to a non-root user — same rationale as the runtime images:
-# an agent's writes into ``/workspace`` produce files owned by a UID
-# that maps cleanly to the host.
-RUN useradd --create-home --shell /bin/bash smai
+# Restore the non-root user the base image established.
 USER smai
 
 # No CMD / ENTRYPOINT — the substrate sets the command via

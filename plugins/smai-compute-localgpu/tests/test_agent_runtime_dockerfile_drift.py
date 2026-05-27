@@ -36,50 +36,52 @@ def test_agent_runtime_dockerfile_exists() -> None:
 
 
 def test_agent_runtime_installs_workspace_packages_in_dep_order() -> None:
-    """Per Round 19 + D4 §3 the agent-runtime image must COPY + pip
-    install smai-core, then smai-runtime, then smai-agent-runtime.
-    Order is load-bearing: pip resolves each workspace-only dep locally
-    only when the earlier package is already installed (the workspace
-    packages are not published to PyPI).
+    """Per Round 19 + D4 §3 the agent-runtime image must end up with
+    smai-core, smai-runtime, AND smai-agent-runtime all baked in.
+    Round-21 (2026-05-26) refactored the Dockerfile to ``FROM
+    smai-runtime-cpu:dev``, which means the first two are inherited
+    from the base image (whose sibling drift-guards pin them in place);
+    only smai-agent-runtime is added here directly.
+
+    Guard:
+    * ``FROM smai-runtime-cpu:dev`` is present (the base carries
+      smai-core + smai-runtime per its own drift-guards).
+    * ``COPY packages/smai-agent-runtime/ /tmp/smai-agent-runtime/`` is
+      present (the layer added here).
+    * ``pip install --no-cache-dir /tmp/smai-agent-runtime`` is present
+      and follows the COPY line.
     """
     content = _AGENT_DOCKERFILE.read_text()
-    for package_path in (
-        "COPY packages/smai-core/ /tmp/smai-core/",
-        "COPY packages/smai-runtime/ /tmp/smai-runtime/",
-        "COPY packages/smai-agent-runtime/ /tmp/smai-agent-runtime/",
-    ):
-        assert package_path in content, (
-            f"agent-runtime.Dockerfile: missing {package_path!r} (Round 19 + D4 §3)"
-        )
-    core_install_pos = content.find("pip install --no-cache-dir /tmp/smai-core")
-    runtime_install_pos = content.find("pip install --no-cache-dir /tmp/smai-runtime")
-    agent_install_pos = content.find("pip install --no-cache-dir /tmp/smai-agent-runtime")
-    assert core_install_pos != -1, (
-        "agent-runtime.Dockerfile: missing smai-core pip install (Round 19)"
+    assert "FROM smai-runtime-cpu:dev" in content, (
+        "agent-runtime.Dockerfile: must inherit from smai-runtime-cpu:dev "
+        "so smai-core + smai-runtime + the ML stack land transitively "
+        "(round-21 composition)"
     )
-    assert runtime_install_pos != -1, (
-        "agent-runtime.Dockerfile: missing smai-runtime pip install (Round 19)"
+    assert "COPY packages/smai-agent-runtime/ /tmp/smai-agent-runtime/" in content, (
+        "agent-runtime.Dockerfile: missing COPY for smai-agent-runtime "
+        "(D4 §3 — the agent runtime package itself must land in this layer)"
     )
-    assert agent_install_pos != -1, (
+    copy_pos = content.find("COPY packages/smai-agent-runtime/ /tmp/smai-agent-runtime/")
+    install_pos = content.find("pip install --no-cache-dir /tmp/smai-agent-runtime")
+    assert install_pos != -1, (
         "agent-runtime.Dockerfile: missing smai-agent-runtime pip install (D4 §3)"
     )
-    assert core_install_pos < runtime_install_pos < agent_install_pos, (
-        "agent-runtime.Dockerfile: install order must be smai-core → "
-        "smai-runtime → smai-agent-runtime (pip resolves the workspace-"
-        "only deps locally only when each earlier package is already "
-        "installed)"
+    assert copy_pos < install_pos, (
+        "agent-runtime.Dockerfile: COPY must precede pip install for smai-agent-runtime"
     )
 
 
 def test_agent_runtime_does_not_leave_source_behind() -> None:
     """The COPY-into-/tmp pattern is only acceptable if the same RUN
-    layer removes the source — otherwise the final image carries each
+    layer removes the source — otherwise the final image carries the
     package twice (once in /tmp, once installed). Pin the ``rm -rf``
     cleanup so a future edit that splits the RUN into separate layers
-    can't silently inflate the image."""
+    can't silently inflate the image. Round-21: only smai-agent-runtime
+    is COPY'd into this layer (smai-core + smai-runtime are inherited
+    from the base); the rm targets only what this layer added."""
     content = _AGENT_DOCKERFILE.read_text()
-    assert "rm -rf /tmp/smai-core /tmp/smai-runtime /tmp/smai-agent-runtime" in content, (
-        "agent-runtime.Dockerfile: workspace sources must be removed in "
+    assert "rm -rf /tmp/smai-agent-runtime" in content, (
+        "agent-runtime.Dockerfile: workspace source must be removed in "
         "the same RUN as the pip install (Round 19, image-size hygiene)"
     )
 
@@ -97,16 +99,25 @@ def test_agent_runtime_pins_provider_sdks() -> None:
 
 
 def test_agent_runtime_uses_cpu_only_base() -> None:
-    """Per D4 §1, the agent image is CPU-only and runs on the lean
-    multi-arch python:3.11-slim-bookworm base — no CUDA runtime. A future
-    edit pointing at the nvidia/cuda base would silently 5-8x the image
+    """Per D4 §1, the agent image is CPU-only and runs on a lean
+    multi-arch CPU base — no CUDA runtime. Round-21 (2026-05-26)
+    refactored the agent-runtime image to inherit from
+    ``smai-runtime-cpu:dev``, which itself is on the lean
+    ``python:3.11-slim-bookworm`` base with CPU-only torch wheels (its
+    own drift-guard pins that). A future edit pointing at the
+    nvidia/cuda base for either image would silently 5-8x the image
     size for no consumer (validation smokes are CPU per the §6
-    invariant; GPU seed runs go to the separate runtime images).
+    invariant; GPU seed runs go to the separate runtime.Dockerfile).
     """
     content = _AGENT_DOCKERFILE.read_text()
-    assert "FROM python:3.11-slim-bookworm" in content, (
-        "agent-runtime.Dockerfile: must use python:3.11-slim-bookworm "
-        "base (D4 §1 — CPU-only, multi-arch)"
+    # Round-21 composition: agent-runtime is FROM smai-runtime-cpu, not
+    # FROM python:3.11-slim-bookworm directly. The base image carries
+    # the python:3.11-slim-bookworm bottom of the stack per its own
+    # drift-guard test (``test_dockerfile_drift.py``).
+    assert "FROM smai-runtime-cpu:dev" in content, (
+        "agent-runtime.Dockerfile: must inherit from smai-runtime-cpu:dev "
+        "(round-21 composition; the base carries the python:3.11-slim-bookworm "
+        "+ CPU-only torch stack)"
     )
     assert "nvidia/cuda" not in content, (
         "agent-runtime.Dockerfile: agent sandbox is CPU-only by the §6 invariant; no CUDA base"

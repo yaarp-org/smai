@@ -284,30 +284,38 @@ def main(args: argparse.Namespace) -> int:
             outcome="success" if outcome.succeeded else "failure",
             duration_seconds=elapsed,
             failure_reason=outcome.error if not outcome.succeeded else None,
+            captured_stderr=outcome.captured_stderr,
         )
 
         if outcome.succeeded:
             last_succeeded_index = index
         else:
-            # Always cap the run with a session.cost (zero-counts here;
-            # the agent loop's real cost surfacing is sub-PR D's host-
-            # side parser surface) plus a session.end carrying the
-            # failure reason.
-            emitter.emit_session_cost(
-                input_tokens=0,
-                output_tokens=0,
-                cache_read_tokens=0,
-                cache_write_tokens=0,
-                turn_count=0,
-                tool_errors_fired=0,
-            )
-            emitter.emit_session_end(
-                outcome="failure",
-                last_completed_step_index=last_succeeded_index,
-                failure_reason=outcome.error or "unknown",
-            )
-            _write_status_summary(workspace, args.cg_id, outcomes, succeeded=False)
-            return EXIT_STEP_FAILED
+            # Round-21 finding (2026-05-26): the outer loop used to
+            # fail-fast on any failure, which prevented the diagnose
+            # step (architectural_decisions §6 step 7) from ever firing
+            # after a validation failure. Diagnose's anchor-step-index
+            # pattern already handles "anchor succeeded → pass through"
+            # internally; the outer loop only needs to keep iterating
+            # past a ValidationStep failure so the next-in-line
+            # DiagnoseOnFailureStep gets its chance. Body-gen / baseline
+            # / manifest-emit failures stay fail-fast since no
+            # downstream step is designed to handle them.
+            if not isinstance(step, ValidationStep):
+                emitter.emit_session_cost(
+                    input_tokens=0,
+                    output_tokens=0,
+                    cache_read_tokens=0,
+                    cache_write_tokens=0,
+                    turn_count=0,
+                    tool_errors_fired=0,
+                )
+                emitter.emit_session_end(
+                    outcome="failure",
+                    last_completed_step_index=last_succeeded_index,
+                    failure_reason=outcome.error or "unknown",
+                )
+                _write_status_summary(workspace, args.cg_id, outcomes, succeeded=False)
+                return EXIT_STEP_FAILED
 
     emitter.emit_session_cost(
         input_tokens=0,
@@ -604,7 +612,17 @@ def _run_body_generation_step(
     current_module_source = target_path.read_text() if target_path.exists() else ""
 
     extension_points = _resolve_extension_points(context.contract)
-    harness_api_reference = _read_or_empty(context.workspace / "harness_api_reference.md")
+    # Round-21 finding (2026-05-26): the host stages the reference at
+    # ``contracts/harness_api_reference.md`` (see
+    # ``smai_agents/agents/harness_api_reference.py``
+    # ``WORKSPACE_HARNESS_API_REFERENCE_PATH``). The original sandbox-
+    # side path was the workspace root, so the reference was always
+    # empty — and the agent hallucinated module symbols like
+    # ``TrainingConfig`` / ``model_registry`` that don't exist in
+    # ``smai_runtime``, blowing the validation subprocess.
+    harness_api_reference = _read_or_empty(
+        context.workspace / "contracts" / "harness_api_reference.md"
+    )
 
     provider, model_id = get_model_for_step(
         _ROLE,
