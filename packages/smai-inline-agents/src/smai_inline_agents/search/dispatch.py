@@ -132,16 +132,19 @@ def build_search_deps(
     # --- URL fetcher ----------------------------------------------------------
     fetcher: UrlFetcher
     jina_api_key = os.environ.get(config.providers.jina_reader.api_key_env)
+    fetch_allowlist = tuple(config.fetch_allowlist)
     match config.url_fetch:
         case "direct":
             fetcher = DirectThenJinaFetcher(
                 enable_jina_fallback=True,
                 jina_api_key=jina_api_key,
+                fetch_allowlist=fetch_allowlist,
             )
         case "direct_only":
             fetcher = DirectThenJinaFetcher(
                 enable_jina_fallback=False,
                 jina_api_key=jina_api_key,
+                fetch_allowlist=fetch_allowlist,
             )
         case "jina_only":
             fetcher = JinaOnlyFetcher(api_key=jina_api_key)
@@ -157,7 +160,7 @@ def build_search_deps(
         ),
         budgets=BudgetTracker.from_config(config.budgets),
         session_id=session_id,
-        fetch_allowlist=tuple(config.fetch_allowlist),
+        fetch_allowlist=fetch_allowlist,
         web_provider=web,
     )
 

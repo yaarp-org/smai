@@ -19,11 +19,14 @@ jina_only`` is configured.
 
 from __future__ import annotations
 
+from urllib.parse import quote
+
 import httpx
 
 from smai_inline_agents.search.types import FetchedDocument
 
-_JINA_BASE = "https://r.jina.ai/"
+JINA_HOST = "r.jina.ai"
+_JINA_BASE = f"https://{JINA_HOST}/"
 
 # Retention cap for ``FetchedDocument.raw`` per design note §2.
 _RAW_RETENTION_BYTES = 100 * 1024  # 100 KB
@@ -83,7 +86,12 @@ async def jina_fetch(
     headers: dict[str, str] = {}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
-    target = _JINA_BASE + url
+    # Percent-encode the full target URL before concat: raw ``#`` / ``?``
+    # in ``url`` would otherwise shift Jina's interpretation (e.g. ``#``
+    # would be parsed as a fragment of the r.jina.ai URL rather than as
+    # part of the path argument). ``safe=""`` encodes everything;
+    # Jina's reader accepts the fully-encoded form.
+    target = _JINA_BASE + quote(url, safe="")
     response = await client.get(target, headers=headers)
     response.raise_for_status()
     body = response.text
@@ -92,6 +100,7 @@ async def jina_fetch(
 
 
 __all__ = [
+    "JINA_HOST",
     "JinaOnlyFetcher",
     "jina_fetch",
 ]

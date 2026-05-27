@@ -25,8 +25,8 @@ from typing import Literal
 
 import httpx
 
-from smai_inline_agents.search.errors import ContentExtractionFailed
-from smai_inline_agents.search.providers.jina import jina_fetch
+from smai_inline_agents.search.errors import ContentExtractionFailed, UrlNotAllowlisted
+from smai_inline_agents.search.providers.jina import JINA_HOST, jina_fetch
 from smai_inline_agents.search.types import FetchedDocument
 
 _RAW_RETENTION_BYTES = 100 * 1024  # 100 KB; matches jina.py.
@@ -55,15 +55,52 @@ class DirectThenJinaFetcher:
         jina_client: httpx.AsyncClient | None = None,
         jina_api_key: str | None = None,
         timeout_seconds: float = 30.0,
+        fetch_allowlist: tuple[str, ...] | None = None,
     ) -> None:
         self._enable_jina = enable_jina_fallback
+        self._fetch_allowlist = fetch_allowlist
         self._owns_client = client is None
         self._client = client or httpx.AsyncClient(timeout=timeout_seconds, follow_redirects=True)
+        # D11: install a request event hook that re-validates the host
+        # of every outbound request -- including redirect targets httpx
+        # is about to follow -- against the allowlist. Without this, a
+        # 302 from an allowlisted host to a non-allowlisted one would
+        # silently exfiltrate (the dispatcher only validates the
+        # initial URL).
+        if fetch_allowlist is not None:
+            self._client.event_hooks.setdefault("request", []).append(
+                self._validate_request_host,
+            )
         # Share an httpx client for the Jina fallback so we don't open a
         # second connection pool per session.
         self._owns_jina_client = jina_client is None
         self._jina_client = jina_client if jina_client is not None else self._client
         self._jina_api_key = jina_api_key
+
+    async def _validate_request_host(self, request: httpx.Request) -> None:
+        """httpx request hook: re-validate ``request.url.host`` against
+        the operator allowlist before httpx dispatches it.
+
+        Fires on the initial GET (redundant with the dispatcher's check
+        but cheap) AND on every redirect httpx is about to follow.
+        Raises :class:`UrlNotAllowlisted` to abort the redirect chain
+        before any data is sent.
+
+        The Jina Reader host is allowed unconditionally: it's the
+        fallback path's destination, never an attacker-supplied URL.
+        The dispatcher never sees this host because the fetcher
+        constructs the Jina URL internally.
+        """
+        if self._fetch_allowlist is None:
+            return
+        host = (request.url.host or "").lower()
+        if host == JINA_HOST:
+            return
+        for entry in self._fetch_allowlist:
+            entry_l = entry.lower()
+            if host == entry_l or host.endswith("." + entry_l):
+                return
+        raise UrlNotAllowlisted(host, self._fetch_allowlist)
 
     async def aclose(self) -> None:
         if self._owns_client:

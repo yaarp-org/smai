@@ -66,7 +66,7 @@ from smai_inline_agents.search.providers.direct_fetch import (
     _extract_title,
     _html_to_text,
 )
-from smai_inline_agents.search.providers.jina import JinaOnlyFetcher
+from smai_inline_agents.search.providers.jina import JinaOnlyFetcher, jina_fetch
 from smai_inline_agents.search.providers.openalex import (
     OpenAlexProvider,
     _reconstruct_abstract,
@@ -631,6 +631,39 @@ async def test_egress_log_close_is_idempotent() -> None:
     assert len(store.puts) == 1
 
 
+async def test_egress_log_close_swallows_artifact_store_failure() -> None:
+    """The audit log must not break the planner when the ArtifactStore
+    put fails. Guards the silent-catch in :meth:`EgressLogger.close`
+    against future narrowing -- if someone tightens that ``except`` to
+    a specific exception class, this test catches it."""
+
+    class FailingStore:
+        async def put(
+            self,
+            key: str,
+            data: bytes,
+            content_type: str | None = None,
+        ) -> None:
+            raise RuntimeError("storage backend down")
+
+    logger = EgressLogger.open(
+        "sess-fail",
+        proposal_id="prop-fail",
+        artifact_store=FailingStore(),
+        enabled=True,
+    )
+    await logger.log(
+        type="web_search",
+        provider="tavily",
+        query="q",
+        max_results=5,
+        result_count=1,
+        duration_ms=10,
+    )
+    # Must NOT propagate the put failure.
+    await logger.close()
+
+
 async def test_egress_log_session_fallback_key_when_no_proposal_id() -> None:
     store = FakeArtifactStore()
     logger = EgressLogger.open(
@@ -918,6 +951,100 @@ async def test_jina_only_fetcher_returns_markdown() -> None:
     assert doc.source == "jina_reader"
     assert doc.content_type == "markdown"
     assert "md content" in doc.text
+    await client.aclose()
+
+
+# =============================================================================
+# Redirect re-validation (D11 follow-up): the dispatcher only sees the
+# initial URL; without an event hook on the httpx client, a 302 to a
+# non-allowlisted host would silently exfiltrate. Cover both the rejected
+# redirect path and the permitted same-allowlist redirect path.
+# =============================================================================
+
+
+async def test_direct_fetcher_redirect_to_non_allowlisted_host_rejected() -> None:
+    seen_hosts: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_hosts.append(request.url.host)
+        if request.url.host == "arxiv.org":
+            return httpx.Response(
+                302,
+                headers={"location": "https://evil.example.com/exfil"},
+            )
+        # Hook should fire before the redirect target reaches the
+        # transport; this branch must never execute.
+        return httpx.Response(200, text="should-never-be-returned")
+
+    transport = httpx.MockTransport(handler)
+    client = httpx.AsyncClient(transport=transport, follow_redirects=True)
+    fetcher = DirectThenJinaFetcher(
+        enable_jina_fallback=False,
+        client=client,
+        fetch_allowlist=("arxiv.org",),
+    )
+    with pytest.raises(UrlNotAllowlisted) as exc_info:
+        await fetcher.fetch("https://arxiv.org/abs/1")
+    assert exc_info.value.host == "evil.example.com"
+    # Initial request reached the transport; the redirect target did NOT.
+    assert seen_hosts == ["arxiv.org"]
+    await client.aclose()
+
+
+async def test_direct_fetcher_redirect_to_allowlisted_host_followed() -> None:
+    seen_hosts: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_hosts.append(request.url.host)
+        if request.url.host == "github.com":
+            return httpx.Response(
+                302,
+                headers={"location": "https://raw.githubusercontent.com/o/r/main/file"},
+            )
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/html"},
+            text="<html><title>RAW</title><body>final</body></html>",
+        )
+
+    transport = httpx.MockTransport(handler)
+    client = httpx.AsyncClient(transport=transport, follow_redirects=True)
+    fetcher = DirectThenJinaFetcher(
+        enable_jina_fallback=False,
+        client=client,
+        fetch_allowlist=("github.com", "raw.githubusercontent.com"),
+    )
+    doc = await fetcher.fetch("https://github.com/o/r/blob/main/file")
+    assert doc.source == "direct"
+    assert "final" in doc.text
+    assert seen_hosts == ["github.com", "raw.githubusercontent.com"]
+    await client.aclose()
+
+
+async def test_jina_url_escapes_special_chars() -> None:
+    captured: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(str(request.url))
+        return httpx.Response(200, text="# md")
+
+    transport = httpx.MockTransport(handler)
+    client = httpx.AsyncClient(transport=transport)
+    # URL with fragment + query + a pre-encoded sequence. Raw concat
+    # would let the ``#`` get parsed as a fragment of the r.jina.ai URL
+    # rather than as part of the target path argument.
+    target_url = "https://arxiv.org/abs/1?foo=bar%20baz#frag"
+    await jina_fetch(client, target_url, api_key=None)
+    assert len(captured) == 1
+    sent = captured[0]
+    assert sent.startswith("https://r.jina.ai/")
+    after_prefix = sent[len("https://r.jina.ai/") :]
+    # Fragment and query separators in the user-supplied URL must be
+    # percent-encoded so Jina sees a single path argument.
+    assert "#" not in after_prefix
+    assert "?" not in after_prefix
+    assert "%23" in after_prefix  # encoded '#'
+    assert "%3F" in after_prefix  # encoded '?'
     await client.aclose()
 
 
