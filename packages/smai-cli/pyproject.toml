@@ -6,7 +6,7 @@ requires-python = ">=3.11"
 dependencies = [
     "smai-core",
     "smai-orchestrator",
-    "smai-agents",
+    "smai-inline-agents",
     "smai-runtime",
     "smai-api",
     "smai-llm-bedrock",
@@ -27,7 +27,7 @@ smai = "smai_cli.main:app"
 [tool.uv.sources]
 smai-core = { workspace = true }
 smai-orchestrator = { workspace = true }
-smai-agents = { workspace = true }
+smai-inline-agents = { workspace = true }
 smai-runtime = { workspace = true }
 smai-api = { workspace = true }
 smai-llm-bedrock = { workspace = true }

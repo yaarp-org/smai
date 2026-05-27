@@ -148,16 +148,16 @@ def test_rule2_pass_with_allowed_imports(tmp_path: Path) -> None:
 
 
 def test_rule2_fail_on_pipeline_import(tmp_path: Path) -> None:
-    sources = {"bad.py": "from smai_agents import Planner\n"}
+    sources = {"bad.py": "from smai_inline_agents import Planner\n"}
     _make_smai_core(tmp_path, sources=sources)
     violations = check_deps.check_smai_core_imports(tmp_path)
     assert len(violations) == 1
     v = violations[0]
     assert v.rule == "smai-core-imports"
-    assert "smai_agents" in v.detail
+    assert "smai_inline_agents" in v.detail
     assert v.location.endswith("bad.py:1")
     rendered = v.render()
-    assert "from smai_agents import Planner" in rendered
+    assert "from smai_inline_agents import Planner" in rendered
     assert "DEC-029" in rendered
 
 
@@ -210,13 +210,13 @@ def test_rule3_fail_on_plugin_pipeline_dep(tmp_path: Path) -> None:
         tmp_path,
         "smai-store-sqlite",
         module="smai_store_sqlite",
-        deps=["smai-core", "smai-agents>=0.1"],
+        deps=["smai-core", "smai-inline-agents>=0.1"],
     )
     violations = check_deps.check_plugin_boundaries(tmp_path)
     assert len(violations) == 1
     v = violations[0]
     assert v.rule == "plugin-deps"
-    assert "smai-agents" in v.detail
+    assert "smai-inline-agents" in v.detail
     assert "smai-store-sqlite" in v.detail
     assert "implementation_plan.md" in v.reason
 

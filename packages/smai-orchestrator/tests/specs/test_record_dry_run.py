@@ -4,7 +4,7 @@ Unit tests against
 :func:`smai_orchestrator.specs._record_dry_run.dry_run_record_construction`.
 End-to-end behavior — the planner's ``finalize_plan`` rejecting a buffer
 whose projected records would fail Pydantic — lives in the planner test
-suite (``packages/smai-agents/tests/test_planner.py``); this file covers
+suite (``packages/smai-inline-agents/tests/test_planner.py``); this file covers
 the helper in isolation so unit-level regressions on either layer
 (methodology projection vs record dry-run) surface independently.
 """

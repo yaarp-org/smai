@@ -22,13 +22,13 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
-from smai_agents.agents.technique_implementer import (
+from smai_core.plugins import ArtifactStore
+from smai_orchestrator.sandboxed_dispatch.technique_implementer import (
     DEFAULT_HARNESS_CONTRACT_KEY_TEMPLATE,
     DEFAULT_HARNESS_MANIFEST_KEY_TEMPLATE,
     DEFAULT_TECHNIQUE_GROUNDING_KEY_TEMPLATE,
     _materialize_technique_implementer_workspace,  # pyright: ignore[reportPrivateUsage]
 )
-from smai_core.plugins import ArtifactStore
 
 from ._harness_builder_sandboxed_fixtures import (
     _RecordingArtifactStore,  # pyright: ignore[reportPrivateUsage]

@@ -430,16 +430,16 @@ def _make_in_memory_store() -> SqliteStore:
 # === Default TaskRole set ===================================================
 
 
-def test_default_task_roles_match_smai_agents() -> None:
+def test_default_task_roles_match_smai_inline_agents() -> None:
     """DEFAULT_TASK_ROLES is a hard-coded mirror of
-    :data:`smai_agents.model_selection.TaskRole`. If the literal in
-    smai-agents drifts, this test fails — surfacing the reconciliation
-    point so a future code change has to update both.
+    :data:`smai_inline_agents.model_selection.TaskRole`. If the literal
+    in smai-inline-agents drifts, this test fails: surfacing the
+    reconciliation point so a future code change has to update both.
 
-    We import smai_agents lazily in the test (orchestrator's
-    pyproject does NOT depend on smai-agents; the import works here
-    only because uv-workspace puts every package on ``sys.path`` for
-    test runs).
+    We import smai_inline_agents lazily in the test (orchestrator's
+    pyproject does NOT depend on smai-inline-agents; the import works
+    here only because uv-workspace puts every package on ``sys.path``
+    for test runs).
     """
     from smai_inline_agents.model_selection import TaskRole
 

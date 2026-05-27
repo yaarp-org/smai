@@ -163,7 +163,7 @@ async def get_cg_agent_status(
     Pulls one ``comparison-groups/{cg_id}/harness/status.json`` and one
     per-entry ``comparison-groups/{cg_id}/entries/{entry_id}/status.json``
     (the technique implementer's per-turn payload — see
-    :data:`smai_agents.agents.technique_implementer.DEFAULT_STATUS_KEY_TEMPLATE`,
+    :data:`smai_orchestrator.sandboxed_dispatch.technique_implementer.DEFAULT_STATUS_KEY_TEMPLATE`,
     which has no ``code/`` segment), parses each, joins them. The SPA
     gets one round-trip instead of fanning out to N artifact reads.
 

@@ -42,12 +42,12 @@ from _harness_builder_sandboxed_fixtures import (  # type: ignore[import-not-fou
     make_contract,
     make_technique_contract,
 )
-from smai_agents.agents.harness_builder import (
+from smai_core.plugins import JobHandle
+from smai_orchestrator.sandboxed_dispatch.harness_builder import (
     DEFAULT_HARNESS_CONTRACT_KEY_TEMPLATE,
     DEFAULT_TECHNIQUE_CONTRACT_KEY_TEMPLATE,
     make_dispatch_harness_build_sandboxed,
 )
-from smai_core.plugins import JobHandle
 
 
 @pytest.mark.asyncio

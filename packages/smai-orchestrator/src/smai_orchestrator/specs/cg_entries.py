@@ -283,7 +283,7 @@ def build_cg_entries_spec(
     # finding; the agent-runtime carries the same ML stack the
     # runtime-cpu image does).
     del runtime_image, runtime_cpu_image
-    from smai_agents.agents.technique_implementer import (  # noqa: PLC0415
+    from smai_orchestrator.sandboxed_dispatch.technique_implementer import (  # noqa: PLC0415
         make_dispatch_technique_implementation_sandboxed,
     )
 

@@ -7,7 +7,7 @@ functions :mod:`smai_runtime.runner` imports from ``harness/__init__.py``
 
 The framework source lives in the installed ``smai_runtime`` package,
 *outside* the agent's workspace sandbox — the file tools
-(:mod:`smai_agents.std_tools.files`) reject every out-of-workspace path.
+(:mod:`smai_inline_agents.std_tools.files`) reject every out-of-workspace path.
 So :func:`run_harness_builder_session` stages the output of
 :func:`build_harness_api_reference` into the workspace as
 ``contracts/harness_api_reference.md`` for the agent to ``read_file``.

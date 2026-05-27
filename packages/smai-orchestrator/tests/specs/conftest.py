@@ -23,9 +23,12 @@ from smai_store_sqlite import SqliteStore
 
 _SPECS_TESTS_DIR = Path(__file__).resolve().parent
 _ENGINE_TESTS_DIR = Path(__file__).resolve().parent.parent / "engine"
-# smai-agents tests directory carries shared model-response builders
+# smai-inline-agents tests directory carries shared model-response builders
 # (`_agent_helpers`) consumed by `_e1_fakes` for proposal-spec tests.
-_AGENTS_TESTS_DIR = Path(__file__).resolve().parent.parent.parent.parent / "smai-agents" / "tests"
+# Path lookup updated at Step 8 Wave 1 (was smai-agents/tests).
+_AGENTS_TESTS_DIR = (
+    Path(__file__).resolve().parent.parent.parent.parent / "smai-inline-agents" / "tests"
+)
 sys.path.insert(0, str(_SPECS_TESTS_DIR))
 sys.path.insert(0, str(_ENGINE_TESTS_DIR))
 sys.path.insert(0, str(_AGENTS_TESTS_DIR))

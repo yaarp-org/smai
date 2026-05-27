@@ -4,13 +4,13 @@ Conventions per the workspace's pytest ``--import-mode=importlib`` +
 ``conftest.py`` discovery layout: every package's ``tests/`` is on
 ``sys.path`` once, so module names must be unique. ``_specs_fakes``
 avoids collision with ``_helpers`` (engine), ``_b3_fakes`` /
-``_agent_fakes`` (smai-agents), and ``_runtime_fakes`` (orchestrator
+``_agent_fakes`` (smai-inline-agents), and ``_runtime_fakes`` (orchestrator
 runtime tests).
 
 Builders shipped here:
 
-* :class:`StubLlmProvider` — duplicate of the smai-agents stub, kept
-  here so spec tests don't pull the smai-agents test-tree onto path.
+* :class:`StubLlmProvider` — duplicate of the smai-inline-agents stub, kept
+  here so spec tests don't pull the smai-inline-agents test-tree onto path.
 * :func:`make_harness_contract` / :func:`make_technique_contract` —
   smai-core artifact constructors with frozen content_hash.
 * :func:`make_validation_config` / :func:`make_evaluation_metrics_payload` —
@@ -80,7 +80,7 @@ from smai_runtime import (
 class StubLlmProvider:
     """Deterministic :class:`LlmProvider` for spec tests.
 
-    Mirrors smai-agents' ``StubLlmProvider`` (kept local so the smai-
+    Mirrors smai-inline-agents' ``StubLlmProvider`` (kept local so the smai-inline-
     agents test-tree isn't required on ``sys.path``).
     """
 

@@ -18,10 +18,6 @@ from _b3_fakes import (  # type: ignore[import-not-found]
     make_harness_contract,
     make_minimal_manifest,
 )
-from smai_agents import (
-    EMIT_HARNESS_MANIFEST_TOOL_NAME,
-    make_emit_harness_manifest_tool,
-)
 from smai_core.plugins import LlmCapabilities, NormalizedMessage, TextContent
 from smai_inline_agents import (
     AgentLoopConfig,
@@ -29,6 +25,10 @@ from smai_inline_agents import (
     ToolContext,
     ToolRegistry,
     make_finish_tool,
+)
+from smai_orchestrator.sandboxed_dispatch import (
+    EMIT_HARNESS_MANIFEST_TOOL_NAME,
+    make_emit_harness_manifest_tool,
 )
 from smai_runtime import (
     MANIFEST_SCHEMA_VERSION,

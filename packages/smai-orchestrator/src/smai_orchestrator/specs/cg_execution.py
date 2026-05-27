@@ -1139,7 +1139,7 @@ def build_cg_execution_spec(
     # contexts where smai-agents isn't installed (e.g., the methodology-
     # layer Tier B integration path, where users construct PipelineSpec
     # objects programmatically without the agent fleet).
-    from smai_agents.agents.harness_builder import (  # noqa: PLC0415
+    from smai_orchestrator.sandboxed_dispatch.harness_builder import (  # noqa: PLC0415
         make_dispatch_harness_build_sandboxed,
     )
 

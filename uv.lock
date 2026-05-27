@@ -10,7 +10,6 @@ resolution-markers = [
 members = [
     "smai",
     "smai-agent-runtime",
-    "smai-agents",
     "smai-api",
     "smai-api-conformance",
     "smai-api-spec",
@@ -3682,18 +3681,18 @@ name = "smai"
 version = "0.1.0"
 source = { editable = "packages/smai" }
 dependencies = [
-    { name = "smai-agents" },
     { name = "smai-cli" },
     { name = "smai-core" },
+    { name = "smai-inline-agents" },
     { name = "smai-orchestrator" },
     { name = "smai-runtime" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "smai-agents", editable = "packages/smai-agents" },
     { name = "smai-cli", editable = "packages/smai-cli" },
     { name = "smai-core", editable = "packages/smai-core" },
+    { name = "smai-inline-agents", editable = "packages/smai-inline-agents" },
     { name = "smai-orchestrator", editable = "packages/smai-orchestrator" },
     { name = "smai-runtime", editable = "packages/smai-runtime" },
 ]
@@ -3726,33 +3725,6 @@ requires-dist = [
     { name = "smai-core", editable = "packages/smai-core" },
     { name = "smai-runtime", editable = "packages/smai-runtime" },
 ]
-
-[[package]]
-name = "smai-agents"
-version = "0.1.0"
-source = { editable = "packages/smai-agents" }
-dependencies = [
-    { name = "pydantic" },
-    { name = "smai-core" },
-    { name = "smai-inline-agents" },
-    { name = "smai-runtime" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "smai-llm-bedrock" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "pydantic", specifier = ">=2.0" },
-    { name = "smai-core", editable = "packages/smai-core" },
-    { name = "smai-inline-agents", editable = "packages/smai-inline-agents" },
-    { name = "smai-runtime", editable = "packages/smai-runtime" },
-]
-
-[package.metadata.requires-dev]
-dev = [{ name = "smai-llm-bedrock", editable = "plugins/smai-llm-bedrock" }]
 
 [[package]]
 name = "smai-api"
@@ -3897,11 +3869,11 @@ dependencies = [
     { name = "jinja2" },
     { name = "pydantic" },
     { name = "pyyaml" },
-    { name = "smai-agents" },
     { name = "smai-api" },
     { name = "smai-artifacts-localfs" },
     { name = "smai-compute-localgpu" },
     { name = "smai-core" },
+    { name = "smai-inline-agents" },
     { name = "smai-llm-bedrock" },
     { name = "smai-orchestrator" },
     { name = "smai-runtime" },
@@ -3916,11 +3888,11 @@ requires-dist = [
     { name = "jinja2", specifier = ">=3.1" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pyyaml", specifier = ">=6.0" },
-    { name = "smai-agents", editable = "packages/smai-agents" },
     { name = "smai-api", editable = "packages/smai-api" },
     { name = "smai-artifacts-localfs", editable = "plugins/smai-artifacts-localfs" },
     { name = "smai-compute-localgpu", editable = "plugins/smai-compute-localgpu" },
     { name = "smai-core", editable = "packages/smai-core" },
+    { name = "smai-inline-agents", editable = "packages/smai-inline-agents" },
     { name = "smai-llm-bedrock", editable = "plugins/smai-llm-bedrock" },
     { name = "smai-orchestrator", editable = "packages/smai-orchestrator" },
     { name = "smai-runtime", editable = "packages/smai-runtime" },

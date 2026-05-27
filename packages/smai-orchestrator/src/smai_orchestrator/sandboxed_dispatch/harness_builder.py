@@ -52,8 +52,8 @@ from smai_runtime import (
     write_template_files,
 )
 
-from smai_agents.agents.artifact_publish import publish_workspace_outputs
-from smai_agents.agents.harness_api_reference import (
+from smai_orchestrator.sandboxed_dispatch.artifact_publish import publish_workspace_outputs
+from smai_orchestrator.sandboxed_dispatch.harness_api_reference import (
     WORKSPACE_HARNESS_API_REFERENCE_PATH,
     build_harness_api_reference,
 )

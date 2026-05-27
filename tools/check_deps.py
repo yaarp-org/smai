@@ -8,10 +8,10 @@ Three rules:
        (``pydantic``, ``jsonschema``, plus the standard library — which is not
        declared).
     2. No ``.py`` file under ``packages/smai-core/src/`` imports a pipeline
-       package (``smai_agents``, ``smai_agent_runtime``, ``smai_orchestrator``,
-       ``smai_runtime``, ``smai_cli``, or the ``smai`` umbrella — which
-       transitively pulls all four) or any plugin package (``smai_llm_*``,
-       ``smai_store_*``, ``smai_artifacts_*``, ``smai_compute_*``).
+       package (``smai_inline_agents``, ``smai_agent_runtime``, ``smai_orchestrator``,
+       ``smai_runtime``, ``smai_cli``, or the ``smai`` umbrella) or any plugin
+       package (``smai_llm_*``, ``smai_store_*``, ``smai_artifacts_*``,
+       ``smai_compute_*``).
     3. No ``plugins/smai-*`` package declares a dependency on a pipeline package,
        and no ``.py`` file under its ``src/`` imports one.
 
@@ -55,14 +55,14 @@ from pathlib import Path
 # ``smai_agent_runtime`` is included so the lint mechanically enforces
 # "consumed via image, not via host process" — no plugin or smai-core
 # source may import it (per DEC-038, the sandbox-side runtime packages
-# DEC noted in agent_refactor/compute_dispatch_decisions.md §6). D5 of the
-# agent-layer refactor notes that Step 3 lands half of the check_deps
-# delta (this addition); Step 8 lands the rest (replaces ``smai_agents``
-# with ``smai_inline_agents`` when the package is split).
+# DEC noted in agent_refactor/compute_dispatch_decisions.md §6). Step 8
+# Wave 1 split the old ``smai_agents`` into the host-side
+# ``smai_inline_agents`` and the sandbox-side ``smai_agent_runtime``;
+# Wave 2 relocated the residual sandboxed-dispatcher wirings into
+# ``smai_orchestrator.sandboxed_dispatch`` and deleted ``smai_agents``.
 PIPELINE_MODULES: frozenset[str] = frozenset(
     {
         "smai",
-        "smai_agents",
         "smai_agent_runtime",
         "smai_inline_agents",
         "smai_orchestrator",
@@ -77,7 +77,6 @@ PIPELINE_MODULES: frozenset[str] = frozenset(
 PIPELINE_DISTS: frozenset[str] = frozenset(
     {
         "smai",
-        "smai-agents",
         "smai-agent-runtime",
         "smai-inline-agents",
         "smai-orchestrator",
@@ -98,7 +97,7 @@ PIPELINE_DISTS: frozenset[str] = frozenset(
 # DEC-029's "smai-core IS methodology, plugins are the seam" line).
 #
 # The allowance is narrow: only ``smai-orchestrator`` (which carries
-# record types). The other pipeline packages — ``smai-agents``,
+# record types). The other pipeline packages — ``smai-inline-agents``,
 # ``smai-runtime``, ``smai-cli``, the ``smai`` umbrella — remain
 # forbidden because depending on them would couple the plugin to the
 # agent-loop / runtime / CLI surfaces it is meant to plug behind.
@@ -130,7 +129,7 @@ REASON_CORE_DEP = (
 )
 REASON_CORE_IMPORT = (
     "smai-core is the methodology layer (DEC-029); runtime imports of "
-    "pipeline packages (smai_agents, smai_agent_runtime, smai_orchestrator, "
+    "pipeline packages (smai_inline_agents, smai_agent_runtime, smai_orchestrator, "
     "smai_runtime, smai_cli, the smai umbrella, or any plugin) break the "
     "package-boundary atomicity invariant (00-vision.md §4 principle #2). "
     "Pure typing references are allowed under `if TYPE_CHECKING:` (per "
@@ -141,13 +140,13 @@ REASON_CORE_IMPORT = (
 REASON_PLUGIN_DEP = (
     "Plugin packages must depend only on smai-core and their own provider SDK "
     "(implementation_plan.md §2.3); pulling in pipeline packages "
-    "(smai-agents, smai-agent-runtime, smai-orchestrator, smai-runtime, "
+    "(smai-inline-agents, smai-agent-runtime, smai-orchestrator, smai-runtime, "
     "smai-cli, or the smai umbrella) bloats the plugin install footprint "
     "and creates accidental cross-package coupling."
 )
 REASON_PLUGIN_IMPORT = (
     "Plugin packages must not import pipeline packages "
-    "(smai_agents, smai_agent_runtime, smai_orchestrator, smai_runtime, "
+    "(smai_inline_agents, smai_agent_runtime, smai_orchestrator, smai_runtime, "
     "smai_cli, or the smai umbrella) at runtime per implementation_plan.md "
     "§2.3; doing so couples the plugin to the pipeline layer it is meant "
     "to plug into. Pure typing references are allowed under "

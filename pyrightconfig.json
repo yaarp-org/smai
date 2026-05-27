@@ -21,25 +21,12 @@
       "extraPaths": [
         "packages/smai-orchestrator/src",
         "packages/smai-core/src",
-        "packages/smai-agents/src",
         "packages/smai-inline-agents/src",
         "packages/smai-runtime/src",
         "packages/smai-events/src",
         "packages/smai-api-spec/src",
         "plugins/smai-store-sqlite/src",
         "plugins/smai-artifacts-localfs/src"
-      ]
-    },
-    {
-      "root": "packages/smai-agents",
-      "reportMissingImports": "error",
-      "extraPaths": [
-        "packages/smai-agents/src",
-        "packages/smai-inline-agents/src",
-        "packages/smai-core/src",
-        "packages/smai-runtime/src",
-        "packages/smai-orchestrator/src",
-        "plugins/smai-llm-bedrock/src"
       ]
     },
     {
@@ -121,7 +108,6 @@
         "packages/smai-cli/src",
         "packages/smai-core/src",
         "packages/smai-orchestrator/src",
-        "packages/smai-agents/src",
         "packages/smai-inline-agents/src",
         "packages/smai-runtime/src",
         "packages/smai-events/src",
@@ -169,7 +155,6 @@
         "packages/smai-cli/src",
         "packages/smai-core/src",
         "packages/smai-orchestrator/src",
-        "packages/smai-agents/src",
         "packages/smai-inline-agents/src",
         "packages/smai-runtime/src",
         "packages/smai-ui/src",
@@ -193,7 +178,6 @@
   "strict": [
     "packages/smai-core/src",
     "packages/smai-orchestrator/src",
-    "packages/smai-agents/src",
     "packages/smai-inline-agents/src",
     "packages/smai-agent-runtime/src",
     "packages/smai-cli/src",
