@@ -4035,6 +4035,8 @@ name = "smai-inline-agents"
 version = "0.1.0"
 source = { editable = "packages/smai-inline-agents" }
 dependencies = [
+    { name = "arxiv" },
+    { name = "httpx" },
     { name = "jinja2" },
     { name = "pydantic" },
     { name = "pyyaml" },
@@ -4049,6 +4051,8 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "arxiv", specifier = ">=2.1" },
+    { name = "httpx", specifier = ">=0.27" },
     { name = "jinja2", specifier = ">=3.1" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "pyyaml", specifier = ">=6.0" },
