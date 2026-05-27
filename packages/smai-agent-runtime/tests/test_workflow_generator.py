@@ -337,3 +337,62 @@ def test_abi_function_signatures_use_real_smai_runtime_type_names() -> None:
             )
 
     assert not failures, "\n".join(failures)
+
+
+# === Baseline file-stem ↔ validation technique_id drift guard (round-22) =====
+
+
+def test_baseline_file_stem_matches_validation_technique_id() -> None:
+    """Round-22 Wall #3 (project_round22_real_llm_dogfood.md): the
+    harness_builder workflow's :class:`BaselineGenerationStep`
+    ``write_to_path`` and the immediately-following
+    :class:`ValidationStep` ``technique_id`` must reference the SAME
+    on-disk filename stem. The runner's
+    :func:`smai_runtime.templates._files.techniques_init.load_technique`
+    does ``importlib.import_module(f"techniques.{technique_id}")``,
+    so a mismatch means the first validation ALWAYS fails with
+    ``ModuleNotFoundError`` regardless of the agent's baseline quality.
+
+    Drift guard: assert the baseline-step's file stem (extracted from
+    its ``write_to_path``) equals the validation-step's ``technique_id``
+    for the v1 harness_builder workflow.
+    """
+    from pathlib import Path  # noqa: PLC0415
+
+    workflow = generate_workflow(make_contract(), TaskRole.HARNESS_BUILDER)
+    baselines = [s for s in workflow if isinstance(s, BaselineGenerationStep)]
+    validations = [s for s in workflow if isinstance(s, ValidationStep)]
+    assert len(baselines) == 1
+    assert len(validations) == 1
+    baseline_stem = Path(baselines[0].write_to_path).stem
+    assert validations[0].technique_id == baseline_stem, (
+        f"ValidationStep.technique_id={validations[0].technique_id!r} does not match "
+        f"BaselineGenerationStep.write_to_path stem={baseline_stem!r}; the runner's "
+        f"load_technique would try to import techniques.{validations[0].technique_id!r} "
+        f"but the file on disk is techniques/{baseline_stem}.py — round-22 Wall #3"
+    )
+
+
+def test_technique_implementer_write_path_stem_matches_validation_technique_id() -> None:
+    """Same drift-guard pattern for the technique_implementer workflow.
+
+    The technique_implementer workflow already uses the same
+    :data:`_TECHNIQUE_PLACEHOLDER_ID` for both its body-generation
+    step's ``write_to_path`` and the validation step's
+    ``technique_id`` (consistent by construction), but pinning the
+    invariant means a future refactor that diverges them gets caught
+    here — the harness_builder side was broken for ~3 rounds before
+    Wall #3 surfaced because nothing pinned the invariant.
+    """
+    from pathlib import Path  # noqa: PLC0415
+
+    workflow = generate_workflow(make_contract(), TaskRole.TECHNIQUE_IMPLEMENTER)
+    body_steps = [s for s in workflow if isinstance(s, TechniqueImplementerBodyGenerationStep)]
+    validations = [s for s in workflow if isinstance(s, ValidationStep)]
+    assert len(body_steps) == 1
+    assert len(validations) == 1
+    body_stem = Path(body_steps[0].write_to_path).stem
+    assert validations[0].technique_id == body_stem, (
+        f"ValidationStep.technique_id={validations[0].technique_id!r} does not match "
+        f"TechniqueImplementerBodyGenerationStep.write_to_path stem={body_stem!r}"
+    )

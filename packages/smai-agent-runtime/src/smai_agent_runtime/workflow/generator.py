@@ -121,6 +121,40 @@ _BASELINE_PLACEHOLDER_ID: str = "BASELINE_PLACEHOLDER"
 :class:`BaselineGenerationStep`. Sub-PR B/C replaces this with the real
 resolution by passing the compiled CG's baseline entry through to the
 generator (the contract alone does not carry baseline-entry identity).
+
+This is the SEMANTIC identifier the body-generation step's grounding
+context shows to the agent ("the baseline entry's technique id is
+TBD"). It is NOT the on-disk file stem the validation runner imports
+— that is :data:`_BASELINE_FILE_STEM` below, kept distinct because the
+validation runner needs a real file to load even before the planner-
+derived baseline id lands.
+"""
+
+
+_BASELINE_FILE_STEM: str = "baseline"
+"""On-disk file stem for the baseline technique module.
+
+Used in TWO load-bearing places that MUST stay synchronized:
+
+* :class:`BaselineGenerationStep.write_to_path` =
+  ``f"techniques/{_BASELINE_FILE_STEM}.py"`` (the file the mini-
+  orchestrator writes the agent's baseline source to).
+* :class:`ValidationStep.technique_id` (the ``--technique`` argv the
+  runner passes to ``load_technique``, which does
+  ``importlib.import_module(f"techniques.{technique_id}")``).
+
+Round-22 Wall #3 (project_round22_real_llm_dogfood.md) had these two
+out of sync — write_to_path used the literal ``"baseline"`` stem but
+ValidationStep.technique_id used :data:`_BASELINE_PLACEHOLDER_ID`, so
+every harness_builder's first validation failed with
+``ModuleNotFoundError: techniques.BASELINE_PLACEHOLDER`` regardless
+of what the agent produced. The diagnose handler's re-validation
+called ``_validation_step_from_anchor`` which used its own
+``"baseline"`` constant and accidentally worked around the bug,
+masking it for most of round 21 and the first half of round 22. The
+shared constant + the
+``test_baseline_file_stem_matches_validation_technique_id``
+drift-guard pin the two callsites.
 """
 
 
@@ -214,7 +248,7 @@ def _generate_harness_builder_workflow(
         BaselineGenerationStep(
             factor_type=factor_type,
             baseline_technique_id=_BASELINE_PLACEHOLDER_ID,
-            write_to_path="techniques/baseline.py",
+            write_to_path=f"techniques/{_BASELINE_FILE_STEM}.py",
         )
     )
 
@@ -222,7 +256,10 @@ def _generate_harness_builder_workflow(
     validation_index = len(steps)
     steps.append(
         ValidationStep(
-            technique_id=_BASELINE_PLACEHOLDER_ID,
+            # Must match the file stem the BaselineGenerationStep above
+            # writes — the runner does ``importlib.import_module(
+            # f"techniques.{technique_id}")``. Round-22 Wall #3 fix.
+            technique_id=_BASELINE_FILE_STEM,
             seed=seed,
             dispatch_target="subprocess",
         )
