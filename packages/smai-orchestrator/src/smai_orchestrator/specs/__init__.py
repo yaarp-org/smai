@@ -27,7 +27,6 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any
 
 from smai_core.plugins import LlmProvider
 
@@ -111,7 +110,8 @@ def register_smai_specs(
     evaluation_dispatch_trace: list[str] | None = None,
     harness_builder_extra_env: Mapping[str, str] | None = None,
     llm_for_harness_builder: LlmProvider | None = None,
-    technique_implementer_inline_runner: Any = None,
+    technique_implementer_extra_env: Mapping[str, str] | None = None,
+    llm_for_technique_implementer: LlmProvider | None = None,
 ) -> tuple[PipelineSpec, PipelineSpec]:
     """Construct and register both CG-side SMAI specs into the process registry.
 
@@ -161,7 +161,8 @@ def register_smai_specs(
         workspace_root=workspace_root,
         runtime_image=runtime_image,
         runtime_cpu_image=runtime_cpu_image,
-        technique_implementer_inline_runner=technique_implementer_inline_runner,
+        technique_implementer_extra_env=technique_implementer_extra_env,
+        llm_for_technique_implementer=llm_for_technique_implementer,
     )
     register_pipeline_spec(cg_spec)
     register_pipeline_spec(entry_spec)

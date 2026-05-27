@@ -635,15 +635,13 @@ async def test_smoke_e2e_round_trip(tmp_path: Path) -> None:
         workspace_root=tmp_path / "workspaces",
         plugin_overrides=overrides,
         run_worker=False,
-        # Sub-PR E cutover retired ``harness_builder_inline_runner`` —
-        # the harness builder now dispatches via the sandboxed
-        # ``smai-agent-runtime`` Compute path. SmokeFakeCompute already
-        # implements ``stage_workspace`` / ``submit`` / ``status`` (always
-        # succeeded) / ``harvest_workspace`` (no-op), and
-        # :func:`_pre_stage_for_smoke` continues to pre-populate the
-        # canonical ArtifactStore keys the success gate reads. The
-        # technique-implementer in-process path remains until Step 7.
-        technique_implementer_inline_runner=_smoke_inline_runner,
+        # Step-7 cutover (2026-05-27): both sandboxed roles dispatch
+        # via the smai-agent-runtime Compute path. SmokeFakeCompute
+        # carries them both (stage / submit / status always-succeeded
+        # / harvest). :func:`_pre_stage_for_smoke` pre-populates the
+        # canonical ArtifactStore keys the success gates read,
+        # including the per-entry code/validation_results.json the
+        # entry-spec's job_succeeded gate inspects.
     ) as runtime:
         # Inject a populated technique registry so the smoke YAML
         # compiles cleanly. Uses the same ``_registries_factory``

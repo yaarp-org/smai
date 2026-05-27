@@ -12,7 +12,9 @@ Four of five agents ship across 2.B3 + 2.B4:
   (sub-PR E cutover: the host-side surface is now a thin
   :class:`smai_orchestrator.dispatch.DispatcherBundle` wrapper; the
   in-process ``run_harness_builder_session`` is gone)
-* :func:`smai_agents.agents.technique_implementer.run_technique_implementer_session` — §2.3
+* ``make_dispatch_technique_implementation_sandboxed`` (§2.3 — Step-7
+  cutover 2026-05-27: matches harness_builder's pattern; the
+  in-process ``run_technique_implementer_session`` is gone)
 * :func:`smai_agents.agents.code_reviewer.run_code_review` — §2.4
 * :func:`smai_agents.agents.contextual_evaluator.run_contextual_evaluation` — §2.5
 
@@ -58,9 +60,7 @@ from smai_agents.agents.supervisor import (
     run_supervisor_check,
 )
 from smai_agents.agents.technique_implementer import (
-    ContextKind,
-    make_dispatch_technique_implementation,
-    run_technique_implementer_session,
+    make_dispatch_technique_implementation_sandboxed,
 )
 
 __all__ = [
@@ -69,7 +69,6 @@ __all__ = [
     "EMIT_HARNESS_MANIFEST_TOOL_NAME",
     "CGMetadata",
     "CodeReviewerInput",
-    "ContextKind",
     "ContextualEvaluatorEntry",
     "ContextualEvaluatorInput",
     "DraftComparisonGroup",
@@ -85,12 +84,11 @@ __all__ = [
     "SupervisorInput",
     "make_dispatch_harness_build_sandboxed",
     "make_dispatch_planner",
-    "make_dispatch_technique_implementation",
+    "make_dispatch_technique_implementation_sandboxed",
     "make_emit_harness_manifest_tool",
     "run_code_review",
     "run_contextual_evaluation",
     "run_planner_session",
     "run_supervisor_check",
-    "run_technique_implementer_session",
     "variant_for_submission_kind",
 ]

@@ -95,6 +95,7 @@ from smai_agent_runtime.workflow.step_types import (
     DiagnoseOnFailureStep,
     HarnessBuilderBodyGenerationStep,
     ManifestEmitStep,
+    TechniqueImplementerBodyGenerationStep,
     ValidationStep,
     WorkflowStep,
 )
@@ -533,6 +534,15 @@ def _input_summary_for(step: WorkflowStep) -> dict[str, str]:
         return {
             "function_name": step.function_name,
             "function_index": str(step.function_index),
+            "write_to_path": step.write_to_path,
+        }
+    # Step 7 of the agent-layer refactor: technique_implementer reuses
+    # this helper via cross-module import; an entry for the technique-
+    # body-generation step type lands here so the operator's
+    # ``smai status`` rendering doesn't fall through to ``{}``.
+    if isinstance(step, TechniqueImplementerBodyGenerationStep):
+        return {
+            "technique_id": step.technique_id,
             "write_to_path": step.write_to_path,
         }
     if isinstance(step, BaselineGenerationStep):

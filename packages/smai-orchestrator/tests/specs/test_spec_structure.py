@@ -189,14 +189,19 @@ def test_entry_spec_edges_success_first(entry_spec) -> None:  # type: ignore[no-
     """Per `03` §2.4: validation-pass success edge BEFORE validation-fail
     terminal edge within the same (from_state, fires_on) group.
 
-    Round 14: the entry ``implementing`` edges fire on ``dispatch_time``
-    (the technique implementer runs in-process); the ``job failed``
-    edge is gone (routed through the RetryPolicy)."""
-    impl_dispatch = entry_spec.edges_from("implementing", fires_on="dispatch_time")
-    assert impl_dispatch[0].target_state == "implemented"
-    assert impl_dispatch[1].target_state == "implementation_failed"
-    assert entry_spec.edges_from("implementing", fires_on="job_succeeded") == []
-    assert entry_spec.edges_from("implementing", fires_on="job_failed") == []
+    Step-7 cutover (2026-05-27): the entry ``implementing`` edges now
+    fire on ``job_succeeded`` (validation-pass + validation-fail) and
+    ``job_failed`` (sandbox-crash unrecoverable), mirroring sub-PR-E's
+    harness_builder edge structure. The previous round-14
+    ``dispatch_time`` edges are gone (the technique implementer now
+    runs as a sandboxed Compute job, not in-process)."""
+    impl_succeeded = entry_spec.edges_from("implementing", fires_on="job_succeeded")
+    assert impl_succeeded[0].target_state == "implemented"
+    assert impl_succeeded[1].target_state == "implementation_failed"
+    impl_failed = entry_spec.edges_from("implementing", fires_on="job_failed")
+    assert len(impl_failed) == 1
+    assert impl_failed[0].target_state == "implementation_failed"
+    assert entry_spec.edges_from("implementing", fires_on="dispatch_time") == []
 
 
 def test_entry_spec_pool_assignment(entry_spec) -> None:  # type: ignore[no-untyped-def]

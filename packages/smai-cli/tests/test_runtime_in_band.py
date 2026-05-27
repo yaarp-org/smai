@@ -469,26 +469,17 @@ async def _stage_manifest_for(artifact_store: LocalFsStore, cg_id: str) -> None:
     )
 
 
-async def _entry_validation_runner(session: object) -> object:
-    """Round-14 test runner for the in-process technique implementer:
-    stages ``validation_results.json`` as its own side effect so the
-    dispatch handler's completeness check passes."""
-    from smai_agents import AgentOutcome
-    from smai_orchestrator.specs import TECHNIQUE_VALIDATION_KEY_TEMPLATE
-
-    ws = session.workspace_path  # type: ignore[attr-defined]
-    await session.artifact_store.put(  # type: ignore[attr-defined]
-        TECHNIQUE_VALIDATION_KEY_TEMPLATE.format(cg_id=ws.parent.name, entry_id=ws.name),
-        b'{"passed": true}',
+@pytest.mark.skip(
+    reason=(
+        "Step-7 cutover (2026-05-27) retired the in-process "
+        "technique_implementer_inline_runner pattern; the technique "
+        "implementer now runs as a sandboxed Compute job. This test "
+        "exercised the in-process runner pattern that no longer exists; "
+        "the equivalent end-to-end coverage now lives in "
+        "test_smoke_e2e.py (mocks Compute substrate) and the round-22 "
+        "real-LLM dogfood (deferred to a follow-up session)."
     )
-    return AgentOutcome(
-        kind="finished",
-        turn_count=0,
-        usage_total=session.usage_total,  # type: ignore[attr-defined]
-        finish_success=True,
-    )
-
-
+)
 @pytest.mark.asyncio
 async def test_run_one_cycle_advances_treatment_entry_through_entry_spec(
     tmp_path: Path,
@@ -519,7 +510,6 @@ async def test_run_one_cycle_advances_treatment_entry_through_entry_spec(
         workspace_root=tmp_path / "workspaces",
         plugin_overrides=overrides,
         run_worker=False,
-        technique_implementer_inline_runner=_entry_validation_runner,
     ) as runtime:
         runtime.experiments._registries_factory = make_registries_with_technique  # type: ignore[attr-defined]
         await runtime.experiments.submit_text(EXPERIMENT_YAML)

@@ -217,16 +217,17 @@ def test_harness_builder_missing_cg_id_exits_bad_workspace(
     assert "--cg-id" in captured.out
 
 
-def test_technique_implementer_stub_exits_not_implemented(
+def test_technique_implementer_without_workspace_exits_bad_workspace(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Step 7 fills technique_implementer; sub-PR B leaves it as the
-    Step 3 stub."""
+    """Step 7 (2026-05-27) filled in the technique_implementer
+    mini-orchestrator. Invocation without ``--workspace`` exits with
+    :data:`EXIT_BAD_WORKSPACE` and a structured error event (mirrors
+    the harness_builder shape one test up)."""
     rc = main(["--role", "technique_implementer", "--entry-id", "entry-test-001"])
-    assert rc == EXIT_NOT_IMPLEMENTED
+    assert rc == EXIT_BAD_WORKSPACE
     captured = capsys.readouterr()
-    assert "not yet implemented" in captured.err
-    assert "technique_implementer" in captured.err
+    assert "--workspace" in captured.out
 
 
 def test_planner_role_rejected_with_inline_role_pointer(

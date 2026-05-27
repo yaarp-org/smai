@@ -62,11 +62,11 @@ Spec ambiguities resolved:
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from pathlib import Path
-from typing import Any, cast
+from typing import cast
 
-from smai_core.plugins import ArtifactNotFound
+from smai_core.plugins import ArtifactNotFound, LlmProvider
 
 from smai_orchestrator.engine.types import (
     ConcurrencyPool,
@@ -155,13 +155,14 @@ async def _read_entry_validation(ctx: GateContext) -> tuple[bool, bool]:
 
 
 def _make_entry_validation_pass_gate() -> Callable[[GateContext], Awaitable[GateOutcome]]:
-    """``implementing → implemented`` dispatch_time gate — entry side.
+    """``implementing → implemented`` ``job_succeeded`` gate — entry side.
 
-    Round 14: the technique implementer runs in-process (no external
-    Compute job — ``ctx.job_outcome`` is always None), so this is a
-    ``dispatch_time`` gate re-evaluated each worker cycle. Reads the
-    per-entry ``validation_results.json`` the dispatch handler
-    published. Advances on ``{"passed": true}``; otherwise the
+    Step-7 cutover (2026-05-27): the technique implementer now runs
+    as a sandboxed Compute job (mirroring sub-PR-E's harness_builder
+    cutover). This gate fires on the ``job_succeeded`` observation —
+    the container exited 0 and the post_terminal_handler has already
+    harvested the workspace + published ``code/validation_results.json``
+    to ArtifactStore. Advances on ``{"passed": true}``; otherwise the
     failure-terminal edge fires.
     """
 
@@ -177,7 +178,7 @@ def _make_entry_validation_pass_gate() -> Callable[[GateContext], Awaitable[Gate
 
 
 def _make_entry_validation_fail_gate() -> Callable[[GateContext], Awaitable[GateOutcome]]:
-    """``implementing → implementation_failed`` dispatch_time gate — entry side.
+    """``implementing → implementation_failed`` ``job_succeeded`` gate — entry side.
 
     Fires on a *positive* failure signal: ``validation_results.json`` is
     present AND reports ``passed != true``. It deliberately does NOT
@@ -199,13 +200,35 @@ def _make_entry_validation_fail_gate() -> Callable[[GateContext], Awaitable[Gate
     return _gate
 
 
+def _make_entry_job_failed_gate() -> Callable[[GateContext], Awaitable[GateOutcome]]:
+    """``implementing → implementation_failed`` ``job_failed`` gate — entry side.
+
+    Step-7 cutover: when the sandbox container exits non-zero
+    (validation never passed, fatal agent error, supervisor abort,
+    etc.) the technique implementation is unrecoverable for this
+    attempt. Routes the entry to ``implementation_failed`` terminal.
+    Mirrors :func:`smai_orchestrator.specs.cg_execution._make_gate_always_advance`
+    — the observation IS the advancement signal.
+    """
+
+    async def _gate(ctx: GateContext) -> GateOutcome:
+        del ctx
+        return GateOutcome(
+            advance=True,
+            reason="sandbox technique-implementer job terminal-failed; terminal",
+        )
+
+    return _gate
+
+
 def build_cg_entries_spec(
     *,
     workspace_root: Path,
     runtime_image: str = "smai-runtime:dev",
     runtime_cpu_image: str = "smai-runtime-cpu:dev",
     max_entry_dispatch_attempts: int = 2,
-    technique_implementer_inline_runner: Any = None,
+    technique_implementer_extra_env: Mapping[str, str] | None = None,
+    llm_for_technique_implementer: LlmProvider | None = None,
 ) -> PipelineSpec:
     """Build the SMAI CG-entries :class:`PipelineSpec`.
 
@@ -224,10 +247,16 @@ def build_cg_entries_spec(
             technique-implementer session so the round-16 gpu-flag
             derivation pairs cleanly with the image; v1 default
             ``smai-runtime-cpu:dev``.
-        technique_implementer_inline_runner: Test-only runner override
-            threaded into :func:`make_dispatch_technique_implementation`
-            as ``inline_runner``. Production leaves it ``None``. Typed
-            ``Any`` to keep this module loadable without smai-agents.
+        technique_implementer_extra_env: Optional env-var overrides
+            projected into the sandboxed agent container's env (D3
+            per-step model selection). Mirrors
+            ``cg_execution.harness_builder_extra_env`` shape.
+        llm_for_technique_implementer: Sub-PR F mechanism: when set,
+            the sandboxed dispatcher resolves LLM credentials
+            per-dispatch via
+            :meth:`LlmProvider.credentials_for_subprocess` and projects
+            them into the container env. Optional only so fake-LLM
+            tests can skip; production must set it via the CLI runtime.
         max_entry_dispatch_attempts: Round-11 retry budget for the
             per-entry technique-implementer dispatch. Each (re-)entry
             into ``implementing`` bumps
@@ -246,15 +275,23 @@ def build_cg_entries_spec(
         registered separately from the CG-execution spec per `05` §5.1's
         one-spec-per-entity-kind constraint.
     """
+    # Step-7 cutover (2026-05-27): production dispatch goes through
+    # the sandboxed bundle, mirroring sub-PR-E's harness_builder
+    # cutover. ``runtime_image`` / ``runtime_cpu_image`` aren't passed
+    # through anymore (the validation subprocess runs INSIDE the
+    # agent-runtime container per round-21's compose-from-runtime-cpu
+    # finding; the agent-runtime carries the same ML stack the
+    # runtime-cpu image does).
+    del runtime_image, runtime_cpu_image
     from smai_agents.agents.technique_implementer import (  # noqa: PLC0415
-        make_dispatch_technique_implementation,
+        make_dispatch_technique_implementation_sandboxed,
     )
 
-    technique_implementer_dispatch = make_dispatch_technique_implementation(
+    technique_implementer_bundle = make_dispatch_technique_implementation_sandboxed(
         workspace_root=workspace_root,
-        runtime_image=runtime_image,
-        runtime_cpu_image=runtime_cpu_image,
-        inline_runner=technique_implementer_inline_runner,
+        retry_policy=None,  # set below on DispatchAction; same shape as harness_builder
+        extra_env=technique_implementer_extra_env,
+        llm_for_credentials=llm_for_technique_implementer,
     )
 
     states: list[StateDef] = [
@@ -265,8 +302,9 @@ def build_cg_entries_spec(
                 name="entry.dispatch_technique_implementation",
                 handler=cast(
                     Callable[[DispatchContext], Awaitable[DispatchOutcome]],
-                    technique_implementer_dispatch,
+                    technique_implementer_bundle.handler,
                 ),
+                post_terminal_handler=technique_implementer_bundle.post_terminal_handler,
                 pool=POOL_AGENTS,
                 handle_field="implementation_job_handle",
                 # Round 11: a dispatch-handler failure here (the
@@ -301,29 +339,43 @@ def build_cg_entries_spec(
             gate_rule=_make_entry_dispatch_ready_gate(),
             fires_on="dispatch_time",
         ),
-        # Round 14: the technique implementer runs in-process (no
-        # external Compute job to poll), so these edges fire on
-        # ``dispatch_time`` — re-evaluated each worker cycle against the
-        # ``validation_results.json`` the dispatch handler published. A
-        # *hard* failure (the agent never produced validation_results)
-        # is surfaced by the dispatch handler as a ``DispatchOutcome``
-        # error and handled by ``_handle_dispatch_failure`` + the
-        # ``implementing`` state's RetryPolicy — there is no separate
-        # ``job failed`` edge. Declared validation-pass first so a
-        # passing run short-circuits the failure edge.
+        # Step-7 cutover (2026-05-27): the technique implementer now
+        # runs as a sandboxed Compute job (mirroring sub-PR-E's
+        # harness_builder cutover). Edges fire on the Compute-job
+        # observation signals: ``job_succeeded`` for both the
+        # validation-pass and validation-fail (no-survivors) cases —
+        # the post_terminal_handler harvests + publishes
+        # validation_results.json BEFORE these gates evaluate
+        # (sub-PR-E phase1 reorder); ``job_failed`` for the
+        # sandbox-crash unrecoverable path. The validation_results
+        # gate-body remains the same: it reads code/validation_results.json
+        # via ArtifactStore.exists + .get.
         EdgeDef(
             name="entry.implementing → implemented (validation pass)",
             from_state="implementing",
             target_state="implemented",
             gate_rule=_make_entry_validation_pass_gate(),
-            fires_on="dispatch_time",
+            fires_on="job_succeeded",
         ),
         EdgeDef(
             name="entry.implementing → implementation_failed (validation fail)",
             from_state="implementing",
             target_state="implementation_failed",
             gate_rule=_make_entry_validation_fail_gate(),
-            fires_on="dispatch_time",
+            fires_on="job_succeeded",
+        ),
+        # Sub-PR-E parallel: a non-zero container exit is unrecoverable
+        # for this attempt. Routes the entry to ``implementation_failed``
+        # terminal. Distinct from the round-11 retry-exhausted path:
+        # that fires on dispatch *handler* failures (workspace
+        # materialization / Compute.submit raising), this fires on
+        # job-status observation after a successful submit.
+        EdgeDef(
+            name="entry.implementing → implementation_failed (job failed)",
+            from_state="implementing",
+            target_state="implementation_failed",
+            gate_rule=_make_entry_job_failed_gate(),
+            fires_on="job_failed",
         ),
     ]
 

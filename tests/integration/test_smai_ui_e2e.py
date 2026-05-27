@@ -179,13 +179,10 @@ async def test_full_user_journey(tmp_path: Path) -> None:
         workspace_root=tmp_path / "workspaces",
         plugin_overrides=overrides,
         run_worker=True,
-        # Sub-PR E cutover: harness-builder dispatch is sandboxed now;
+        # Sub-PR E + Step-7 cutover: both harness-builder and
+        # technique-implementer dispatches are sandboxed now;
         # FakeAlwaysSucceededCompute's status-always-succeeded shape
-        # carries it (the workspace harvest is a no-op and the
-        # pre-staged ArtifactStore manifest stays visible to the
-        # success gate). The technique-implementer in-process path
-        # remains until Step 7.
-        technique_implementer_inline_runner=_noop_agent_runner,
+        # carries them both.
         # Round-9 added a test-only knob to pin deterministic CG ids.
         # Production generates ULID-shaped ids by default; the N3
         # fixture pre-stages artifacts at ``comparison-groups/<shape.cg_id>``
