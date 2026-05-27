@@ -404,6 +404,97 @@ def test_validation_mode_runs_with_no_manifest_and_writes_validation_results(
     assert "metrics" in payload
 
 
+def test_validation_stub_manifest_accepts_v1_extension_keys(
+    tmp_path: Path,
+    additive_harness_contract: HarnessContract,
+    additive_baseline_technique_contract: TechniqueContract,
+) -> None:
+    """Round 23 R1: the validation-mode stub manifest now declares the
+    closed-v1 well-known extension-point keys (round-22 Wall #2). A
+    baseline returning a non-empty dict keyed on any of those keys must
+    pass ``check_technique_output`` AND have its value spliced through
+    to the harness components (real splice, not a no-op).
+
+    Asserted via the harness's training-loop fixture: the harness
+    starts with one default ``train_transforms`` entry and the metric
+    is ``0.80 + 0.01 * len(components.train_transforms)``. Splicing a
+    baseline-supplied transform (``append`` is the stub's default for
+    this key) lifts the count to 2 and the metric to ``0.82``. If the
+    splice silently no-op'd, the metric would stay at ``0.81``.
+    """
+    workspace = _materialize_partial_workspace(
+        tmp_path / "ws",
+        harness_contract=additive_harness_contract,
+        technique_contract=additive_baseline_technique_contract,
+    )
+    _write_harness(workspace)
+    _write_technique(
+        workspace,
+        "baseline",
+        # The baseline returns a real ``train_transforms`` override — the
+        # exact shape round-22 saw the agent produce that the empty-stub
+        # rejected as unknown_key.
+        "def apply(config): return {'train_transforms': [lambda x: x]}\n",
+    )
+
+    code = run(
+        [
+            "--technique",
+            "baseline",
+            "--seed",
+            "1",
+            "--mode",
+            "validation",
+            "--workspace",
+            str(workspace),
+        ]
+    )
+    assert code == EXIT_OK
+
+    payload = json.loads((workspace / VALIDATION_RESULTS_FILENAME).read_text())
+    assert payload["passed"] is True
+    # Confirm the splice fired: 0.80 base + 0.01 * 2 transforms = 0.82.
+    assert payload["metrics"]["accuracy"] == pytest.approx(0.82, rel=1e-9)
+
+
+def test_validation_stub_manifest_still_rejects_unknown_keys(
+    tmp_path: Path,
+    additive_harness_contract: HarnessContract,
+    additive_baseline_technique_contract: TechniqueContract,
+) -> None:
+    """Round 23 R1: the richer stub preserves the ``unknown_key`` signal
+    for keys outside the closed-v1 set. An LLM-hallucinated key
+    (``"my_custom_hook"``) still fails validation rather than silently
+    passing — the round-22 regression is fixed without erasing the real
+    validation surface.
+    """
+    workspace = _materialize_partial_workspace(
+        tmp_path / "ws",
+        harness_contract=additive_harness_contract,
+        technique_contract=additive_baseline_technique_contract,
+    )
+    _write_harness(workspace)
+    _write_technique(
+        workspace,
+        "baseline",
+        "def apply(config): return {'my_custom_hook': lambda x: x}\n",
+    )
+
+    code = run(
+        [
+            "--technique",
+            "baseline",
+            "--seed",
+            "1",
+            "--mode",
+            "validation",
+            "--workspace",
+            str(workspace),
+        ]
+    )
+    assert code == EXIT_RUNTIME_FAILURE
+
+
 def test_full_mode_still_rejects_missing_manifest(
     tmp_path: Path,
     additive_harness_contract: HarnessContract,

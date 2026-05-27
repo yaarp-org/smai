@@ -1553,14 +1553,19 @@ def _resolve_original_bundle_ref(context: _DispatchContext) -> OriginalInputBund
     Harness-flow diagnose steps always reference the harness body-
     generation bundle that produced the failing code. Sub-PR C2's
     discriminator-walk returns a :class:`HarnessOriginalBundleRef`
-    populated with the contract's factor type plus a placeholder
-    extension-points summary (empty for the validation-mode stub
-    manifest per the D7c design-note §4 chosen variant).
+    populated with the contract's factor type plus a one-line summary
+    of the validation-mode stub manifest the runner synthesizes (round-
+    23 R1: closed-v1 keys allowlisted with safe-default integration
+    patterns; previously empty).
     """
     return HarnessOriginalBundleRef(
-        function_signature="def build_harness(config: dict) -> Harness:",
+        function_signature="def build_harness(config: dict) -> HarnessComponents:",
         factor_type=context.contract.body.factor.type,
-        extension_points_summary=("(validation-mode stub manifest: extension_points=[])"),
+        extension_points_summary=(
+            "(validation-mode stub manifest: closed-v1 keys "
+            "{train_transforms, model_wrapper, loss_fn, training_overrides, callbacks} "
+            "declared optional with safe-default patterns)"
+        ),
     )
 
 

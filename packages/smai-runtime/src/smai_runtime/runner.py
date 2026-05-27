@@ -32,6 +32,11 @@ from typing import Any, Literal, cast
 
 from smai_core import HarnessContract, TechniqueContract
 
+from smai_runtime.components import (
+    COMPONENT_FIELD_FOR_KEY,
+    DEFAULT_VALIDATION_STUB_PATTERN_FOR_KEY,
+    DEFAULT_VALIDATION_STUB_TYPE_SIGNATURE_FOR_KEY,
+)
 from smai_runtime.errors import (
     NoGoZoneHashError,
     TechniqueOutputContractError,
@@ -42,6 +47,7 @@ from smai_runtime.integrator import integrate_technique_output
 from smai_runtime.manifest import (
     MANIFEST_SCHEMA_VERSION,
     HarnessAPIManifest,
+    HarnessExtensionPoint,
 )
 from smai_runtime.metrics import write_metrics
 from smai_runtime.no_go_zone import RUNTIME_TEMPLATE_VERSION, check_no_go_zones
@@ -121,12 +127,12 @@ def run(argv: list[str] | None = None) -> int:
     # BEFORE the manifest exists — the agent is validating their harness
     # against the locked contract pair, then emits the manifest as the
     # outcome of a passing validation. So in validation mode the manifest
-    # is optional; if absent the runtime synthesizes a minimal stub with
-    # the current ``RUNTIME_TEMPLATE_VERSION`` and the loaded contract's
-    # hash, and ``extension_points=[]`` (no splice / type-check work). The
-    # technique contract stays required either way — ``build_runtime_config``
-    # reads its ``technique_params`` / ``level_value`` to produce the
-    # ``config`` dict the harness consumes.
+    # is optional; if absent the runtime synthesizes a stub that declares
+    # the closed-v1 well-known extension-point keys (per round-23 R1) so
+    # the agent's baseline can return real component overrides and have
+    # them spliced through. The technique contract stays required either
+    # way — ``build_runtime_config`` reads its ``technique_params`` /
+    # ``level_value`` to produce the ``config`` dict the harness consumes.
     try:
         harness_contract, technique_contract, manifest = _load_contracts_by_mode(
             workspace, mode=args.mode
@@ -303,10 +309,25 @@ def _load_contracts_by_mode(
     passing validation per 04-agents.md §9 step 5 — running validation
     before manifest emission is the only way to get a passing validation
     in the first place). So validation mode tolerates an absent manifest
-    and synthesizes a minimal stub: extension_points=[] (no splice work,
-    no required keys), runtime_template_version = current runtime's
-    constant, parent_harness_contract_hash = loaded contract's hash,
-    schema version = current. The technique contract stays required —
+    and synthesizes one.
+
+    Round-23 sub-PR R1 (see ``project_round22_real_llm_dogfood.md``
+    Wall #2 + ``smai_runtime.components.DEFAULT_VALIDATION_STUB_PATTERN_FOR_KEY``):
+    the synthesized stub now declares all five closed-v1 well-known
+    extension-point keys (from
+    :data:`smai_runtime.components.COMPONENT_FIELD_FOR_KEY`) as
+    ``optional=True`` with their per-key safe-default integration
+    patterns. The previous behavior emitted ``extension_points=[]``,
+    which round-20 documented as "safe for additive baselines (return
+    {}) but a substitutive baseline returning a non-empty dict will
+    surface as type_check 'unknown_key'". Round-22 confirmed the agent's
+    diagnose loop frequently can't navigate that blind spot in 3
+    attempts; the richer stub eliminates the false-negative entirely
+    while preserving the "validation actually validates" semantic
+    (out-of-set keys still get rejected — that catches genuinely-wrong
+    hallucinations like an LLM-invented ``"my_custom_hook"``).
+
+    The technique contract stays required —
     :func:`build_runtime_config` needs ``technique_params`` /
     ``level_value`` to assemble the config dict; the harness builder's
     workspace setup is responsible for staging the baseline's contract
@@ -332,14 +353,34 @@ def _load_contracts_by_mode(
     if manifest_path.is_file():
         manifest = HarnessAPIManifest.model_validate_json(manifest_path.read_text())
     elif mode == "validation":
-        # Empty extension_points = no-op splice + no required keys; safe for
-        # additive baselines (return {}) but a substitutive baseline returning
-        # a non-empty dict will surface as type_check `unknown_key` inside the
-        # agent's validation loop with no breadcrumb pointing here. Out of
-        # scope for round 20 (cutout dogfooding is additive); future round.
+        # Round-23 R1: declare all closed-v1 keys as ``optional=True`` with
+        # their per-key safe-default integration patterns + types
+        # (see ``smai_runtime.components.DEFAULT_VALIDATION_STUB_*``).
+        # A baseline that returns any subset of the v1 keys passes
+        # ``check_technique_output``; the splice in
+        # ``integrate_technique_output`` actually fires, so validation
+        # exercises the real harness + baseline mechanics rather than
+        # short-circuiting on an empty manifest. Keys outside the v1 set
+        # (e.g. an LLM-hallucinated ``"my_custom_hook"``) still get
+        # ``unknown_key`` — the validation surface keeps its real signal.
         manifest = HarnessAPIManifest(
-            extension_points=[],
-            integration_pattern_summary="validation-mode stub (no extension points)",
+            extension_points=[
+                HarnessExtensionPoint(
+                    key=key,
+                    type_signature=DEFAULT_VALIDATION_STUB_TYPE_SIGNATURE_FOR_KEY[key],
+                    purpose=(
+                        f"validation-mode stub allowlist for closed-v1 key {key!r}; "
+                        "the real per-harness manifest is emitted by the harness "
+                        "builder after a passing validation"
+                    ),
+                    optional=True,
+                    integration_pattern=DEFAULT_VALIDATION_STUB_PATTERN_FOR_KEY[key],
+                )
+                for key in COMPONENT_FIELD_FOR_KEY
+            ],
+            integration_pattern_summary=(
+                "validation-mode stub (closed-v1 keys allowlisted, safe-default patterns)"
+            ),
             harness_version_hash="",
             parent_harness_contract_hash=harness_contract.envelope.content_hash,
             manifest_schema_version=MANIFEST_SCHEMA_VERSION,
