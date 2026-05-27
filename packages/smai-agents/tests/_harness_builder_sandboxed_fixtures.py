@@ -7,7 +7,7 @@ under ``--import-mode=importlib``.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -143,8 +143,17 @@ class _RecordingArtifactStore:
     async def exists(self, key: str) -> bool:
         return key in self._data
 
-    async def list(self, prefix: str) -> list[str]:
-        return sorted(k for k in self._data if k.startswith(prefix))
+    async def list(self, prefix: str) -> AsyncIterator[str]:
+        # Match the Protocol's async-iterator return shape (the real
+        # plugin implementations stream). Pre-realize the keys, then
+        # return an async generator that yields them.
+        matching = sorted(k for k in self._data if k.startswith(prefix))
+
+        async def _iter() -> AsyncIterator[str]:
+            for key in matching:
+                yield key
+
+        return _iter()
 
     async def delete(self, key: str) -> None:
         self._data.pop(key, None)

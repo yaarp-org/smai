@@ -45,7 +45,9 @@ from smai_runtime import (
     HARNESS_API_MANIFEST_FILENAME,
     HARNESS_CONTRACT_FILENAME,
     TECHNIQUE_CONTRACT_FILENAME,
+    create_workspace_skeleton,
     is_additive_baseline,
+    write_template_files,
 )
 
 from smai_agents.agent_session_telemetry import open_agent_session
@@ -429,7 +431,19 @@ async def _materialize_technique_implementer_workspace(  # noqa: PLR0913
     """
     del cg_id, entry_id  # unused; included for future per-key parameterization
 
-    workspace_path.mkdir(parents=True, exist_ok=True)
+    # Round-22 finding (2026-05-27): the in-loop ValidationStep inside
+    # the sandbox runs ``python experiment.py --mode validation``, which
+    # requires the fixed runtime templates (``experiment.py`` and
+    # ``techniques/__init__.py``) at the workspace root. The harness
+    # builder's materializer calls these helpers (``harness_builder.py``
+    # ``_materialize_harness_builder_workspace``); Step 7's
+    # technique_implementer port omitted them, so the very first
+    # validation in this role's sandbox failed with "experiment.py does
+    # not exist" and burned the diagnose-retry budget (diagnose can
+    # rewrite ``harness/`` / ``techniques/`` / ``config`` but cannot
+    # create a no-go-zone file). Mirror the harness builder's setup.
+    create_workspace_skeleton(workspace_path)
+    write_template_files(workspace_path)
 
     # Per-entry technique contract — primary artifact for this role.
     technique_path = workspace_path / _WORKSPACE_TECHNIQUE_CONTRACT_PATH
