@@ -269,12 +269,10 @@ def smai_dev(
         # `--yes` without `--reset` is benign but probably a mistake; warn
         # so it doesn't silently get swallowed.
         typer.echo("smai dev: --yes has no effect without --reset.", err=True)
-    overrides: dict[str, Any] = _apply_dev_filesystem_defaults({})
     try:
         runtime_config = load_runtime_config(
             config_path=config,
-            defaults=dev_defaults(),
-            flag_overrides=overrides,
+            defaults=_apply_dev_filesystem_defaults(dev_defaults()),
         )
     except (ConfigFileError, ConfigValidationError) as exc:
         _err(str(exc))
@@ -353,12 +351,10 @@ def smai_run(
     stay registered, and a re-run with the same ``--techniques``
     re-upserts them harmlessly.
     """
-    overrides: dict[str, Any] = _apply_dev_filesystem_defaults({})
     try:
         runtime_config = load_runtime_config(
             config_path=config,
-            defaults=dev_defaults(),
-            flag_overrides=overrides,
+            defaults=_apply_dev_filesystem_defaults(dev_defaults()),
         )
     except (ConfigFileError, ConfigValidationError) as exc:
         _err(str(exc))
@@ -426,12 +422,10 @@ def smai_status(
     ``--watch`` polls every ``--poll-interval`` seconds until terminal —
     CG ids only; for proposals / papers it is ignored.
     """
-    overrides: dict[str, Any] = _apply_dev_filesystem_defaults({})
     try:
         runtime_config = load_runtime_config(
             config_path=config,
-            defaults=dev_defaults(),
-            flag_overrides=overrides,
+            defaults=_apply_dev_filesystem_defaults(dev_defaults()),
         )
     except (ConfigFileError, ConfigValidationError) as exc:
         _err(str(exc))
@@ -966,12 +960,10 @@ def smai_submit_proposal(
 
     final_proposal_id = proposal_id or _generate_proposal_id()
 
-    overrides: dict[str, Any] = _apply_dev_filesystem_defaults({})
     try:
         runtime_config = load_runtime_config(
             config_path=config,
-            defaults=dev_defaults(),
-            flag_overrides=overrides,
+            defaults=_apply_dev_filesystem_defaults(dev_defaults()),
         )
     except (ConfigFileError, ConfigValidationError) as exc:
         _err(str(exc))
@@ -1008,12 +1000,10 @@ def smai_approve_proposal(
     writes the methodology + tracking entities and the CGs land in
     ``draft`` ready for the CG-execution spec.
     """
-    overrides: dict[str, Any] = _apply_dev_filesystem_defaults({})
     try:
         runtime_config = load_runtime_config(
             config_path=config,
-            defaults=dev_defaults(),
-            flag_overrides=overrides,
+            defaults=_apply_dev_filesystem_defaults(dev_defaults()),
         )
     except (ConfigFileError, ConfigValidationError) as exc:
         _err(str(exc))
@@ -1054,12 +1044,10 @@ def smai_reject_proposal(
     ``proposal.user_rejected``). The proposal transitions to
     ``rejected`` (terminal). The draft buffer artifact is preserved.
     """
-    overrides: dict[str, Any] = _apply_dev_filesystem_defaults({})
     try:
         runtime_config = load_runtime_config(
             config_path=config,
-            defaults=dev_defaults(),
-            flag_overrides=overrides,
+            defaults=_apply_dev_filesystem_defaults(dev_defaults()),
         )
     except (ConfigFileError, ConfigValidationError) as exc:
         _err(str(exc))
@@ -1131,12 +1119,10 @@ def smai_ingest(
     papers are link-target / dedup parking spots created by another
     paper's enrichment step; promotion fully ingests them).
     """
-    overrides: dict[str, Any] = _apply_dev_filesystem_defaults({})
     try:
         runtime_config = load_runtime_config(
             config_path=config,
-            defaults=dev_defaults(),
-            flag_overrides=overrides,
+            defaults=_apply_dev_filesystem_defaults(dev_defaults()),
         )
     except (ConfigFileError, ConfigValidationError) as exc:
         _err(str(exc))
@@ -1221,12 +1207,10 @@ def smai_serve(
 
     from smai_cli.dashboard import build_app  # noqa: PLC0415
 
-    overrides: dict[str, Any] = _apply_dev_filesystem_defaults({})
     try:
         runtime_config = load_runtime_config(
             config_path=config,
-            defaults=dev_defaults(),
-            flag_overrides=overrides,
+            defaults=_apply_dev_filesystem_defaults(dev_defaults()),
         )
     except (ConfigFileError, ConfigValidationError) as exc:
         _err(str(exc))
@@ -1400,11 +1384,9 @@ def smai_ui(  # noqa: PLR0913
     """
     # Layered config: dev defaults so an empty config still boots
     # usefully on a laptop (per `12` §4.2). Apply dev filesystem paths
-    # before layering so the SQLite URI / artifact root resolve
-    # consistently with `smai dev`.
-    overrides: dict[str, Any] = _apply_dev_filesystem_defaults({})
-    # Thread the per-flag overrides through the same layering pipeline so
-    # CLI flags win over file/env per the standard precedence (`09` §2).
+    # at the defaults layer so the SQLite URI / artifact root resolve
+    # consistently with `smai dev` AND the user's smai.yaml can still
+    # override them per the standard precedence (`09` §2).
     api_flag_overrides: dict[str, Any] = {}
     if host is not None:
         api_flag_overrides["host"] = host
@@ -1414,13 +1396,14 @@ def smai_ui(  # noqa: PLR0913
         api_flag_overrides["reload"] = True
     if with_worker is not None:
         api_flag_overrides["with_worker"] = bool(with_worker)
+    flag_overrides: dict[str, Any] = {}
     if api_flag_overrides:
-        overrides["api"] = api_flag_overrides
+        flag_overrides["api"] = api_flag_overrides
     try:
         runtime_config = load_runtime_config(
             config_path=config,
-            defaults=dev_defaults(),
-            flag_overrides=overrides,
+            defaults=_apply_dev_filesystem_defaults(dev_defaults()),
+            flag_overrides=flag_overrides,
         )
     except (ConfigFileError, ConfigValidationError) as exc:
         _err(str(exc))

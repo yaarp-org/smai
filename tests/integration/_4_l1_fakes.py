@@ -246,7 +246,12 @@ plugins:
   llm_provider_config:
     region: us-east-1
     model_id: us.anthropic.claude-opus-4-6-v1
-  metadata_store_config: {{ uri: "sqlite+aiosqlite:///:memory:" }}
+  # No metadata_store_config.uri here — let the dev-filesystem default
+  # apply via the defaults layer. Post-Bug-4 (Round-22 follow-up,
+  # `_apply_dev_filesystem_defaults` moved out of flag_overrides), if
+  # a YAML sets ``uri`` here it wins; the auto-detect test stamps a
+  # real DB at ``$SMAI_HOME/state.db`` and needs the dev default to
+  # apply so the strict ``--with-worker`` pre-flight finds it.
   artifact_store_config: {{}}
   compute_config: {{}}
 pipelines:
