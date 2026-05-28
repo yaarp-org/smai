@@ -79,6 +79,7 @@ def test_technique_ref_standard_validates() -> None:
         compatible_factor_types=["substitutive"],
         standard=True,
         affects_extension_points=["model"],
+        context_kind="standard",
     )
     assert ref.standard is True
     assert ref.fidelity_anchor is None
@@ -95,6 +96,7 @@ def test_technique_ref_with_paper_anchor_round_trip() -> None:
         fidelity_anchor=PaperFidelityAnchor(doi="10.5555/cutout"),
         affects_extension_points=["augment"],
         implies_controlled=["architecture", "optimization"],
+        context_kind="paper_extract",
     )
     payload = ref.model_dump(mode="json")
     parsed = TechniqueRef.model_validate(payload)
@@ -112,6 +114,7 @@ def test_technique_ref_with_reviewer_anchor_round_trip() -> None:
         standard=False,
         fidelity_anchor=ReviewerAttestedFidelityAnchor(spec_text="see notebook 42"),
         affects_extension_points=[],
+        context_kind="reviewer_attested",
     )
     payload = ref.model_dump(mode="json")
     parsed = TechniqueRef.model_validate(payload)
@@ -128,5 +131,7 @@ def test_technique_ref_rejects_unknown_factor_type() -> None:
                 "category": "other",
                 "compatible_factor_types": ["pipeline"],
                 "affects_extension_points": [],
+                "context_kind": "standard",
+                "standard": True,
             }
         )

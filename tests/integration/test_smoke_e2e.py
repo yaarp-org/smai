@@ -378,6 +378,7 @@ def _make_smoke_registries() -> Registries:
         compatible_factor_types=["additive"],
         standard=True,
         affects_extension_points=["train_transforms"],
+        context_kind="standard",
     )
     return load_default_registries(technique_registry={technique.id: technique})
 

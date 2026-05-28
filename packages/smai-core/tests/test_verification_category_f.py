@@ -190,11 +190,15 @@ def test_fidelity_anchor_passes_for_paper_anchor_on_non_standard() -> None:
 
 def test_fidelity_anchor_fails_for_non_standard_no_anchor() -> None:
     techs = fixture_technique_registry()
+    # context_kind=paper_extract is one valid TechniqueRef value the
+    # producer might pick; the anchor-less + non-standard combo is what
+    # the Task 1.5 verification rule rejects (regardless of context_kind).
     techs["tech_resnet50_cifar10"] = standard_technique(
         "tech_resnet50_cifar10",
         category="architecture",
         standard=False,
         fidelity_anchor=None,
+        context_kind="paper_extract",
     )
     registries = fixture_registries().model_copy(update={"technique_registry": techs})
     experiment = make_experiment()

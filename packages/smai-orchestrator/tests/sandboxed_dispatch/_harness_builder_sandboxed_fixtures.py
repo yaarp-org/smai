@@ -290,6 +290,7 @@ def make_technique_contract() -> TechniqueContract:
         technique_params=None,
         fidelity_anchor=None,
         standard=False,
+        context_kind="standard",
     )
     return TechniqueContract(envelope=envelope, body=body)
 

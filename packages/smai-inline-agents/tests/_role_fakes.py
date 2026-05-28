@@ -79,6 +79,9 @@ def make_technique_contract(
     technique_id: str | None,
     is_baseline: bool,
 ) -> TechniqueContract:
+    # Additive baselines (no technique_id) carry the ``no_op_baseline``
+    # body discriminator; technique-backed fakes use ``standard``.
+    context_kind = "no_op_baseline" if technique_id is None else "standard"
     body = TechniqueContractBody(
         entry_id=entry_id,
         parent_experiment_id="exp__demo",
@@ -90,6 +93,7 @@ def make_technique_contract(
         is_baseline=is_baseline,
         fidelity_anchor=None,
         standard=False,
+        context_kind=context_kind,
     )
     return TechniqueContract(envelope=_envelope("technique_contract"), body=body)
 

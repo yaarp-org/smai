@@ -268,7 +268,9 @@ class TechniqueDescription(BaseModel):
 
     # --- Producer-grounding metadata ---
 
-    context_kind: Literal["paper_extract", "proposal", "reviewer_attested", "standard"]
+    context_kind: Literal[
+        "paper_extract", "proposal", "reviewer_attested", "standard", "no_op_baseline"
+    ]
     confidence_flags: list[ConfidenceFlag] = Field(
         default_factory=list[ConfidenceFlag], max_length=30
     )
@@ -348,6 +350,29 @@ class TechniqueDescription(BaseModel):
                     "non-empty OR a /algorithm ConfidenceFlag"
                 )
 
+        elif self.context_kind == "no_op_baseline":
+            # Additive baseline (DEC-013): the contract body carries this
+            # variant when ``technique_id is None`` + ``is_baseline=True``.
+            # No source pointers are valid (there is no thing being
+            # described) and no verbatim excerpts can exist anywhere.
+            if self.source_arxiv_id is not None:
+                raise ValueError("no_op_baseline forbids source_arxiv_id")
+            if self.source_proposal_id is not None:
+                raise ValueError("no_op_baseline forbids source_proposal_id")
+            if self.source_reviewer is not None:
+                raise ValueError("no_op_baseline forbids source_reviewer")
+            if self.algorithm.source_excerpts:
+                raise ValueError(
+                    "no_op_baseline forbids algorithm.source_excerpts (nothing to quote)"
+                )
+            for i, hp in enumerate(self.hyperparameters):
+                if hp.source_excerpt is not None:
+                    raise ValueError(f"no_op_baseline forbids hyperparameters[{i}].source_excerpt")
+            if self.loss_function is not None and self.loss_function.source_excerpts:
+                raise ValueError("no_op_baseline forbids loss_function.source_excerpts")
+            if self.training_recipe is not None and self.training_recipe.source_excerpts:
+                raise ValueError("no_op_baseline forbids training_recipe.source_excerpts")
+
         else:  # context_kind == "standard"
             if self.source_arxiv_id is not None:
                 raise ValueError("standard forbids source_arxiv_id")
@@ -369,7 +394,7 @@ class TechniqueDescription(BaseModel):
         ``/limitations`` is handled by :meth:`_enforce_context_kind`
         above; this validator skips it for that variant.
         """
-        if self.context_kind == "standard":
+        if self.context_kind in {"standard", "no_op_baseline"}:
             return self
 
         flagged_paths = {f.field_path for f in self.confidence_flags}

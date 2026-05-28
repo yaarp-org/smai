@@ -22,10 +22,12 @@ class TechniqueContractBody(BaseModel):
     the grounding flavor explicitly so downstream consumers (the
     implementer agent's bundle-construction step, the contextual
     evaluator) read it from the contract rather than re-inferring from
-    ``standard`` + ``fidelity_anchor.kind``. ``None`` only for additive
+    ``standard`` + ``fidelity_anchor.kind``. The four ref-backed variants
+    (``paper_extract`` / ``proposal`` / ``reviewer_attested`` /
+    ``standard``) mirror :attr:`TechniqueRef.context_kind`; additive
     baselines (``technique_id is None`` + ``is_baseline=True``, per
-    DEC-013); every other entry has a populated value mirroring the
-    underlying :class:`TechniqueRef.context_kind`.
+    DEC-013) get ``no_op_baseline`` synthesized by the compiler so no
+    consumer ever branches on ``context_kind is None``.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -40,7 +42,7 @@ class TechniqueContractBody(BaseModel):
     is_baseline: bool
     fidelity_anchor: FidelityAnchor | None
     standard: bool
-    context_kind: ContextKind | None = None
+    context_kind: ContextKind
 
 
 class TechniqueContract(BaseModel):

@@ -989,10 +989,9 @@ def _draft_technique_to_paper_ref(
     # (``upstream_requirements §1``): non-standard refs land with a
     # :class:`PaperFidelityAnchor` so ``context_kind="paper_extract"``;
     # DEC-015 ``standard`` refs land with ``standard=True`` so
-    # ``context_kind="standard"``. The :class:`TechniqueRef`
-    # model_validator backfills from anchor / standard so this constructor
-    # site does not need a per-call decision, but we set it explicitly
-    # to lock the producer-side intent.
+    # ``context_kind="standard"``. :class:`TechniqueRef.context_kind` is
+    # required so we set it explicitly here — the validator rejects any
+    # anchor / standard disagreement.
     return TechniqueRef(
         id=symbolic_name,
         name=cast(str, raw.get("name", symbolic_name)),

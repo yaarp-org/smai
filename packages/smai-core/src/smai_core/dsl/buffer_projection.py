@@ -36,6 +36,7 @@ from smai_core.entities.technique import (
     ProposalFidelityAnchor,
     ReviewerAttestedFidelityAnchor,
     TechniqueRef,
+    anchor_implied_context_kind,
 )
 
 
@@ -71,11 +72,21 @@ def draft_technique_to_ref(
         list[str], raw.get("compatible_factor_types") or ["additive"]
     )
     # Set ``context_kind`` explicitly per ``upstream_requirements §1``
-    # mapping; if the buffer carries one we trust it (the planner's
+    # mapping. If the buffer carries one we trust it (the planner's
     # finalize-time projection check round-trips through Pydantic and
-    # validates anchor / standard consistency in TechniqueRef's
-    # model_validator).
-    context_kind = cast(ContextKind | None, raw.get("context_kind"))
+    # the :class:`TechniqueRef` validator rejects any anchor / standard
+    # disagreement). Otherwise derive it from anchor / standard here so
+    # the projection helper keeps working for planner-buffer payloads
+    # that don't yet author the field — :func:`anchor_implied_context_kind`
+    # returns the canonical mapping; non-standard anchor-less buffers
+    # fall back to ``proposal`` because the projection just defaulted
+    # the anchor to :class:`ProposalFidelityAnchor` above.
+    raw_context_kind = cast(ContextKind | None, raw.get("context_kind"))
+    context_kind: ContextKind = (
+        raw_context_kind
+        if raw_context_kind is not None
+        else (anchor_implied_context_kind(anchor, standard) or "proposal")
+    )
     return TechniqueRef(
         id=symbolic_name,
         name=cast(str, raw.get("name", symbolic_name)),

@@ -119,6 +119,17 @@ def make_technique_contract(
             doi="10.1234/test",
             arxiv_id="2401.12345",
         )
+    # Mirror the compiler's body discriminator: additive baselines (no
+    # technique_id) → ``no_op_baseline``; anchor-backed → its mapped value;
+    # otherwise ``standard``.
+    if technique_id is None:
+        context_kind = "no_op_baseline"
+    elif fidelity_anchor_kind == "paper":
+        context_kind = "paper_extract"
+    elif fidelity_anchor_kind == "proposal":
+        context_kind = "proposal"
+    else:
+        context_kind = "standard"
     body = TechniqueContractBody(
         entry_id=entry_id,
         parent_experiment_id="exp-1",
@@ -130,6 +141,7 @@ def make_technique_contract(
         is_baseline=is_baseline,
         fidelity_anchor=anchor,
         standard=standard,
+        context_kind=context_kind,
     )
     contract = TechniqueContract(envelope=envelope, body=body)
     return freeze_with_hash(contract)

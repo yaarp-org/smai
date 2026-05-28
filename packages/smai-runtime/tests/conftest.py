@@ -93,6 +93,10 @@ def make_technique_contract(
     technique_id: str | None = "tech_abc",
     is_baseline: bool = False,
 ) -> TechniqueContract:
+    # Additive baselines (technique_id is None) carry the compiler-synthesized
+    # ``no_op_baseline`` discriminator; technique-backed entries here are
+    # ``standard=True`` so the contract body mirrors ``"standard"``.
+    context_kind = "no_op_baseline" if technique_id is None else "standard"
     body = TechniqueContractBody(
         entry_id=entry_id,
         parent_experiment_id="exp",
@@ -104,6 +108,7 @@ def make_technique_contract(
         is_baseline=is_baseline,
         fidelity_anchor=None,
         standard=True,
+        context_kind=context_kind,
     )
     return freeze_with_hash(
         TechniqueContract(envelope=_envelope("technique_contract", f"{entry_id}__tc"), body=body)

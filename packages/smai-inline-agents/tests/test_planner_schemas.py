@@ -2,8 +2,8 @@
 
 Per ``planner_refactor/design_notes/technique_description_schema.md``:
 
-* Round-trip for all 4 ``context_kind`` variants (paper_extract,
-  proposal, reviewer_attested, standard).
+* Round-trip for all 5 ``context_kind`` variants (paper_extract,
+  proposal, reviewer_attested, standard, no_op_baseline).
 * Per-``context_kind`` ``model_validator`` rejection cases (§4).
 * Sentinel pattern: ``None`` + ``ConfidenceFlag`` (§3).
 * Structural validation rules (§5).
@@ -233,9 +233,40 @@ def _standard_example() -> TechniqueDescription:
     )
 
 
+def _no_op_baseline_example() -> TechniqueDescription:
+    return TechniqueDescription(
+        name="no_op_baseline",
+        summary=(
+            "Additive-baseline no-op: the harness extension point is left at "
+            "its working default, so the entry runs the unmodified pipeline."
+        ),
+        motivation=(
+            "Additive factors (DEC-013) compare a treatment against the "
+            "absence of the treatment; the baseline applies no technique at all."
+        ),
+        problem_setting=(
+            "Any additive-factor comparison group where the baseline entry "
+            "carries no technique_id and exercises the default code path."
+        ),
+        algorithm=AlgorithmSpec(
+            summary=(
+                "No algorithm: the baseline is a no-op that leaves the harness "
+                "extension point at its working default for this entry."
+            ),
+        ),
+        context_kind="no_op_baseline",
+    )
+
+
 @pytest.mark.parametrize(
     "factory",
-    [_paper_extract_example, _proposal_example, _reviewer_attested_example, _standard_example],
+    [
+        _paper_extract_example,
+        _proposal_example,
+        _reviewer_attested_example,
+        _standard_example,
+        _no_op_baseline_example,
+    ],
 )
 def test_round_trip_through_pydantic(
     factory: object,
@@ -448,6 +479,49 @@ def test_standard_forbids_provenance_pointers() -> None:
             context_kind="standard",
             source_arxiv_id="1708.04552",
         )
+
+
+def test_no_op_baseline_forbids_provenance_pointers() -> None:
+    with pytest.raises(ValidationError, match="no_op_baseline forbids source_proposal_id"):
+        TechniqueDescription(
+            name="no_op_baseline",
+            summary="x" * 50,
+            motivation="x" * 50,
+            problem_setting="x" * 50,
+            algorithm=AlgorithmSpec(summary="x" * 50),
+            context_kind="no_op_baseline",
+            source_proposal_id="prop-1",
+        )
+
+
+def test_no_op_baseline_forbids_algorithm_excerpts() -> None:
+    with pytest.raises(ValidationError, match="no_op_baseline forbids algorithm.source_excerpts"):
+        TechniqueDescription(
+            name="no_op_baseline",
+            summary="x" * 50,
+            motivation="x" * 50,
+            problem_setting="x" * 50,
+            algorithm=AlgorithmSpec(
+                summary="x" * 50,
+                source_excerpts=[
+                    SourceExcerpt(
+                        text="q",
+                        location=SourceLocationSection(section_id="3"),
+                    )
+                ],
+            ),
+            context_kind="no_op_baseline",
+        )
+
+
+def test_no_op_baseline_skips_none_requires_flag_check() -> None:
+    """``no_op_baseline`` is workflow-only — exempt from the sentinel rule
+    like ``standard`` (no fields need ConfidenceFlag annotations)."""
+    td = _no_op_baseline_example()
+    assert td.loss_function is None
+    assert td.training_recipe is None
+    assert td.evaluation_protocol is None
+    assert td.confidence_flags == []
 
 
 # === Sentinel pattern (§3) ==================================================

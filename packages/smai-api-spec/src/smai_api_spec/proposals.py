@@ -37,18 +37,24 @@ from smai_api_spec.pagination import PaginationParams
 class SubmitProposalRequest(APIBaseModel):
     """Submit a novel-technique proposal or a reproduce-paper proposal.
 
-    Per ``11`` §5.2.1: exactly one of the three description fields must be
-    populated; the populated field must be consistent with
-    ``submission_kind``:
+    Per ``11`` §5.2.1 + planner_refactor D10: exactly one of two
+    description fields must be populated; the populated field must be
+    consistent with ``submission_kind``:
 
-    * ``submission_kind="novel_technique"`` → exactly one of
-      ``technique_description`` / ``technique_description_text``.
+    * ``submission_kind="novel_technique"`` → ``technique_description``
+      (typed :class:`smai_inline_agents.planner.TechniqueDescription`
+      dict per planner_refactor Step 2 / ``upstream_requirements §2``).
     * ``submission_kind="reproduce_paper"`` → ``reproduce_paper_arxiv_id``,
       and the referenced paper must exist + be in a terminal
       ``registered`` state. Implementations enforce the latter at submit
       time and respond with 409 + ``code: "PAPER_NOT_READY"`` if the
       paper is missing or non-terminal (per ``11`` §13 OQ11 RESOLVED
       2026-05-03).
+
+    The freeform ``technique_description_text`` field that this
+    request previously carried was dropped per D10 (no backcompat shim
+    for pre-Step-2 callers); SubmitProposalRequest's ``extra="forbid"``
+    config now rejects it at the request-parse boundary.
 
     ``proposal_id`` lets callers pin their own ULID for idempotency: a
     repeat submit with the same id returns the existing proposal record
@@ -62,7 +68,6 @@ class SubmitProposalRequest(APIBaseModel):
 
     submission_kind: SubmissionKind = "novel_technique"
     technique_description: dict[str, object] | None = None
-    technique_description_text: str | None = None
     reproduce_paper_arxiv_id: str | None = None
     proposal_id: str | None = None
     submitted_by: str | None = None
@@ -75,19 +80,18 @@ class SubmitProposalRequest(APIBaseModel):
         # not truthiness.
         forms = {
             "technique_description": self.technique_description is not None,
-            "technique_description_text": self.technique_description_text is not None,
             "reproduce_paper_arxiv_id": self.reproduce_paper_arxiv_id is not None,
         }
         populated = [name for name, present in forms.items() if present]
         if len(populated) == 0:
             raise ValueError(
-                "exactly one of technique_description / technique_description_text / "
-                "reproduce_paper_arxiv_id must be populated; got none"
+                "exactly one of technique_description / reproduce_paper_arxiv_id "
+                "must be populated; got none"
             )
         if len(populated) > 1:
             raise ValueError(
-                "exactly one of technique_description / technique_description_text / "
-                f"reproduce_paper_arxiv_id must be populated; got {populated}"
+                "exactly one of technique_description / reproduce_paper_arxiv_id "
+                f"must be populated; got {populated}"
             )
         # Cross-validate with submission_kind.
         if self.submission_kind == "reproduce_paper":

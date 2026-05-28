@@ -231,6 +231,7 @@ def make_registries_with_technique(technique_id: str = "tech_cutout") -> Registr
         compatible_factor_types=["additive"],
         standard=True,
         affects_extension_points=["train_transforms"],
+        context_kind="standard",
     )
     base = load_default_registries(technique_registry={technique.id: technique})
     return base

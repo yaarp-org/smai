@@ -104,6 +104,7 @@ def test_verify_aggregates_multiple_findings() -> None:
         "tech_resnet50_cifar10",
         category="not_a_real_category",
         standard=False,  # also missing fidelity_anchor
+        context_kind="paper_extract",
     )
     registries = fixture_registries().model_copy(update={"technique_registry": techs})
     experiment = make_experiment()
@@ -152,6 +153,7 @@ def test_verify_deterministic_finding_order() -> None:
         "tech_resnet50_cifar10",
         category="zzz_invalid",
         standard=False,
+        context_kind="paper_extract",
     )
     registries = fixture_registries().model_copy(update={"technique_registry": techs})
     experiment = make_experiment()

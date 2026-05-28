@@ -2,14 +2,14 @@
 
 Covers:
 
-* :class:`TechniqueRef.context_kind` derivation from
-  ``fidelity_anchor`` / ``standard`` (``upstream_requirements §1``
-  mapping).
-* :class:`TechniqueRef.context_kind` consistency check when the
-  producer sets a value that disagrees with the anchor.
+* :class:`TechniqueRef.context_kind` required + consistency-check rules
+  (``upstream_requirements §1`` mapping).
 * Methodology compiler reads :attr:`TechniqueRef.context_kind`
   directly and copies onto :class:`TechniqueContractBody.context_kind`
   — no inference branch at compile time.
+* Additive baselines (no :class:`TechniqueRef`) get the synthesized
+  ``no_op_baseline`` body discriminator from the compiler, so consumers
+  never branch on ``context_kind is None``.
 """
 
 from __future__ import annotations
@@ -23,10 +23,10 @@ from smai_core import (
     TechniqueRef,
 )
 
-# === TechniqueRef.context_kind derivation ==================================
+# === TechniqueRef.context_kind required + consistency rules ================
 
 
-def test_paper_anchor_derives_paper_extract() -> None:
+def test_paper_anchored_ref_accepts_paper_extract() -> None:
     ref = TechniqueRef(
         id="t",
         name="t",
@@ -36,11 +36,12 @@ def test_paper_anchor_derives_paper_extract() -> None:
         standard=False,
         fidelity_anchor=PaperFidelityAnchor(doi="10.x"),
         affects_extension_points=[],
+        context_kind="paper_extract",
     )
     assert ref.context_kind == "paper_extract"
 
 
-def test_proposal_anchor_derives_proposal() -> None:
+def test_proposal_anchored_ref_accepts_proposal() -> None:
     ref = TechniqueRef(
         id="t",
         name="t",
@@ -50,11 +51,12 @@ def test_proposal_anchor_derives_proposal() -> None:
         standard=False,
         fidelity_anchor=ProposalFidelityAnchor(proposal_id="p1"),
         affects_extension_points=[],
+        context_kind="proposal",
     )
     assert ref.context_kind == "proposal"
 
 
-def test_reviewer_attested_anchor_derives_reviewer_attested() -> None:
+def test_reviewer_attested_ref_accepts_reviewer_attested() -> None:
     ref = TechniqueRef(
         id="t",
         name="t",
@@ -64,11 +66,12 @@ def test_reviewer_attested_anchor_derives_reviewer_attested() -> None:
         standard=False,
         fidelity_anchor=ReviewerAttestedFidelityAnchor(spec_text="see notebook"),
         affects_extension_points=[],
+        context_kind="reviewer_attested",
     )
     assert ref.context_kind == "reviewer_attested"
 
 
-def test_standard_anchorless_derives_standard() -> None:
+def test_standard_anchorless_ref_accepts_standard() -> None:
     ref = TechniqueRef(
         id="t",
         name="t",
@@ -77,6 +80,7 @@ def test_standard_anchorless_derives_standard() -> None:
         compatible_factor_types=["substitutive"],
         standard=True,
         affects_extension_points=[],
+        context_kind="standard",
     )
     assert ref.context_kind == "standard"
 
@@ -100,8 +104,42 @@ def test_explicit_context_kind_round_trips() -> None:
     assert parsed == ref
 
 
-def test_explicit_context_kind_mismatch_with_anchor_raises() -> None:
-    """A producer that sets context_kind disagreeing with anchor is rejected."""
+def test_missing_context_kind_raises() -> None:
+    """``context_kind`` is required (D10: no legacy NULL rows, planner cannot
+    infer via construct-time backfill)."""
+    with pytest.raises(ValidationError) as excinfo:
+        TechniqueRef.model_validate(
+            {
+                "id": "t",
+                "name": "t",
+                "description": "d",
+                "category": "c",
+                "compatible_factor_types": ["additive"],
+                "standard": True,
+                "affects_extension_points": [],
+            }
+        )
+    assert "context_kind" in str(excinfo.value)
+
+
+def test_no_op_baseline_rejected_on_ref() -> None:
+    """``no_op_baseline`` is a TechniqueContractBody-only variant; rejected
+    on TechniqueRef because additive baselines have no ref at all."""
+    with pytest.raises(ValidationError, match="no_op_baseline"):
+        TechniqueRef(
+            id="t",
+            name="t",
+            description="d",
+            category="c",
+            compatible_factor_types=["additive"],
+            standard=True,
+            affects_extension_points=[],
+            context_kind="no_op_baseline",  # type: ignore[arg-type]
+        )
+
+
+def test_paper_anchor_mismatch_with_proposal_context_kind_raises() -> None:
+    """Paper anchor + ``context_kind="proposal"`` is inconsistent; reject."""
     with pytest.raises(ValidationError, match="disagrees with"):
         TechniqueRef(
             id="t",
@@ -116,24 +154,36 @@ def test_explicit_context_kind_mismatch_with_anchor_raises() -> None:
         )
 
 
-def test_pre_step2_payload_backfills_context_kind() -> None:
-    """A persisted TechniqueRef payload without ``context_kind`` (legacy
-    pre-0007 row) gets backfilled via the model-validator at hydration
-    time (D10: no data migration, backfill on read)."""
-    payload = {
-        "id": "t",
-        "name": "t",
-        "description": "d",
-        "category": "c",
-        "compatible_factor_types": ["additive"],
-        "standard": False,
-        "fidelity_anchor": {"kind": "paper", "doi": "10.x"},
-        "affects_extension_points": [],
-        "implies_controlled": [],
-        "parameter_schema": None,
-    }
-    ref = TechniqueRef.model_validate(payload)
-    assert ref.context_kind == "paper_extract"
+def test_proposal_anchor_mismatch_with_paper_extract_context_kind_raises() -> None:
+    """Proposal anchor + ``context_kind="paper_extract"`` is inconsistent; reject."""
+    with pytest.raises(ValidationError, match="disagrees with"):
+        TechniqueRef(
+            id="t",
+            name="t",
+            description="d",
+            category="c",
+            compatible_factor_types=["additive"],
+            standard=False,
+            fidelity_anchor=ProposalFidelityAnchor(proposal_id="p1"),
+            affects_extension_points=[],
+            context_kind="paper_extract",
+        )
+
+
+def test_reviewer_anchor_mismatch_with_standard_context_kind_raises() -> None:
+    """Reviewer anchor + ``context_kind="standard"`` is inconsistent; reject."""
+    with pytest.raises(ValidationError, match="disagrees with"):
+        TechniqueRef(
+            id="t",
+            name="t",
+            description="d",
+            category="c",
+            compatible_factor_types=["additive"],
+            standard=False,
+            fidelity_anchor=ReviewerAttestedFidelityAnchor(spec_text="see"),
+            affects_extension_points=[],
+            context_kind="standard",
+        )
 
 
 # === Compiler integration: context_kind reads directly =====================
@@ -141,13 +191,14 @@ def test_pre_step2_payload_backfills_context_kind() -> None:
 
 def test_compiler_copies_context_kind_onto_contract() -> None:
     """The methodology compiler reads ``ref.context_kind`` and copies it
-    to ``TechniqueContractBody.context_kind`` — no inference branch."""
+    to ``TechniqueContractBody.context_kind`` — no inference branch.
+    Additive baselines (no technique_id) get the synthesized
+    ``no_op_baseline`` variant so consumers never branch on None."""
     from _emit_helpers import compile_experiment_fixture  # type: ignore[import-not-found]
 
     art_set, _ = compile_experiment_fixture("cutout_on_cifar10")
     contracts_by_entry = {c.body.entry_id: c for c in art_set.technique_contracts}
     # cutout_on_cifar10 has a standard cutout technique + an additive baseline.
-    # Standard technique → "standard". Additive baseline → None (no technique_id).
     assert "cutout_treatment" in contracts_by_entry
     treatment = contracts_by_entry["cutout_treatment"].body
     assert treatment.technique_id is not None
@@ -155,10 +206,12 @@ def test_compiler_copies_context_kind_onto_contract() -> None:
         f"cutout treatment is a DEC-015 standard technique; expected "
         f"context_kind='standard', got {treatment.context_kind!r}"
     )
-    # Additive baseline: no technique_id → no ref to read → None.
+    # Additive baseline: no technique_id → compiler synthesizes "no_op_baseline".
     baseline = contracts_by_entry["no_aug_baseline"].body
     assert baseline.technique_id is None
-    assert baseline.context_kind is None
+    assert baseline.context_kind == "no_op_baseline", (
+        f"additive baseline expected context_kind='no_op_baseline', got {baseline.context_kind!r}"
+    )
 
 
 def test_compiler_propagates_paper_extract_context_kind() -> None:
@@ -182,7 +235,7 @@ def test_compiler_propagates_paper_extract_context_kind() -> None:
             "fidelity_anchor": PaperFidelityAnchor(
                 doi="10.5555/cutout", arxiv_id="1708.04552"
             ).model_dump(mode="python"),
-            "context_kind": None,
+            "context_kind": "paper_extract",
         }
     )
     swapped_registries = base.model_copy(

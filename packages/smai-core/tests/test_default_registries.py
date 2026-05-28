@@ -61,6 +61,7 @@ def test_technique_registry_accepts_caller_supplied_input() -> None:
         compatible_factor_types=["substitutive"],
         standard=True,
         affects_extension_points=["model_wrapper"],
+        context_kind="standard",
     )
     registries = load_default_registries(technique_registry={tech.id: tech})
     assert registries.technique_registry == {tech.id: tech}

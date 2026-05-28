@@ -93,10 +93,10 @@ GOLDEN_TECHNIQUE_HASHES: dict[str, dict[str, str]] = {
     },
     "cutout_on_cifar10": {
         "cutout_treatment": ("3f24ce31aaa781656e706d4cfb1b8c0a54693944e5e2722fd52c8d7ae4428b0b"),
-        "no_aug_baseline": ("8e4c62367d986d510f39375b84874a4ef346265f9dcc8a77526e56029181cf0d"),
+        "no_aug_baseline": ("7965901065ce229aade1d13ad081ad9331c0a0bac35f44c0b9081f7a66967e8c"),
     },
     "pruning_sparsity_sweep": {
-        "dense_baseline": ("29585b55bcd9895884c8e41fa60d8db0e21cadf290017730b9d226c64753b7f0"),
+        "dense_baseline": ("e1f9812d4fab30b5a6560d71bd1cbc9789a11373c7a996588f50866eba9035b1"),
         "sparsity_50": ("ac3b9eb6dc07236fdd58703413d542b75294f335123d5118e56c2d54096dcff8"),
         "sparsity_70": ("ff3b003db1ca9db6448aac517c9b4ef0391fa6c15480e0e444981f4b7388e11b"),
         "sparsity_90": ("c836807a59c018abe2e7e4af97e20c0650ca96d13d173531ffcda82fad4969a5"),

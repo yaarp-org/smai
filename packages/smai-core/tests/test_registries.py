@@ -48,6 +48,7 @@ def _technique() -> TechniqueRef:
         compatible_factor_types=["substitutive"],
         standard=True,
         affects_extension_points=["model"],
+        context_kind="standard",
     )
 
 

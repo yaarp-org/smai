@@ -175,14 +175,6 @@ def test_worker_heartbeat_roundtrip() -> None:
 # === Proposals ==============================================================
 
 
-def test_submit_proposal_request_novel_technique_text() -> None:
-    req = SubmitProposalRequest(
-        submission_kind="novel_technique",
-        technique_description_text="adaptive learning rate based on validation loss",
-    )
-    _roundtrip(req)
-
-
 def test_submit_proposal_request_novel_technique_dict() -> None:
     req = SubmitProposalRequest(
         submission_kind="novel_technique",
@@ -208,9 +200,9 @@ def test_submit_proposal_request_zero_descriptions_rejected() -> None:
 def test_submit_proposal_request_two_descriptions_rejected() -> None:
     with pytest.raises(ValidationError) as excinfo:
         SubmitProposalRequest(
-            submission_kind="novel_technique",
+            submission_kind="reproduce_paper",
             technique_description={"name": "x"},
-            technique_description_text="x",
+            reproduce_paper_arxiv_id="2401.12345",
         )
     assert "exactly one" in str(excinfo.value)
 
@@ -220,7 +212,7 @@ def test_submit_proposal_request_kind_mismatch_rejected() -> None:
     with pytest.raises(ValidationError):
         SubmitProposalRequest(
             submission_kind="reproduce_paper",
-            technique_description_text="not the right form",
+            technique_description={"name": "x"},
         )
 
 
@@ -700,7 +692,7 @@ def test_extra_fields_rejected() -> None:
         SubmitProposalRequest.model_validate(
             {
                 "submission_kind": "novel_technique",
-                "technique_description_text": "x",
+                "technique_description": {"name": "x"},
                 "unexpected_field": "should be rejected",
             }
         )

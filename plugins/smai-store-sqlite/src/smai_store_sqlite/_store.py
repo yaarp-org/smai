@@ -1497,10 +1497,11 @@ def _technique_from_row(row: Any) -> TechniqueRef:
         "affects_extension_points": row["affects_extension_points"],
         "implies_controlled": row["implies_controlled"] or [],
         "parameter_schema": row["parameter_schema"],
-        # Pre-0007 rows have no column; row.get("context_kind") may be
-        # absent in mapping shape — pass None explicitly so the
-        # TechniqueRef validator backfills from anchor / standard.
-        "context_kind": row["context_kind"] if "context_kind" in row else None,
+        # Required since planner-refactor Step 2 follow-up (D10: no legacy
+        # NULL rows). The migration 0007 column landed before any
+        # production rows existed; every persisted ref has the value set
+        # by its writer (planner / paper-ingestion / fixture seed).
+        "context_kind": row["context_kind"],
     }
     return TechniqueRef.model_validate(payload)
 

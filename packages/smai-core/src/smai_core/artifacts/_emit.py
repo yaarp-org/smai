@@ -68,6 +68,7 @@ from smai_core.entities.metric import (
     ParametricMetricRef,
 )
 from smai_core.entities.registries import Registries
+from smai_core.entities.technique import ContextKind
 from smai_core.entities.validation import (
     ComparisonRule,
     TrendCheck,
@@ -410,7 +411,12 @@ def _build_technique_contract(
     technique_id = entry.level.technique_id
     standard = False
     fidelity_anchor = None
-    context_kind = None
+    # Additive baselines (technique_id is None + is_baseline=True per
+    # DEC-013) have no :class:`TechniqueRef` to read; the methodology
+    # compiler synthesizes the ``no_op_baseline`` discriminator value
+    # here so downstream consumers (implementer bundle-construction,
+    # contextual evaluator) never branch on ``context_kind is None``.
+    context_kind: ContextKind = "no_op_baseline"
     if technique_id is not None:
         ref = registries.technique_registry.get(technique_id)
         if ref is None:

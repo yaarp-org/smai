@@ -13,10 +13,9 @@ instead of relying on the legacy
 
 Per D10 (``planner_refactor/notes/07_settled_decisions.md`` D10): NO data
 backfill. SMAI is pre-v1; the only existing :class:`TechniqueRef` data is
-the project owner's own test fixtures. Legacy rows (pre-0007) keep NULL
-and get backfilled at hydration via :class:`TechniqueRef`'s
-``_derive_context_kind`` model-validator; new writes always populate the
-column.
+the project owner's own test fixtures, which were dropped — every new write
+populates ``context_kind`` explicitly (the :class:`TechniqueRef`
+``_validate_context_kind`` validator enforces it as a required field).
 
 Forward-only per DEC-036; ``downgrade()`` raises so a stray
 ``alembic downgrade`` is loud rather than silent. Dual-mode add-column

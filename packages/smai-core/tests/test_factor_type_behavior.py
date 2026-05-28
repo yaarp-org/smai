@@ -226,6 +226,7 @@ def _arch_techs() -> dict[str, TechniqueRef]:
             compatible_factor_types=["substitutive"],
             standard=True,
             affects_extension_points=["model"],
+            context_kind="standard",
         ),
         "resnet50": TechniqueRef(
             id="resnet50",
@@ -235,6 +236,7 @@ def _arch_techs() -> dict[str, TechniqueRef]:
             compatible_factor_types=["substitutive"],
             standard=True,
             affects_extension_points=["model"],
+            context_kind="standard",
         ),
     }
 

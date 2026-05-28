@@ -10,17 +10,26 @@ from typing import Annotated, Any, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
-ContextKind: TypeAlias = Literal["paper_extract", "proposal", "reviewer_attested", "standard"]
+ContextKind: TypeAlias = Literal[
+    "paper_extract", "proposal", "reviewer_attested", "standard", "no_op_baseline"
+]
 """Per ``agent_refactor/upstream_requirements.md`` §1: explicit grounding-flavor
 discriminator on :class:`TechniqueRef` and :class:`TechniqueContractBody`,
 populated by the planner / ingestion subagent and read directly by the
 methodology compiler. Replaces the inference-from-anchor logic that lived
 on the implementer side.
 
-The four-way set mirrors :class:`TechniqueDescription.context_kind` from
-``smai_inline_agents.planner.schemas``. The fifth ``no_op_baseline`` shape
-is workflow-derived (DEC-013 / DEC-017) and not a value of this Literal —
-additive baselines have no :class:`TechniqueRef` to discriminate.
+The five-way set:
+
+* ``paper_extract`` — :class:`PaperFidelityAnchor`-anchored ref.
+* ``proposal`` — :class:`ProposalFidelityAnchor`-anchored ref.
+* ``reviewer_attested`` — :class:`ReviewerAttestedFidelityAnchor`-anchored ref.
+* ``standard`` — DEC-015 standard technique, no anchor.
+* ``no_op_baseline`` — additive baseline contract body (no
+  :class:`TechniqueRef` exists for it; populated by the methodology
+  compiler at emission time for entries with ``technique_id is None`` +
+  ``is_baseline=True``). Never appears on :class:`TechniqueRef` itself —
+  only on :class:`TechniqueContractBody`.
 """
 
 TechniqueParamValue: TypeAlias = str | int | float | bool | None
@@ -79,6 +88,11 @@ FidelityAnchorAdapter: TypeAdapter[FidelityAnchor] = TypeAdapter(FidelityAnchor)
 """``TypeAdapter`` for the anchor union; use to validate raw dicts."""
 
 
+_REF_CONTEXT_KINDS: frozenset[str] = frozenset(
+    {"paper_extract", "proposal", "reviewer_attested", "standard"}
+)
+
+
 class TechniqueRef(BaseModel):
     """A registered technique. Global, source-independent.
 
@@ -103,56 +117,49 @@ class TechniqueRef(BaseModel):
     affects_extension_points: list[str]
     implies_controlled: list[str] = []
     parameter_schema: dict[str, Any] | None = None
-    context_kind: ContextKind | None = None
-    """Explicit grounding flavor (``upstream_requirements §1``). Derived
-    from ``standard`` + ``fidelity_anchor.kind`` by
-    :meth:`_derive_context_kind` when constructed without one; producers
-    (planner / ingestion subagent) set it explicitly. The methodology
-    compiler reads this field rather than re-inferring at compile time.
+    context_kind: ContextKind
+    """Explicit grounding flavor (``agent_refactor/upstream_requirements §1``).
+    Required at construction; producers (planner / ingestion subagent /
+    paper-ingestion projection / fixture authors) set it explicitly. Must
+    be one of the four ``TechniqueRef`` variants — ``no_op_baseline`` is
+    a contract-body-only value and never appears here (the
+    :meth:`_validate_context_kind` validator rejects it).
     """
 
     @model_validator(mode="after")
-    def _derive_context_kind(self) -> TechniqueRef:
-        """Backfill / consistency-check ``context_kind``.
+    def _validate_context_kind(self) -> TechniqueRef:
+        """Consistency-check ``context_kind`` against the anchor / standard mapping.
 
-        The mapping (``upstream_requirements §1``):
-
-        * :class:`PaperFidelityAnchor` → ``"paper_extract"``
-        * :class:`ProposalFidelityAnchor` → ``"proposal"``
-        * :class:`ReviewerAttestedFidelityAnchor` → ``"reviewer_attested"``
-        * ``fidelity_anchor=None`` + ``standard=True`` → ``"standard"``
-
-        Non-standard refs without an anchor leave ``context_kind`` at
-        ``None`` here; Task 1.5 ``technique.fidelity_anchor_present_or_standard``
-        verification rejects them downstream so no production path
-        survives with a ``None`` context_kind.
-
-        Existing-data ``TechniqueRef``s persisted before Step 2 of the
-        planner_refactor get backfilled on read via this validator
-        (D10: no data migration; backfill at hydration is the v1 posture).
-        New producers set ``context_kind`` explicitly; a mismatch with
-        the anchor / standard mapping raises here.
+        Producers set ``context_kind`` explicitly; this validator rejects
+        anything inconsistent with :data:`anchor_implied_context_kind`.
+        ``no_op_baseline`` is rejected here because it is a contract-body
+        variant only (additive baselines never have a :class:`TechniqueRef`).
         """
-        derived = _derive_context_kind_from_anchor(self.fidelity_anchor, self.standard)
-        if self.context_kind is None:
-            if derived is not None:
-                object.__setattr__(self, "context_kind", derived)
-        elif derived is not None and self.context_kind != derived:
+        if self.context_kind not in _REF_CONTEXT_KINDS:
+            raise ValueError(
+                f"context_kind {self.context_kind!r} is not valid on TechniqueRef; "
+                f"allowed values are {sorted(_REF_CONTEXT_KINDS)} "
+                "(no_op_baseline is a TechniqueContractBody-only variant)"
+            )
+        implied = anchor_implied_context_kind(self.fidelity_anchor, self.standard)
+        if implied is not None and self.context_kind != implied:
             raise ValueError(
                 f"context_kind {self.context_kind!r} disagrees with "
-                f"fidelity_anchor / standard mapping ({derived!r}); "
+                f"fidelity_anchor / standard mapping ({implied!r}); "
                 "see upstream_requirements §1 for the canonical mapping"
             )
         return self
 
 
-def _derive_context_kind_from_anchor(
+def anchor_implied_context_kind(
     anchor: FidelityAnchor | None, standard: bool
 ) -> ContextKind | None:
-    """Map an anchor + standard flag onto :data:`ContextKind`.
+    """Map an anchor + standard flag onto the implied :data:`ContextKind`.
 
     Returns ``None`` when no mapping applies (non-standard + anchor-less,
-    which is rejected by Task 1.5 verification downstream).
+    which is rejected by Task 1.5 verification downstream). Used by the
+    :class:`TechniqueRef` validator's consistency check and by callers
+    that synthesize a ``context_kind`` from anchor / standard inputs.
     """
     if anchor is not None:
         if anchor.kind == "paper":

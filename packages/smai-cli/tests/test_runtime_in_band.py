@@ -140,6 +140,7 @@ async def test_submit_text_resolves_techniques_from_metadata_store(
             compatible_factor_types=["additive"],
             standard=True,
             affects_extension_points=["train_transforms"],
+            context_kind="standard",
         )
     )
     artifact_store = LocalFsStore(tmp_path / "artifacts")

@@ -87,6 +87,7 @@ def _cutout_technique_ref_dict() -> dict[str, Any]:
         compatible_factor_types=["additive"],
         standard=True,
         affects_extension_points=["train_transforms"],
+        context_kind="standard",
         parameter_schema={
             "type": "object",
             "properties": {"patch_size": {"type": "integer"}},

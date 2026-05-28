@@ -413,6 +413,7 @@ class MetadataStoreConformance:
                 standard=False,
                 fidelity_anchor=PaperFidelityAnchor(doi="10.x/paper"),
                 affects_extension_points=[],
+                context_kind="paper_extract",
             ),
             TechniqueRef(
                 id="proposal_anchored_tech",
@@ -423,6 +424,7 @@ class MetadataStoreConformance:
                 standard=False,
                 fidelity_anchor=ProposalFidelityAnchor(proposal_id="p1"),
                 affects_extension_points=[],
+                context_kind="proposal",
             ),
             TechniqueRef(
                 id="reviewer_attested_tech",
@@ -433,6 +435,7 @@ class MetadataStoreConformance:
                 standard=False,
                 fidelity_anchor=ReviewerAttestedFidelityAnchor(spec_text="see"),
                 affects_extension_points=[],
+                context_kind="reviewer_attested",
             ),
             TechniqueRef(
                 id="standard_tech",
@@ -442,10 +445,10 @@ class MetadataStoreConformance:
                 compatible_factor_types=["substitutive"],
                 standard=True,
                 affects_extension_points=[],
+                context_kind="standard",
             ),
         ]
         for ref in cases:
-            assert ref.context_kind is not None
             await store.upsert_technique(ref)
             loaded = await store.get_technique(ref.id)
             assert loaded is not None

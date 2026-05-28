@@ -101,10 +101,10 @@ async def test_submit_proposal_pinned_id_round_trips(tmp_path: Path) -> None:
 async def test_submit_proposal_rejects_freeform_text(tmp_path: Path) -> None:
     """``technique_description_text`` is the freeform shape D10 dropped.
 
-    Planner-refactor Step 2 / ``upstream_requirements §2``: the typed
-    :class:`TechniqueDescription` is the only valid body for
-    novel-technique submissions. A text-only submit returns 400 +
-    VALIDATION_ERROR pointing at ``technique_description_text``.
+    Planner-refactor Step 2 follow-up: the field was deleted from
+    :class:`SubmitProposalRequest` entirely (no backcompat shim per D10);
+    ``extra="forbid"`` on the spec model rejects it at the request-parse
+    boundary with 400 + VALIDATION_ERROR.
     """
     runtime = await make_test_runtime(artifact_root=tmp_path / "artifacts")
     app = make_api_app(runtime)  # type: ignore[arg-type]
@@ -131,13 +131,14 @@ async def test_malformed_json_returns_400_envelope(tmp_path: Path) -> None:
     runtime = await make_test_runtime(artifact_root=tmp_path / "artifacts")
     app = make_api_app(runtime)  # type: ignore[arg-type]
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        # Both technique fields populated → spec model_validator rejects.
+        # technique_description populated + reproduce_paper_arxiv_id populated
+        # → spec model_validator rejects ("exactly one of").
         response = await client.post(
             PROPOSALS,
             json={
                 "submission_kind": "novel_technique",
                 "technique_description": {"a": 1},
-                "technique_description_text": "also populated",
+                "reproduce_paper_arxiv_id": "2401.12345",
             },
         )
         assert response.status_code == 400, response.text

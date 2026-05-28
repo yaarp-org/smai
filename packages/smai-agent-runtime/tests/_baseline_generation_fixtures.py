@@ -61,6 +61,20 @@ def stage_technique_contract(
         content_hash="cafebabe" * 8,
         parent_experiment_id="exp-fixture",
     )
+    # Mirror the compiler's body discriminator: additive baselines (no
+    # technique_id) → ``no_op_baseline``; anchor-backed → its mapped value;
+    # otherwise ``standard``.
+    anchor_kind = getattr(fidelity_anchor, "kind", None)
+    if technique_id is None:
+        context_kind = "no_op_baseline"
+    elif anchor_kind == "paper":
+        context_kind = "paper_extract"
+    elif anchor_kind == "proposal":
+        context_kind = "proposal"
+    elif anchor_kind == "reviewer_attested":
+        context_kind = "reviewer_attested"
+    else:
+        context_kind = "standard"
     body = TechniqueContractBody(
         entry_id="entry-test",
         parent_experiment_id="exp-fixture",
@@ -72,6 +86,7 @@ def stage_technique_contract(
         is_baseline=is_baseline,
         fidelity_anchor=fidelity_anchor,  # type: ignore[arg-type]
         standard=standard,
+        context_kind=context_kind,
     )
     contract = TechniqueContract(envelope=envelope, body=body)
     contracts_dir = workspace / "contracts"

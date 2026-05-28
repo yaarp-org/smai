@@ -64,6 +64,7 @@ def _cutout_technique_ref(technique_id: str = "tech_cutout") -> TechniqueRef:
         compatible_factor_types=["additive"],
         standard=True,
         affects_extension_points=["train_transforms"],
+        context_kind="standard",
     )
 
 

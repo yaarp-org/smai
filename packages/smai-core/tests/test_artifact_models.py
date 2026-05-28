@@ -155,6 +155,7 @@ def test_technique_contract_round_trip() -> None:
         is_baseline=False,
         fidelity_anchor=PaperFidelityAnchor(doi="10.x", arxiv_id="1.2"),
         standard=False,
+        context_kind="paper_extract",
     )
     contract = TechniqueContract(envelope=_envelope("technique_contract"), body=body)
     raw = contract.model_dump(mode="json")
@@ -174,6 +175,7 @@ def test_technique_contract_admits_null_technique() -> None:
         is_baseline=True,
         fidelity_anchor=None,
         standard=False,
+        context_kind="no_op_baseline",
     )
     contract = TechniqueContract(envelope=_envelope("technique_contract"), body=body)
     assert contract.body.technique_id is None

@@ -231,7 +231,6 @@ def _handle_post_proposals(request: Request) -> Response:
     # Validate "exactly one description form populated".
     desc_fields = (
         body.get("technique_description"),
-        body.get("technique_description_text"),
         body.get("reproduce_paper_arxiv_id"),
     )
     populated = sum(1 for f in desc_fields if f is not None)

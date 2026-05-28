@@ -41,8 +41,35 @@ def standard_technique(
     implies_controlled: list[str] | None = None,
     affects_extension_points: list[str] | None = None,
     fidelity_anchor: object | None = None,
+    context_kind: str | None = None,
 ) -> TechniqueRef:
-    """Build a ``TechniqueRef`` with sensible defaults for tests."""
+    """Build a ``TechniqueRef`` with sensible defaults for tests.
+
+    When ``context_kind`` is left unset it is derived from the anchor /
+    standard inputs via the canonical ``upstream_requirements §1``
+    mapping. Tests that intentionally construct an invalid ref
+    (non-standard + anchor-less, used to exercise the Task 1.5
+    verification rule) pass an explicit ``context_kind`` so this helper
+    stops short of synthesizing a value the producer cannot justify.
+    """
+    if context_kind is None:
+        if fidelity_anchor is not None:
+            anchor_kind = getattr(fidelity_anchor, "kind", None)
+            if anchor_kind == "paper":
+                context_kind = "paper_extract"
+            elif anchor_kind == "proposal":
+                context_kind = "proposal"
+            elif anchor_kind == "reviewer_attested":
+                context_kind = "reviewer_attested"
+            else:
+                raise ValueError(f"unknown fidelity_anchor.kind {anchor_kind!r}")
+        elif standard:
+            context_kind = "standard"
+        else:
+            raise ValueError(
+                "standard_technique helper requires either standard=True, "
+                "a fidelity_anchor, or an explicit context_kind override"
+            )
     return TechniqueRef(
         id=tech_id,
         name=tech_id.replace("tech_", ""),
@@ -54,6 +81,7 @@ def standard_technique(
         affects_extension_points=affects_extension_points or ["model"],
         implies_controlled=implies_controlled or [],
         parameter_schema=parameter_schema,
+        context_kind=context_kind,  # type: ignore[arg-type]
     )
 
 
