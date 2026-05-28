@@ -36,6 +36,11 @@ from typing import Literal
 # Per §4 verbatim — eight roles. Five fleet roles plus the supervisor
 # plus the two paper-ingestion-internal roles whose model selection
 # still flows through this resolver per §4's TaskRole comment.
+#
+# planner_refactor Step 3 adds ``ingestion``: the SciReplicate-shaped
+# Paper Agent (smai_inline_agents.ingestion) resolves its PydanticAI
+# model via ``role_models["ingestion"]`` per
+# planner_refactor/architectural_decisions.md §9 / ingestion_subagent.md §1.
 TaskRole = Literal[
     "planner",
     "harness_builder",
@@ -45,6 +50,7 @@ TaskRole = Literal[
     "supervisor",
     "screener",
     "enricher",
+    "ingestion",
 ]
 
 
@@ -62,6 +68,10 @@ TASK_DEFAULTS: dict[TaskRole, tuple[str, str]] = {
     "supervisor": ("bedrock", "us.anthropic.claude-sonnet-4-6"),
     "screener": ("bedrock", "us.anthropic.claude-sonnet-4-6"),
     "enricher": ("bedrock", "us.anthropic.claude-sonnet-4-6"),
+    # Paper-extraction subagent (planner_refactor Step 3). Sonnet tier:
+    # the SciReplicate retrieval loop is bounded extraction, not the
+    # heavy open-ended reasoning the Opus roles do.
+    "ingestion": ("bedrock", "us.anthropic.claude-sonnet-4-6"),
 }
 
 

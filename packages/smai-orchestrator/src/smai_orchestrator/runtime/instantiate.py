@@ -370,6 +370,7 @@ DEFAULT_TASK_ROLES: tuple[str, ...] = (
     "supervisor",
     "screener",
     "enricher",
+    "ingestion",
 )
 
 

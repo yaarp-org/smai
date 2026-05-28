@@ -20,6 +20,10 @@ dependencies = [
     # planner_refactor Step 1: arXiv academic provider via the upstream
     # `arxiv` Python package (sync, wrapped via asyncio.to_thread).
     "arxiv>=2.1",
+    # planner_refactor Step 3: the ingestion Paper Agent is PydanticAI-based
+    # (architectural_decisions.md §3 / §9). Floor matches smai-agent-runtime
+    # so the PydanticAI version stays consistent across the repo.
+    "pydantic-ai>=0.0.13",
 ]
 
 [tool.uv.sources]

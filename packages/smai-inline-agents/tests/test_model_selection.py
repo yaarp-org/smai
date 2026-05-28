@@ -13,8 +13,9 @@ from smai_inline_agents import (
 # --- TASK_DEFAULTS verbatim ---------------------------------------------------
 
 
-def test_task_defaults_covers_all_eight_roles() -> None:
-    """§4: eight roles — five fleet roles + supervisor + screener + enricher."""
+def test_task_defaults_covers_all_roles() -> None:
+    """§4: five fleet roles + supervisor + screener + enricher, plus the
+    planner_refactor Step 3 ``ingestion`` paper-extraction subagent."""
     expected = {
         "planner",
         "harness_builder",
@@ -24,6 +25,7 @@ def test_task_defaults_covers_all_eight_roles() -> None:
         "supervisor",
         "screener",
         "enricher",
+        "ingestion",
     }
     assert set(TASK_DEFAULTS.keys()) == expected
 
@@ -43,13 +45,15 @@ def test_task_defaults_heavy_roles_use_opus() -> None:
 
 
 def test_task_defaults_bounded_roles_use_sonnet() -> None:
-    """§4: contextual_evaluator / supervisor / screener / enricher use
-    the Sonnet tier (claude-sonnet-4-6) — bounded single-call roles."""
+    """§4: contextual_evaluator / supervisor / screener / enricher / the
+    Step-3 ingestion subagent use the Sonnet tier (claude-sonnet-4-6) —
+    bounded extraction / single-call roles."""
     for role in (
         "contextual_evaluator",
         "supervisor",
         "screener",
         "enricher",
+        "ingestion",
     ):
         provider, model_id = TASK_DEFAULTS[role]
         assert provider == "bedrock"
