@@ -36,6 +36,8 @@ from smai_orchestrator.specs.paper_ingestion import (
     POOL_PAPER_INGESTION_PRIORITY,
     SCREEN_RESULT_KEY_TEMPLATE,
     TECHNIQUE_BUFFER_KEY_TEMPLATE,
+    ArxivLatexFetcher,
+    PaperFetchError,
     build_paper_ingestion_spec,
 )
 from smai_orchestrator.worker.loop import run_worker_cycle
@@ -658,3 +660,230 @@ class _NoComputeStub:
 
     async def harvest_workspace(self, handle, local_path):  # type: ignore[no-untyped-def]
         del handle, local_path
+
+
+# === ArxivLatexFetcher robustness (rate-limit backoff) =======================
+#
+# These exercise the real :class:`ArxivLatexFetcher` against a fake
+# ``arxiv`` module injected into ``sys.modules`` (the fetcher does a local
+# ``import arxiv`` inside ``fetch``). They stay offline and patch
+# ``asyncio.sleep`` so the exponential backoff doesn't sleep for real.
+
+
+class _FakeArxivResult:
+    """Minimal stand-in for an ``arxiv.Result`` on the success path."""
+
+    title = "Cutout: a fake paper"
+    summary = "A canned abstract."
+
+    class _Author:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+    authors = [_Author("A. Author")]
+
+    def download_source(self, dirpath: str) -> str:  # noqa: D401
+        # No real download — return a path that does not exist so the
+        # best-effort source-download branch logs + falls through to the
+        # abstract-only ``paper_text`` (the fetcher tolerates this).
+        return f"{dirpath}/source.tar.gz"
+
+
+def _make_fake_arxiv_module(results_fn):  # type: ignore[no-untyped-def]
+    """Build a fake ``arxiv`` module with a scripted ``Client.results``.
+
+    ``results_fn`` is a zero-arg callable invoked once per ``client.results``
+    call; it returns the result list or raises a fake arxiv exception.
+    """
+    import types  # noqa: PLC0415
+
+    module = types.ModuleType("arxiv")
+
+    class ArxivError(Exception):
+        pass
+
+    class HTTPError(ArxivError):
+        def __init__(self, url: str = "u", retry: int = 0, status: int = 500) -> None:
+            self.url = url
+            self.retry = retry
+            self.status = status
+            super().__init__(f"HTTP {status}")
+
+    class UnexpectedEmptyPageError(ArxivError):
+        def __init__(self, url: str = "u", retry: int = 0, raw_feed: object = None) -> None:
+            self.url = url
+            self.retry = retry
+            self.raw_feed = raw_feed
+            super().__init__("empty page")
+
+    class Search:
+        def __init__(self, id_list=None) -> None:  # type: ignore[no-untyped-def]
+            self.id_list = id_list or []
+
+    class Client:
+        # Records the constructor kwargs so a test can assert page_size=1.
+        last_kwargs: dict[str, object] = {}
+
+        def __init__(self, **kwargs: object) -> None:
+            type(self).last_kwargs = dict(kwargs)
+
+        def results(self, search):  # type: ignore[no-untyped-def]
+            del search
+            return results_fn()
+
+    module.ArxivError = ArxivError  # type: ignore[attr-defined]
+    module.HTTPError = HTTPError  # type: ignore[attr-defined]
+    module.UnexpectedEmptyPageError = UnexpectedEmptyPageError  # type: ignore[attr-defined]
+    module.Search = Search  # type: ignore[attr-defined]
+    module.Client = Client  # type: ignore[attr-defined]
+    return module
+
+
+def _install_fake_arxiv(monkeypatch, results_fn):  # type: ignore[no-untyped-def]
+    import sys  # noqa: PLC0415
+
+    module = _make_fake_arxiv_module(results_fn)
+    monkeypatch.setitem(sys.modules, "arxiv", module)
+    return module
+
+
+async def test_arxiv_fetcher_retries_transient_429_then_succeeds(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """Two 429s then a result -> fetch succeeds after backoff sleeps."""
+    import asyncio as _asyncio  # noqa: PLC0415
+
+    calls = {"n": 0}
+
+    def results_fn():  # type: ignore[no-untyped-def]
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            module = sys_module()
+            raise module.HTTPError(status=429)
+        return [_FakeArxivResult()]
+
+    sleeps: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    # Install the fake module first so ``sys_module`` resolves it.
+    fake_mod = _install_fake_arxiv(monkeypatch, results_fn)
+
+    def sys_module():  # type: ignore[no-untyped-def]
+        return fake_mod
+
+    monkeypatch.setattr(_asyncio, "sleep", fake_sleep)
+
+    fetcher = ArxivLatexFetcher(
+        max_attempts=5,
+        backoff_base_seconds=1.0,
+        backoff_max_seconds=8.0,
+        backoff_jitter_seconds=0.0,
+    )
+    fetched = await fetcher.fetch("1708.04552")
+
+    assert fetched.title == "Cutout: a fake paper"
+    assert calls["n"] == 3, "expected two failed attempts + one success"
+    assert sleeps == [1.0, 2.0], f"expected backoff sleeps after each 429, got {sleeps}"
+
+
+async def test_arxiv_fetcher_exhausts_budget_on_persistent_429(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """A 429 on every attempt -> PaperFetchError after the bounded budget."""
+    import asyncio as _asyncio  # noqa: PLC0415
+
+    calls = {"n": 0}
+    fake_mod_holder: dict[str, object] = {}
+
+    def results_fn():  # type: ignore[no-untyped-def]
+        calls["n"] += 1
+        raise fake_mod_holder["mod"].HTTPError(status=429)  # type: ignore[attr-defined]
+
+    sleeps: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    fake_mod_holder["mod"] = _install_fake_arxiv(monkeypatch, results_fn)
+    monkeypatch.setattr(_asyncio, "sleep", fake_sleep)
+
+    fetcher = ArxivLatexFetcher(
+        max_attempts=4,
+        backoff_base_seconds=1.0,
+        backoff_max_seconds=8.0,
+        backoff_jitter_seconds=0.0,
+    )
+    with pytest.raises(PaperFetchError) as excinfo:
+        await fetcher.fetch("1708.04552")
+
+    assert calls["n"] == 4, "expected exactly max_attempts calls"
+    # One sleep fewer than attempts (no backoff after the final attempt).
+    assert sleeps == [1.0, 2.0, 4.0], f"got {sleeps}"
+    assert "throttled" in str(excinfo.value)
+
+
+async def test_arxiv_fetcher_non_transient_404_raises_immediately(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """A 404 raises PaperFetchError immediately with NO retry / backoff."""
+    import asyncio as _asyncio  # noqa: PLC0415
+
+    calls = {"n": 0}
+    fake_mod_holder: dict[str, object] = {}
+
+    def results_fn():  # type: ignore[no-untyped-def]
+        calls["n"] += 1
+        raise fake_mod_holder["mod"].HTTPError(status=404)  # type: ignore[attr-defined]
+
+    sleeps: list[float] = []
+
+    async def fake_sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    fake_mod_holder["mod"] = _install_fake_arxiv(monkeypatch, results_fn)
+    monkeypatch.setattr(_asyncio, "sleep", fake_sleep)
+
+    fetcher = ArxivLatexFetcher(max_attempts=5, backoff_base_seconds=1.0)
+    with pytest.raises(PaperFetchError) as excinfo:
+        await fetcher.fetch("0000.00000")
+
+    assert calls["n"] == 1, "non-transient error must not retry"
+    assert sleeps == [], "non-transient error must not back off"
+    assert "404" in str(excinfo.value)
+
+
+async def test_arxiv_fetcher_uses_page_size_one_tuned_client(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """The reused client is built with page_size=1 (not the default 100)."""
+
+    def results_fn():  # type: ignore[no-untyped-def]
+        return [_FakeArxivResult()]
+
+    fake_mod = _install_fake_arxiv(monkeypatch, results_fn)
+
+    fetcher = ArxivLatexFetcher()
+    await fetcher.fetch("1708.04552")
+
+    assert fake_mod.Client.last_kwargs.get("page_size") == 1  # type: ignore[attr-defined]
+    assert fake_mod.Client.last_kwargs.get("delay_seconds") == 3.0  # type: ignore[attr-defined]
+    assert fake_mod.Client.last_kwargs.get("num_retries") == 2  # type: ignore[attr-defined]
+
+
+async def test_arxiv_fetcher_reuses_one_client_across_calls(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    """The tuned client is built once and reused across fetch() calls."""
+
+    def results_fn():  # type: ignore[no-untyped-def]
+        return [_FakeArxivResult()]
+
+    fake_mod = _install_fake_arxiv(monkeypatch, results_fn)
+
+    constructed: list[object] = []
+    original_client = fake_mod.Client  # type: ignore[attr-defined]
+
+    class _CountingClient(original_client):  # type: ignore[misc, valid-type]
+        def __init__(self, **kwargs: object) -> None:
+            constructed.append(self)
+            super().__init__(**kwargs)
+
+    fake_mod.Client = _CountingClient  # type: ignore[attr-defined]
+
+    fetcher = ArxivLatexFetcher()
+    await fetcher.fetch("1708.04552")
+    await fetcher.fetch("1708.04552")
+
+    assert len(constructed) == 1, "the tuned arxiv client must be built once and reused"

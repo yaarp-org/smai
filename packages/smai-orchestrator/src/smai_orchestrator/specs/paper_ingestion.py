@@ -122,9 +122,11 @@ Spec ambiguities resolved
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
+import random
 import tempfile
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -226,6 +228,13 @@ class PaperFetcher:
         raise NotImplementedError
 
 
+# Transient arXiv HTTP statuses worth backing off + retrying on (rate-
+# limit + service-unavailable). arXiv throttles aggressively; a fresh
+# fast-burst retry just sustains the 429, so the fetcher backs off
+# explicitly before raising :class:`PaperFetchError`.
+_ARXIV_TRANSIENT_STATUSES = frozenset({429, 503})
+
+
 class ArxivLatexFetcher(PaperFetcher):
     """Production arxiv fetcher — best-effort LaTeX retrieval.
 
@@ -236,12 +245,106 @@ class ArxivLatexFetcher(PaperFetcher):
     :class:`PaperFetchError` and are caught by the dispatch handler,
     which routes to the ``failed`` terminal via the retry-budget gate.
 
-    The implementation is intentionally minimal — `08` §5.2 frames
-    paper-fetch retries / robust LaTeX parsing as out-of-scope
-    operational concerns for v1; deployments that need richer fetch
-    (pdf-only papers, mirror-aware retries, etc.) subclass this
-    fetcher and inject via the dispatch-handler factory.
+    Robustness (rate-limit hardening). The fetcher constructs ONE tuned
+    ``arxiv.Client`` (``page_size=1`` — single-id lookups never need the
+    default 100; ``delay_seconds`` + ``num_retries`` for the package's
+    own polite spacing) and reuses it across every :meth:`fetch` so its
+    rate-limit state persists. A fresh default ``arxiv.Client()`` per
+    call (the pre-fix shape) requested 100 results per single-id lookup
+    and shared no polite-rate state, so a rate-limited arXiv drove a
+    tight ``submitted -> fetching -> fail 429 -> rollback -> re-dispatch``
+    loop that sustained the throttle. On top of the package's own
+    retries, :meth:`fetch` adds an explicit exponential backoff (with
+    jitter) for transient ``429`` / ``503`` responses so the dispatcher's
+    fast re-dispatch cadence no longer hammers the API. Non-transient
+    HTTP errors (e.g. ``404``) raise immediately without retry.
+
+    Backoff parameters are constructor args (sane production defaults)
+    so tests can set tiny / zero delays and avoid real sleeps.
+
+    Deployments that need richer fetch (pdf-only papers, mirror-aware
+    retries, etc.) subclass this fetcher and inject via the dispatch-
+    handler factory.
     """
+
+    def __init__(
+        self,
+        *,
+        page_size: int = 1,
+        delay_seconds: float = 3.0,
+        num_retries: int = 2,
+        max_attempts: int = 5,
+        backoff_base_seconds: float = 5.0,
+        backoff_max_seconds: float = 60.0,
+        backoff_jitter_seconds: float = 1.0,
+    ) -> None:
+        """Construct the fetcher and (lazily) its one reused arxiv client.
+
+        Args:
+            page_size / delay_seconds / num_retries: ``arxiv.Client``
+                tuning. ``page_size=1`` is correct for single-id lookups;
+                ``delay_seconds`` / ``num_retries`` are the package's own
+                polite spacing + per-call retry budget. Mirror
+                :mod:`smai_inline_agents.ingestion.fetch`'s tuning.
+            max_attempts: Total ``fetch`` attempts (including the first)
+                before a transient failure raises
+                :class:`PaperFetchError`. Bounds the backoff budget.
+            backoff_base_seconds: First backoff sleep; doubles per retry.
+            backoff_max_seconds: Cap on the (pre-jitter) backoff sleep.
+            backoff_jitter_seconds: Upper bound on a uniform random jitter
+                added to each backoff sleep so concurrent fetchers don't
+                resynchronize their retries. Set to ``0`` in tests.
+        """
+        self._page_size = page_size
+        self._delay_seconds = delay_seconds
+        self._num_retries = num_retries
+        self._max_attempts = max(1, max_attempts)
+        self._backoff_base_seconds = backoff_base_seconds
+        self._backoff_max_seconds = backoff_max_seconds
+        self._backoff_jitter_seconds = backoff_jitter_seconds
+        # The tuned client is built once (lazily, on first fetch) and
+        # reused so its polite-rate state persists across dispatches.
+        self._client: Any = None
+
+    def _get_client(self, arxiv_mod: Any) -> Any:
+        """Return the reused tuned ``arxiv.Client``, building it once."""
+        if self._client is None:
+            self._client = arxiv_mod.Client(
+                page_size=self._page_size,
+                delay_seconds=self._delay_seconds,
+                num_retries=self._num_retries,
+            )
+        return self._client
+
+    @staticmethod
+    def _is_transient(arxiv_mod: Any, exc: Exception) -> bool:
+        """Classify an arxiv-package error as transient (worth a retry).
+
+        Transient: ``arxiv.HTTPError`` carrying a ``429`` / ``503``
+        ``.status`` (rate-limit / service-unavailable), and
+        ``arxiv.UnexpectedEmptyPageError`` (the package documents it as
+        sporadic API brittleness usually resolved by retries). Everything
+        else — including ``404`` and other non-200 statuses — is
+        non-transient and raises immediately.
+        """
+        http_error = getattr(arxiv_mod, "HTTPError", None)
+        if http_error is not None and isinstance(exc, http_error):
+            return getattr(exc, "status", None) in _ARXIV_TRANSIENT_STATUSES
+        empty_page = getattr(arxiv_mod, "UnexpectedEmptyPageError", None)
+        if empty_page is not None and isinstance(exc, empty_page):
+            return True
+        return False
+
+    def _backoff_delay(self, attempt: int) -> float:
+        """Exponential backoff (capped) + uniform jitter for ``attempt``.
+
+        ``attempt`` is zero-based: attempt 0 sleeps ~``base``, attempt 1
+        ~``2*base``, etc., each capped at ``backoff_max_seconds`` before a
+        uniform ``[0, jitter]`` is added.
+        """
+        capped = min(self._backoff_base_seconds * (2**attempt), self._backoff_max_seconds)
+        jitter = random.uniform(0.0, self._backoff_jitter_seconds)
+        return capped + jitter
 
     async def fetch(self, arxiv_id: str) -> FetchedPaper:
         try:
@@ -251,15 +354,48 @@ class ArxivLatexFetcher(PaperFetcher):
                 arxiv_id=arxiv_id,
                 reason="the 'arxiv' PyPI package is not installed",
             ) from exc
-        try:
-            search = arxiv.Search(id_list=[arxiv_id])
-            client = arxiv.Client()
-            results = list(client.results(search))
-        except Exception as exc:  # noqa: BLE001 — any arxiv error is a fetch error
+
+        client = self._get_client(arxiv)
+        search = arxiv.Search(id_list=[arxiv_id])
+
+        def _run_search() -> list[Any]:
+            return list(client.results(search))
+
+        results: list[Any] = []
+        last_transient: Exception | None = None
+        for attempt in range(self._max_attempts):
+            try:
+                # The arxiv call is blocking; keep the caller async.
+                results = await asyncio.to_thread(_run_search)
+                break
+            except Exception as exc:  # noqa: BLE001 — classify transient vs fatal below
+                if not self._is_transient(arxiv, exc):
+                    raise PaperFetchError(
+                        arxiv_id=arxiv_id,
+                        reason=f"arxiv search failed: {type(exc).__name__}: {exc}",
+                    ) from exc
+                last_transient = exc
+                if attempt + 1 >= self._max_attempts:
+                    break
+                sleep_for = self._backoff_delay(attempt)
+                _log.warning(
+                    "arxiv fetch for %s hit transient error %s (attempt %d/%d); backing off %.1fs",
+                    arxiv_id,
+                    type(exc).__name__,
+                    attempt + 1,
+                    self._max_attempts,
+                    sleep_for,
+                )
+                await asyncio.sleep(sleep_for)
+
+        if last_transient is not None and not results:
             raise PaperFetchError(
                 arxiv_id=arxiv_id,
-                reason=f"arxiv search failed: {type(exc).__name__}: {exc}",
-            ) from exc
+                reason=(
+                    f"arxiv search throttled after {self._max_attempts} attempts: "
+                    f"{type(last_transient).__name__}: {last_transient}"
+                ),
+            ) from last_transient
         if not results:
             raise PaperFetchError(
                 arxiv_id=arxiv_id,
