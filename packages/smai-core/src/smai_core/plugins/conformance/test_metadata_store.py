@@ -382,6 +382,78 @@ class MetadataStoreConformance:
         assert loaded_inline is not None
         assert getattr(loaded_inline, "compute_job_handle", "MISSING") is None
 
+    async def test_upsert_technique_round_trips_context_kind(self, store: MetadataStore) -> None:
+        """Planner-refactor Step 2 / ``upstream_requirements §1``:
+        ``upsert_technique`` persists :attr:`TechniqueRef.context_kind`
+        through the ``techniques.context_kind`` column (migration 0007)
+        and ``get_technique`` round-trips it on read.
+
+        Covers all four ``context_kind`` variants via the
+        ``upstream_requirements §1`` mapping:
+
+        * :class:`PaperFidelityAnchor` → ``"paper_extract"``
+        * :class:`ProposalFidelityAnchor` → ``"proposal"``
+        * :class:`ReviewerAttestedFidelityAnchor` → ``"reviewer_attested"``
+        * ``fidelity_anchor=None`` + ``standard=True`` → ``"standard"``
+        """
+        from smai_core import (  # noqa: PLC0415
+            PaperFidelityAnchor,
+            ProposalFidelityAnchor,
+            ReviewerAttestedFidelityAnchor,
+            TechniqueRef,
+        )
+
+        cases = [
+            TechniqueRef(
+                id="paper_anchored_tech",
+                name="Paper Anchored",
+                description="paper",
+                category="augmentation",
+                compatible_factor_types=["additive"],
+                standard=False,
+                fidelity_anchor=PaperFidelityAnchor(doi="10.x/paper"),
+                affects_extension_points=[],
+            ),
+            TechniqueRef(
+                id="proposal_anchored_tech",
+                name="Proposal Anchored",
+                description="proposal",
+                category="other",
+                compatible_factor_types=["additive"],
+                standard=False,
+                fidelity_anchor=ProposalFidelityAnchor(proposal_id="p1"),
+                affects_extension_points=[],
+            ),
+            TechniqueRef(
+                id="reviewer_attested_tech",
+                name="Reviewer Attested",
+                description="reviewer",
+                category="other",
+                compatible_factor_types=["substitutive"],
+                standard=False,
+                fidelity_anchor=ReviewerAttestedFidelityAnchor(spec_text="see"),
+                affects_extension_points=[],
+            ),
+            TechniqueRef(
+                id="standard_tech",
+                name="Standard",
+                description="standard",
+                category="optimization",
+                compatible_factor_types=["substitutive"],
+                standard=True,
+                affects_extension_points=[],
+            ),
+        ]
+        for ref in cases:
+            assert ref.context_kind is not None
+            await store.upsert_technique(ref)
+            loaded = await store.get_technique(ref.id)
+            assert loaded is not None
+            assert loaded.context_kind == ref.context_kind, (
+                f"upsert_technique({ref.id!r}) did not round-trip context_kind; "
+                f"expected {ref.context_kind!r}, got {loaded.context_kind!r}"
+            )
+
     async def test_append_transition_log_persists(self, store: MetadataStore) -> None:
         """``append_transition_log`` writes a row that a raw select sees."""
         await store.append_transition_log(

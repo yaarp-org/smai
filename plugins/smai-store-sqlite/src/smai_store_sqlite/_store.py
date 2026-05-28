@@ -1101,6 +1101,7 @@ class SqliteStore:
             "affects_extension_points": list(technique.affects_extension_points),
             "implies_controlled": list(technique.implies_controlled),
             "parameter_schema": technique.parameter_schema,
+            "context_kind": technique.context_kind,
         }
         async with self._engine.begin() as conn:
             existing = await conn.execute(
@@ -1496,6 +1497,10 @@ def _technique_from_row(row: Any) -> TechniqueRef:
         "affects_extension_points": row["affects_extension_points"],
         "implies_controlled": row["implies_controlled"] or [],
         "parameter_schema": row["parameter_schema"],
+        # Pre-0007 rows have no column; row.get("context_kind") may be
+        # absent in mapping shape — pass None explicitly so the
+        # TechniqueRef validator backfills from anchor / standard.
+        "context_kind": row["context_kind"] if "context_kind" in row else None,
     }
     return TechniqueRef.model_validate(payload)
 

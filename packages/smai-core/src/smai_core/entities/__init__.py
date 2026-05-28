@@ -27,6 +27,7 @@ from smai_core.entities.metric import (
 from smai_core.entities.numeric import NumericValue
 from smai_core.entities.registries import Registries
 from smai_core.entities.technique import (
+    ContextKind,
     FidelityAnchor,
     FidelityAnchorAdapter,
     PaperFidelityAnchor,
@@ -55,6 +56,7 @@ __all__ = [
     "AtomicMetricRef",
     "ComparisonRule",
     "ComputeRequirements",
+    "ContextKind",
     "ControlledConditions",
     "Entry",
     "ExperimentDefinition",

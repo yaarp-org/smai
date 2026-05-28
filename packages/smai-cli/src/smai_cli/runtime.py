@@ -54,6 +54,7 @@ from smai_core import (
 from smai_core.plugins import ArtifactStore, CursorPage, MetadataStore
 from smai_events import EventBroker, InProcessEventChannel
 from smai_inline_agents.model_selection import TaskRole
+from smai_inline_agents.planner import TechniqueDescription
 from smai_orchestrator import (
     CG_EXECUTION_SPEC_NAME,
     DEFAULT_TASK_ROLES,
@@ -860,7 +861,7 @@ class ProposalsService:
         *,
         proposal_id: str,
         submission_kind: str = "novel_technique",
-        technique_description: dict[str, Any] | str | None = None,
+        technique_description: TechniqueDescription | None = None,
         reproduce_paper_arxiv_id: str | None = None,
         submitted_by: str | None = None,
     ) -> ProposalSubmission:
@@ -869,10 +870,16 @@ class ProposalsService:
         Per ``08-novel-technique-pipeline.md`` §3.1 / `09` §1: the
         submission step is synchronous in the API surface and runs
         BEFORE the entity enters the pipeline-spec. Persists the
-        user's submitted technique description (or reproduce-paper
-        reference) to ArtifactStore at
+        user's submitted :class:`TechniqueDescription` (or
+        reproduce-paper reference) to ArtifactStore at
         :data:`PROPOSAL_TECHNIQUE_DESCRIPTION_KEY_TEMPLATE`, then
         creates the :class:`ProposalRecord` in ``proposal_submitted``.
+
+        Per planner_refactor Step 2 / ``upstream_requirements §2``:
+        the typed :class:`TechniqueDescription` shape replaces the v1
+        ``dict | str | None`` body. Old freeform bodies are rejected
+        at validation time per D10 (no backcompat shim, no migration
+        helper); fixtures get re-submitted under the new shape.
         """
         if submission_kind not in {"novel_technique", "reproduce_paper"}:
             raise ValueError(
@@ -884,13 +891,7 @@ class ProposalsService:
             artifact_key = PROPOSAL_TECHNIQUE_DESCRIPTION_KEY_TEMPLATE.format(
                 proposal_id=proposal_id,
             )
-            payload: bytes
-            if isinstance(technique_description, str):
-                payload = technique_description.encode("utf-8")
-            else:
-                payload = json.dumps(technique_description, indent=2, sort_keys=True).encode(
-                    "utf-8"
-                )
+            payload = technique_description.model_dump_json(indent=2).encode("utf-8")
             await self._plugins.artifact_store.put(artifact_key, payload)
         now = datetime.now(UTC)
         record = ProposalRecord(

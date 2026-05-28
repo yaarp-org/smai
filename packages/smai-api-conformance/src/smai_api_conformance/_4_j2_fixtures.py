@@ -36,17 +36,68 @@ from smai_api_spec import ErrorCode, ErrorEnvelope
 def sample_proposal_request_body() -> dict[str, Any]:
     """A minimal valid ``SubmitProposalRequest`` body.
 
-    Uses ``technique_description_text`` (free-form string) so the body
-    is independent of the methodology DSL — the implementation does
-    not need to compile anything to accept this submit.
+    Per planner-refactor Step 2 / ``upstream_requirements §2`` the
+    proposal-submit body is now a typed :class:`TechniqueDescription`
+    dict (the freeform ``technique_description_text`` path was dropped
+    per D10). The shape below is the minimum valid ``proposal`` variant:
+    one paraphrased prose set plus an empty ``algorithm.source_excerpts``
+    list (paper-only fields are absent), plus the
+    ``source_proposal_id`` provenance pointer and the loss /
+    training-recipe ``ConfidenceFlag`` annotations the
+    ``_none_requires_flag`` validator demands.
     """
     return {
         "submission_kind": "novel_technique",
-        "technique_description_text": (
-            "conformance-suite probe: a placeholder novel-technique submission "
-            "used by smai-api-conformance to exercise the POST /api/v1/proposals "
-            "shape contract."
-        ),
+        "technique_description": {
+            "name": "conformance_suite_probe",
+            "summary": (
+                "Placeholder novel-technique submission used by "
+                "smai-api-conformance to exercise the POST /api/v1/proposals "
+                "shape contract; not a real technique."
+            ),
+            "motivation": (
+                "Conformance suites need a minimum-viable body that round-trips "
+                "through Pydantic without depending on the implementation's "
+                "methodology DSL or compiler; this proposal variant is the "
+                "smallest valid shape."
+            ),
+            "problem_setting": (
+                "API shape conformance; no real ML setting. Implementations "
+                "override this fixture in their subclass if compilation is "
+                "needed."
+            ),
+            "algorithm": {
+                "summary": (
+                    "Placeholder algorithm summary that exists only to satisfy "
+                    "the TechniqueDescription schema's minimum length rule on "
+                    "AlgorithmSpec.summary; not a real algorithm description."
+                ),
+            },
+            "context_kind": "proposal",
+            "source_proposal_id": "conformance-suite-probe",
+            "confidence_flags": [
+                {
+                    "field_path": "/limitations",
+                    "severity": "unknown",
+                    "note": "Conformance probe; field intentionally unset.",
+                },
+                {
+                    "field_path": "/loss_function",
+                    "severity": "unknown",
+                    "note": "Conformance probe; field intentionally unset.",
+                },
+                {
+                    "field_path": "/training_recipe",
+                    "severity": "unknown",
+                    "note": "Conformance probe; field intentionally unset.",
+                },
+                {
+                    "field_path": "/evaluation_protocol",
+                    "severity": "unknown",
+                    "note": "Conformance probe; field intentionally unset.",
+                },
+            ],
+        },
     }
 
 

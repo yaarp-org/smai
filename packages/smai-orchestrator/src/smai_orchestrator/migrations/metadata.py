@@ -328,6 +328,13 @@ techniques_table: Table = Table(
     Column("affects_extension_points", JSON, nullable=False),  # list[str]
     Column("implies_controlled", JSON, nullable=False),  # list[str]
     Column("parameter_schema", JSON(none_as_null=True), nullable=True),
+    # Planner-refactor Step 2 / ``upstream_requirements §1``: explicit
+    # grounding-flavor discriminator. Mirrors :class:`TechniqueRef.context_kind`.
+    # Nullable per D10 (no backcompat data migration); legacy rows
+    # written before migration 0007 land NULL and get backfilled via
+    # :class:`TechniqueRef` model-validator derivation at read time.
+    # Closed v1 enum: paper_extract | proposal | reviewer_attested | standard.
+    Column("context_kind", String(32), nullable=True),
 )
 
 

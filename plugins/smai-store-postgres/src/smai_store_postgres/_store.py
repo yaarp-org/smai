@@ -1259,6 +1259,7 @@ class PostgresStore:
             "affects_extension_points": list(technique.affects_extension_points),
             "implies_controlled": list(technique.implies_controlled),
             "parameter_schema": technique.parameter_schema,
+            "context_kind": technique.context_kind,
         }
         ins = pg_insert(techniques_table).values(**values)
         update_cols = {col: ins.excluded[col] for col in values if col != "id"}
@@ -1860,6 +1861,9 @@ def _technique_from_row(row: Any) -> TechniqueRef:
         "affects_extension_points": row["affects_extension_points"],
         "implies_controlled": row["implies_controlled"] or [],
         "parameter_schema": row["parameter_schema"],
+        # Pre-0007 rows have no column; row.get equivalent — pass None
+        # so the TechniqueRef validator backfills from anchor / standard.
+        "context_kind": row["context_kind"] if "context_kind" in row else None,
     }
     return TechniqueRef.model_validate(payload)
 

@@ -30,9 +30,11 @@ from pydantic import ValidationError
 
 from smai_core.dsl.document import DslDocumentAdapter, ExperimentDocument
 from smai_core.entities.technique import (
+    ContextKind,
     FidelityAnchorAdapter,
     PaperFidelityAnchor,
     ProposalFidelityAnchor,
+    ReviewerAttestedFidelityAnchor,
     TechniqueRef,
 )
 
@@ -55,13 +57,10 @@ def draft_technique_to_ref(
     """
     standard = bool(raw.get("standard", False))
     anchor_raw = cast(dict[str, Any] | None, raw.get("fidelity_anchor"))
-    anchor: PaperFidelityAnchor | ProposalFidelityAnchor | None = None
+    anchor: PaperFidelityAnchor | ProposalFidelityAnchor | ReviewerAttestedFidelityAnchor | None
+    anchor = None
     if anchor_raw is not None:
-        anchor_obj = FidelityAnchorAdapter.validate_python(anchor_raw)
-        anchor = cast(
-            PaperFidelityAnchor | ProposalFidelityAnchor | None,
-            anchor_obj if anchor_obj.kind != "reviewer_attested" else anchor_obj,
-        )
+        anchor = FidelityAnchorAdapter.validate_python(anchor_raw)
     if anchor is None and not standard:
         if paper_arxiv_id is not None:
             anchor = PaperFidelityAnchor(arxiv_id=paper_arxiv_id, doi=f"arxiv:{paper_arxiv_id}")
@@ -71,6 +70,12 @@ def draft_technique_to_ref(
     compatible_factor_types_raw = cast(
         list[str], raw.get("compatible_factor_types") or ["additive"]
     )
+    # Set ``context_kind`` explicitly per ``upstream_requirements §1``
+    # mapping; if the buffer carries one we trust it (the planner's
+    # finalize-time projection check round-trips through Pydantic and
+    # validates anchor / standard consistency in TechniqueRef's
+    # model_validator).
+    context_kind = cast(ContextKind | None, raw.get("context_kind"))
     return TechniqueRef(
         id=symbolic_name,
         name=cast(str, raw.get("name", symbolic_name)),
@@ -82,6 +87,7 @@ def draft_technique_to_ref(
         affects_extension_points=cast(list[str], raw.get("affects_extension_points") or []),
         implies_controlled=cast(list[str], raw.get("implies_controlled") or []),
         parameter_schema=cast(dict[str, Any] | None, raw.get("parameter_schema")),
+        context_kind=context_kind,
     )
 
 

@@ -34,24 +34,24 @@ from smai_core.artifacts._set import ContractArtifactSet
 # investigate before updating the constants.
 GOLDEN_EXPERIMENT_HASHES: dict[str, dict[str, str]] = {
     "resnet50_vs_vgg16_cifar10": {
-        "experiment_plan": ("5ed8716168380ad8a0de9a9cdf8cad7e13498f4da218001a0574b9ae4829a2d2"),
-        "harness_contract": ("8b0a617737bcca71a02b98887b44ff4a0b8e5c1ebd75a7e4d13525f300a4d475"),
-        "validation_config": ("2b96df360fb8a31a9f84ba98a2c05486e2bf470b8a3423905dd1eca61dd19059"),
+        "experiment_plan": ("cd2d9c025649b0cab7cdd5d1aa1356fe82ef0e259170e882908bc6541af120ab"),
+        "harness_contract": ("83aaadc6c9e564bdea54f68b55931441a76b768bd6b5dbf8304d71de938013e5"),
+        "validation_config": ("f177f28b006524dc9b82513f7e75dee77784253354354423ba5ea8468144b84b"),
     },
     "cutout_on_cifar10": {
-        "experiment_plan": ("cab6072a45611f051a62eb69656b2419578b91cf2a6934eb1fafd477075d88ee"),
-        "harness_contract": ("3a84c26d3b35fb27a45aa11a9eefb9f9347cdc5b4918313a070d1c4898467b1f"),
-        "validation_config": ("f9052ad8e8a54f25ab6728c53561e1dd02c718b4350542c16c570632b1c83eeb"),
+        "experiment_plan": ("8f1458ce4c0261f221330735d4977aacf5e42db9b0b55befe6b886595e82374b"),
+        "harness_contract": ("d96964620e409c1c256d6a6b9f14b092a628f68730975775c15be3de8962cd5d"),
+        "validation_config": ("9cb5cbe9361f63091ee92a002a572df48751192fc50910314c6ebcd3d3f66017"),
     },
     "pruning_sparsity_sweep": {
-        "experiment_plan": ("07e8fcbac92d4c2aa9132ad1b0bd0dfb0aa31e275fbbc7336334c00be7dbe831"),
-        "harness_contract": ("866b1ff92a7bf4327cba676c00d4a876c37a75dca6cd25fa9d6ddb0fcffdc562"),
-        "validation_config": ("67ae213cab295dd5ae4b651e78b865a12d991e03dc8db8e194bfb1d89d4cd598"),
+        "experiment_plan": ("b05731478ffb6b6508bf01e82ab0944d8abcdc558701d8057a5337dd6aa18fb0"),
+        "harness_contract": ("489ff675c06c21b278356147ce6c7fd12e612e68f676bc329bd7f653eac2f46a"),
+        "validation_config": ("869f0757ed9a4c4e1f2c0a49ca022f7e209eb5231e475865a2e9e7805919701a"),
     },
     "position_embeddings_wikitext103": {
-        "experiment_plan": ("3e9116595ff3d10ec86bb49fea371ee7513b73adfeb392d096bc7f14b4f2277f"),
-        "harness_contract": ("b6034ff556290f25b2ba737417880ad2c6a78ee68358ab27ebdf281e268dac5f"),
-        "validation_config": ("75b9ff13b5608da6cab42587f4509257608a451704760a8f71599c638daf85d5"),
+        "experiment_plan": ("985a2c2f0dee67577c6ea25e8e6ffd20a55772d0962a5c3a51c00c1c9059a53e"),
+        "harness_contract": ("422092a93e4536a2b56751e55ddb03d65e85d6772c17faee7af1fcc156f700b0"),
+        "validation_config": ("378e43ea3c2edfd69ea77950a66f2522dc3e9146a6950bab7b20780d10600e06"),
     },
 }
 
@@ -88,25 +88,25 @@ def test_golden_hashes_pinned(name: str) -> None:
 
 GOLDEN_TECHNIQUE_HASHES: dict[str, dict[str, str]] = {
     "resnet50_vs_vgg16_cifar10": {
-        "resnet50_treatment": ("840fb35cc99f3f0bcae1bb0caccb4c93e231c1be885bec9bd918bbe166b3717c"),
-        "vgg16_reference": ("6901753c20b91045e28c47d101d7153f52c09a9b5d0c8f5530ae45f6e51fcd05"),
+        "resnet50_treatment": ("ee793b9c69660bc179783e2fdfd33c251675a04eebafeb92ca3416db92c12d43"),
+        "vgg16_reference": ("c8cdf2bf7d1aaf4f2b3ac12d33491f4525cf6c5434ef8c99ba5b61c2da1e488a"),
     },
     "cutout_on_cifar10": {
-        "cutout_treatment": ("879dd2d91d013142ec4bbfefdbd81ca0e766232b2519a0987b48e3cb1ecc339d"),
-        "no_aug_baseline": ("579d7a2741f6036965dda39271ed4f3735c19fa94eae92f23f47ae7b62061ed0"),
+        "cutout_treatment": ("3f24ce31aaa781656e706d4cfb1b8c0a54693944e5e2722fd52c8d7ae4428b0b"),
+        "no_aug_baseline": ("8e4c62367d986d510f39375b84874a4ef346265f9dcc8a77526e56029181cf0d"),
     },
     "pruning_sparsity_sweep": {
-        "dense_baseline": ("ba676f0e7ba6e68e0b6c0b7b496d4b547d33893fbe3fc356af2320abf8671f23"),
-        "sparsity_50": ("3cf2feb9c979ca7fc5d7b1874459d88c31fd01cf38868ce8aaf8ba595fcd4425"),
-        "sparsity_70": ("66bab29d688753fdc1e90e7fd4039d5fed6c956c5ddb14af7684cb22b3d0b5dc"),
-        "sparsity_90": ("4f6d187230723bbd2fa40afdc8ff611c48db0adcb359d7212f4974fb4b97d4e0"),
-        "sparsity_99": ("f593c37950297423f14d4603f81ba62ee053de5f20a37fd3addd628579b43d52"),
+        "dense_baseline": ("29585b55bcd9895884c8e41fa60d8db0e21cadf290017730b9d226c64753b7f0"),
+        "sparsity_50": ("ac3b9eb6dc07236fdd58703413d542b75294f335123d5118e56c2d54096dcff8"),
+        "sparsity_70": ("ff3b003db1ca9db6448aac517c9b4ef0391fa6c15480e0e444981f4b7388e11b"),
+        "sparsity_90": ("c836807a59c018abe2e7e4af97e20c0650ca96d13d173531ffcda82fad4969a5"),
+        "sparsity_99": ("68f0863f0e5de860cb1c68dad8438d0eb984e3d7919aa9e2c9ca17a91a3854a1"),
     },
     "position_embeddings_wikitext103": {
-        "absolute_pe": ("50ffd752c3e510ab59cc3c229c29173624598563d4840090a5cf109673906bbc"),
-        "alibi": ("e9172be4c4c86081faa29e53fc68c3493d0f361aac85c6bc9db6f512d85e63af"),
-        "no_pe_reference": ("9a3ba0837d63541594ab1769e036793ec45736121c69d008bbba41c2631dcdb5"),
-        "rope": ("53675bc682951aa6a8d0709713890e00534f726a8af96dc78ca133bb941553bf"),
+        "absolute_pe": ("769f23404d60e9950deed69ea9d8d560eb9b5d883f15836c45d945e1e17e7776"),
+        "alibi": ("b2ca416a40d5915163dc45c0eba377d67ae48f12571e45d2bae77646bac3fb62"),
+        "no_pe_reference": ("c5168e9d8e31759de9b5cdda8b9e24a1ecd9c83e007e08d62e397243a9fa00c7"),
+        "rope": ("99812dffe33e5175cc86abbd744443662c1ea41f1b1c0537537416959a7b47c9"),
     },
 }
 

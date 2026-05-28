@@ -10,6 +10,14 @@ dependencies = [
     "smai-cli",
     "smai-core",
     "smai-events",
+    # Planner-refactor Step 2: the router validates incoming
+    # technique_description bodies against the typed
+    # smai_inline_agents.planner.TechniqueDescription schema at the
+    # API boundary (upstream_requirements §2 — typed producer-side
+    # contract). Already brought in transitively via smai-cli /
+    # smai-orchestrator; declared explicitly so the dep is visible
+    # to consumers.
+    "smai-inline-agents",
     "smai-orchestrator",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",
@@ -59,6 +67,7 @@ smai-api-conformance = { workspace = true }
 smai-cli = { workspace = true }
 smai-core = { workspace = true }
 smai-events = { workspace = true }
+smai-inline-agents = { workspace = true }
 smai-orchestrator = { workspace = true }
 smai-store-sqlite = { workspace = true }
 smai-artifacts-localfs = { workspace = true }

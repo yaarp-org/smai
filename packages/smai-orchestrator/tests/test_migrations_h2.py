@@ -71,10 +71,13 @@ def test_head_revision_is_latest_default_revision() -> None:
     ``EntryRecord.entry_dispatch_attempt`` counter. Agent-refactor
     Step 4 sub-PR B (D2) added ``0006_agent_session_handle``
     downstream of that for the ``agent_sessions.compute_job_handle``
-    cross-reference column. The tenant_aware branch (``0002``) sits on
-    a separate root and does not affect the default head.
+    cross-reference column. Planner-refactor Step 2 added
+    ``0007_context_kind`` downstream of that for the
+    ``techniques.context_kind`` column
+    (``upstream_requirements §1``). The tenant_aware branch (``0002``)
+    sits on a separate root and does not affect the default head.
     """
-    assert get_head_revision() == "0006_agent_session_handle"
+    assert get_head_revision() == "0007_context_kind"
 
 
 async def test_upgrade_to_head_creates_every_table() -> None:
@@ -206,6 +209,46 @@ async def test_upgrade_to_head_lands_entry_dispatch_attempt_column() -> None:
             columns = await conn.run_sync(_entry_columns)
 
         assert "entry_dispatch_attempt" in columns
+    finally:
+        await engine.dispose()
+
+
+def test_revision_0007_context_kind_metadata_fields() -> None:
+    """Planner-refactor Step 2 revision 0007 chains off 0006 and is forward-only.
+
+    Adds the ``techniques.context_kind`` column per
+    ``upstream_requirements §1``. Single ADD COLUMN, chained off the
+    prior default-branch head, with a ``downgrade()`` that raises per
+    the forward-only policy (DEC-036). No data backfill per D10.
+    """
+    revision = _load_revision_module("0007_context_kind.py", "h2_rev_0007")
+    assert revision.revision == "0007_context_kind"
+    assert revision.down_revision == "0006_agent_session_handle"
+    with pytest.raises(NotImplementedError, match="not implemented"):
+        revision.downgrade()
+
+
+async def test_upgrade_to_head_lands_context_kind_column() -> None:
+    """After ``upgrade_to_head`` the ``techniques`` table carries the
+    planner-refactor Step 2 ``context_kind`` column
+    (``upstream_requirements §1``)."""
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        await upgrade_to_head(engine)
+
+        async with engine.connect() as conn:
+
+            def _technique_columns(sync_conn: object) -> set[str]:
+                from sqlalchemy import Inspector
+                from sqlalchemy import inspect as _inspect
+
+                inspector = _inspect(sync_conn)
+                assert isinstance(inspector, Inspector)
+                return {col["name"] for col in inspector.get_columns("techniques")}
+
+            columns = await conn.run_sync(_technique_columns)
+
+        assert "context_kind" in columns
     finally:
         await engine.dispose()
 

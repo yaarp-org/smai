@@ -410,6 +410,7 @@ def _build_technique_contract(
     technique_id = entry.level.technique_id
     standard = False
     fidelity_anchor = None
+    context_kind = None
     if technique_id is not None:
         ref = registries.technique_registry.get(technique_id)
         if ref is None:
@@ -420,6 +421,12 @@ def _build_technique_contract(
             )
         standard = ref.standard
         fidelity_anchor = ref.fidelity_anchor
+        # Read ``context_kind`` straight off the ref per
+        # ``upstream_requirements §1``: the contract becomes
+        # self-describing and downstream consumers (implementer's
+        # bundle-construction, contextual evaluator) stop inferring
+        # from anchor / standard at consumption time.
+        context_kind = ref.context_kind
     body = TechniqueContractBody(
         entry_id=entry.id,
         parent_experiment_id=experiment.id,
@@ -431,6 +438,7 @@ def _build_technique_contract(
         is_baseline=entry.is_baseline,
         fidelity_anchor=fidelity_anchor,
         standard=standard,
+        context_kind=context_kind,
     )
     contract = TechniqueContract(
         envelope=_envelope(

@@ -13,11 +13,56 @@ from httpx import ASGITransport, AsyncClient
 from smai_api import make_api_app
 from smai_api_spec.paths import PROPOSALS
 
+_VALID_PROPOSAL_DESCRIPTION: dict[str, object] = {
+    "name": "router_test_probe",
+    "summary": (
+        "Edge-case-test placeholder TechniqueDescription used by the proposals "
+        "router unit tests; not a real technique."
+    ),
+    "motivation": (
+        "Router tests need a minimum-viable body that round-trips through the "
+        "typed TechniqueDescription schema introduced at planner-refactor Step 2 "
+        "(upstream_requirements §2). This body is the smallest valid proposal."
+    ),
+    "problem_setting": ("Unit test of the proposals router; no real ML problem setting."),
+    "algorithm": {
+        "summary": (
+            "Placeholder algorithm summary that exists only to satisfy the "
+            "schema's minimum length rule on AlgorithmSpec.summary."
+        ),
+    },
+    "context_kind": "proposal",
+    "source_proposal_id": "router-test-probe",
+    "confidence_flags": [
+        {
+            "field_path": "/limitations",
+            "severity": "unknown",
+            "note": "Router test probe; field intentionally unset.",
+        },
+        {
+            "field_path": "/loss_function",
+            "severity": "unknown",
+            "note": "Router test probe; field intentionally unset.",
+        },
+        {
+            "field_path": "/training_recipe",
+            "severity": "unknown",
+            "note": "Router test probe; field intentionally unset.",
+        },
+        {
+            "field_path": "/evaluation_protocol",
+            "severity": "unknown",
+            "note": "Router test probe; field intentionally unset.",
+        },
+    ],
+}
+
 
 @pytest.mark.asyncio
 async def test_submit_proposal_with_inline_dict_description(tmp_path: Path) -> None:
-    """``technique_description`` (dict) submits cleanly + the artifact
-    key is populated on the response (per ``11`` §5.2.1)."""
+    """``technique_description`` (typed dict per planner_refactor Step 2)
+    submits cleanly + the artifact key is populated on the response
+    (per ``11`` §5.2.1)."""
     runtime = await make_test_runtime(artifact_root=tmp_path / "artifacts")
     app = make_api_app(runtime)  # type: ignore[arg-type]
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
@@ -25,7 +70,7 @@ async def test_submit_proposal_with_inline_dict_description(tmp_path: Path) -> N
             PROPOSALS,
             json={
                 "submission_kind": "novel_technique",
-                "technique_description": {"name": "test", "extension_points": []},
+                "technique_description": _VALID_PROPOSAL_DESCRIPTION,
             },
         )
         assert response.status_code == 202, response.text
@@ -44,12 +89,39 @@ async def test_submit_proposal_pinned_id_round_trips(tmp_path: Path) -> None:
             PROPOSALS,
             json={
                 "submission_kind": "novel_technique",
-                "technique_description_text": "edge-case probe",
+                "technique_description": _VALID_PROPOSAL_DESCRIPTION,
                 "proposal_id": "prop-edge-case-test-001",
             },
         )
         assert response.status_code == 202, response.text
         assert response.json()["id"] == "prop-edge-case-test-001"
+
+
+@pytest.mark.asyncio
+async def test_submit_proposal_rejects_freeform_text(tmp_path: Path) -> None:
+    """``technique_description_text`` is the freeform shape D10 dropped.
+
+    Planner-refactor Step 2 / ``upstream_requirements §2``: the typed
+    :class:`TechniqueDescription` is the only valid body for
+    novel-technique submissions. A text-only submit returns 400 +
+    VALIDATION_ERROR pointing at ``technique_description_text``.
+    """
+    runtime = await make_test_runtime(artifact_root=tmp_path / "artifacts")
+    app = make_api_app(runtime)  # type: ignore[arg-type]
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            PROPOSALS,
+            json={
+                "submission_kind": "novel_technique",
+                "technique_description_text": "old freeform shape, no longer accepted",
+            },
+        )
+        assert response.status_code == 400, response.text
+        body = response.json()
+        assert body["error"]["code"] == "VALIDATION_ERROR"
+        assert any(
+            "technique_description_text" in issue["loc"] for issue in body["error"]["issues"]
+        )
 
 
 @pytest.mark.asyncio

@@ -12,11 +12,21 @@ from pydantic import BaseModel, ConfigDict
 
 from smai_core.artifacts._envelope import ArtifactEnvelope
 from smai_core.entities.numeric import NumericValue
-from smai_core.entities.technique import FidelityAnchor, TechniqueParams
+from smai_core.entities.technique import ContextKind, FidelityAnchor, TechniqueParams
 
 
 class TechniqueContractBody(BaseModel):
-    """Body fields of :class:`TechniqueContract` (§7.5)."""
+    """Body fields of :class:`TechniqueContract` (§7.5).
+
+    ``context_kind`` (``agent_refactor/upstream_requirements §1``) declares
+    the grounding flavor explicitly so downstream consumers (the
+    implementer agent's bundle-construction step, the contextual
+    evaluator) read it from the contract rather than re-inferring from
+    ``standard`` + ``fidelity_anchor.kind``. ``None`` only for additive
+    baselines (``technique_id is None`` + ``is_baseline=True``, per
+    DEC-013); every other entry has a populated value mirroring the
+    underlying :class:`TechniqueRef.context_kind`.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -30,6 +40,7 @@ class TechniqueContractBody(BaseModel):
     is_baseline: bool
     fidelity_anchor: FidelityAnchor | None
     standard: bool
+    context_kind: ContextKind | None = None
 
 
 class TechniqueContract(BaseModel):

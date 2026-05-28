@@ -203,11 +203,61 @@ async def test_full_user_journey(tmp_path: Path) -> None:
             # we ignore.
             async with runtime.event_broker.subscribe() as events:
                 # === Step 1: submit proposal =================================
+                # Per planner_refactor Step 2 (upstream_requirements §2)
+                # technique_description is a typed TechniqueDescription dict;
+                # the freeform text path is rejected per D10.
                 submit_response = await client.post(
                     "/api/v1/proposals",
                     json={
                         "submission_kind": "novel_technique",
-                        "technique_description_text": "n3 e2e test technique",
+                        "technique_description": {
+                            "name": "n3_e2e_test_technique",
+                            "summary": (
+                                "n3 SPA + API end-to-end smoke test placeholder; "
+                                "not a real technique, validates the typed proposal "
+                                "submission wire shape against the fake-LLM planner."
+                            ),
+                            "motivation": (
+                                "smai-ui end-to-end smoke test needs a proposal that "
+                                "round-trips through the new typed TechniqueDescription "
+                                "schema; this body is the minimum valid proposal variant."
+                            ),
+                            "problem_setting": (
+                                "Integration test of the SPA + API + worker wiring; no "
+                                "real ML problem setting."
+                            ),
+                            "algorithm": {
+                                "summary": (
+                                    "Placeholder algorithm summary that exists only to "
+                                    "satisfy the schema's minimum length rule on "
+                                    "AlgorithmSpec.summary; not a real algorithm."
+                                ),
+                            },
+                            "context_kind": "proposal",
+                            "source_proposal_id": shape.proposal_id,
+                            "confidence_flags": [
+                                {
+                                    "field_path": "/limitations",
+                                    "severity": "unknown",
+                                    "note": "e2e test probe; field intentionally unset.",
+                                },
+                                {
+                                    "field_path": "/loss_function",
+                                    "severity": "unknown",
+                                    "note": "e2e test probe; field intentionally unset.",
+                                },
+                                {
+                                    "field_path": "/training_recipe",
+                                    "severity": "unknown",
+                                    "note": "e2e test probe; field intentionally unset.",
+                                },
+                                {
+                                    "field_path": "/evaluation_protocol",
+                                    "severity": "unknown",
+                                    "note": "e2e test probe; field intentionally unset.",
+                                },
+                            ],
+                        },
                         "proposal_id": shape.proposal_id,
                     },
                 )

@@ -95,7 +95,7 @@ def test_migrate_upgrades_empty_db_to_head(smai_home: Path) -> None:
     # The exact head revision id moves as the default chain grows; assert
     # a default-branch revision id appears (the tenant_aware branch's
     # revision id has ``tenant_aware`` in it, which we rule out below).
-    assert "0006_agent_session_handle" in result.output
+    assert "0007_context_kind" in result.output
     # File now exists and is non-empty.
     assert sqlite_path.exists()
     assert sqlite_path.stat().st_size > 0
@@ -243,7 +243,7 @@ def test_migrate_default_does_not_apply_tenant_aware(smai_home: Path) -> None:
     # Default-branch head (agent-refactor Step 4 sub-PR B grew the chain
     # to 0006); the tenant_aware branch revision id sits on the side
     # branch and is NOT picked up by a no-flag ``smai migrate``.
-    assert "0006_agent_session_handle" in result.output
+    assert "0007_context_kind" in result.output
     assert "tenant_aware" not in result.output
 
     async def _check() -> bool:

@@ -3738,6 +3738,7 @@ dependencies = [
     { name = "smai-cli" },
     { name = "smai-core" },
     { name = "smai-events" },
+    { name = "smai-inline-agents" },
     { name = "smai-orchestrator" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -3767,6 +3768,7 @@ requires-dist = [
     { name = "smai-cli", editable = "packages/smai-cli" },
     { name = "smai-core", editable = "packages/smai-core" },
     { name = "smai-events", editable = "packages/smai-events" },
+    { name = "smai-inline-agents", editable = "packages/smai-inline-agents" },
     { name = "smai-orchestrator", editable = "packages/smai-orchestrator" },
     { name = "smai-ui", marker = "extra == 'ui'", editable = "packages/smai-ui" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30" },

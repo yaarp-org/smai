@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from fastapi import APIRouter
+from pydantic import ValidationError
 from smai_api_spec import (
     ApproveProposalResponse,
     CursorPage,
@@ -32,6 +33,7 @@ from smai_api_spec.paths import (
     PROPOSALS,
 )
 from smai_cli.runtime import PaperNotFoundError
+from smai_inline_agents.planner import TechniqueDescription
 
 from smai_api._deps import RuntimeDep
 from smai_api._pagination import paginate
@@ -73,11 +75,37 @@ async def submit_proposal(
             raise PaperNotReadyError(body.reproduce_paper_arxiv_id, current_state=paper.state)
 
     proposal_id = body.proposal_id or _new_proposal_id()
-    technique_description: dict[str, object] | str | None
+    # Planner-refactor Step 2 (``upstream_requirements §2``): the wire
+    # body for ``technique_description`` is validated as a typed
+    # :class:`TechniqueDescription` before submit. Freeform
+    # ``technique_description_text`` is rejected per D10 (no backcompat
+    # shim); only the structured dict path and the reproduce-paper path
+    # remain valid for v2.
+    technique_description: TechniqueDescription | None
     if body.technique_description is not None:
-        technique_description = dict(body.technique_description)
+        technique_description = TechniqueDescription.model_validate(
+            dict(body.technique_description)
+        )
     elif body.technique_description_text is not None:
-        technique_description = body.technique_description_text
+        # Re-raise as Pydantic ValidationError so the global handler
+        # surfaces the standard 400 + VALIDATION_ERROR envelope.
+        raise ValidationError.from_exception_data(
+            "SubmitProposalRequest",
+            [
+                {
+                    "type": "value_error",
+                    "loc": ("body", "technique_description_text"),
+                    "input": body.technique_description_text,
+                    "ctx": {
+                        "error": ValueError(
+                            "technique_description_text is no longer supported "
+                            "(planner_refactor Step 2 / D10); submit a typed "
+                            "TechniqueDescription under technique_description instead"
+                        ),
+                    },
+                }
+            ],
+        )
     else:
         # reproduce_paper carries no technique description payload —
         # the artifact key remains None on the resulting record.

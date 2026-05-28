@@ -985,6 +985,14 @@ def _draft_technique_to_paper_ref(
         list[str], raw.get("compatible_factor_types") or ["additive"]
     )
     compatible_factor_types = [_validate_factor_type(t) for t in compatible_factor_types_raw]
+    # Paper-ingestion is the canonical ``paper_extract`` producer path
+    # (``upstream_requirements §1``): non-standard refs land with a
+    # :class:`PaperFidelityAnchor` so ``context_kind="paper_extract"``;
+    # DEC-015 ``standard`` refs land with ``standard=True`` so
+    # ``context_kind="standard"``. The :class:`TechniqueRef`
+    # model_validator backfills from anchor / standard so this constructor
+    # site does not need a per-call decision, but we set it explicitly
+    # to lock the producer-side intent.
     return TechniqueRef(
         id=symbolic_name,
         name=cast(str, raw.get("name", symbolic_name)),
@@ -996,6 +1004,7 @@ def _draft_technique_to_paper_ref(
         affects_extension_points=cast(list[str], raw.get("affects_extension_points") or []),
         implies_controlled=cast(list[str], raw.get("implies_controlled") or []),
         parameter_schema=cast(dict[str, Any] | None, raw.get("parameter_schema")),
+        context_kind="standard" if standard else "paper_extract",
     )
 
 
