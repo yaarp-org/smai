@@ -71,7 +71,7 @@ function NewProposalPage() {
     if (submissionKind === "novel_technique") {
       return {
         submission_kind: "novel_technique" as const,
-        technique_description_text: techniqueDescriptionText,
+        description: techniqueDescriptionText,
       };
     }
     return {
@@ -97,13 +97,13 @@ function NewProposalPage() {
 
     const body: {
       submission_kind: SubmissionKind;
-      technique_description_text?: string;
+      description?: string;
       reproduce_paper_arxiv_id?: string;
       submitted_by?: string | null;
     } = { submission_kind: result.data.submission_kind };
 
     if (result.data.submission_kind === "novel_technique") {
-      body.technique_description_text = result.data.technique_description_text;
+      body.description = result.data.description;
     } else {
       body.reproduce_paper_arxiv_id = result.data.reproduce_paper_arxiv_id;
     }
@@ -163,12 +163,10 @@ function NewProposalPage() {
                   value={techniqueDescriptionText}
                   onChange={(e) => setTechniqueDescriptionText(e.target.value)}
                   rows={10}
-                  placeholder="Describe the novel technique in free-form prose. The planner agent reads this verbatim."
-                  aria-invalid={Boolean(clientErrors.technique_description_text)}
+                  placeholder="Describe the novel technique in free-form prose. The planner agent drafts the technique from this."
+                  aria-invalid={Boolean(clientErrors.description)}
                 />
-                {clientErrors.technique_description_text && (
-                  <FieldError msg={clientErrors.technique_description_text} />
-                )}
+                {clientErrors.description && <FieldError msg={clientErrors.description} />}
               </div>
             ) : (
               <div className="space-y-1">

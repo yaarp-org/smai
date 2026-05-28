@@ -74,15 +74,14 @@ async def submit_proposal(
             raise PaperNotReadyError(body.reproduce_paper_arxiv_id, current_state=paper.state)
 
     proposal_id = body.proposal_id or _new_proposal_id()
-    # Planner-refactor Step 2 follow-up (``upstream_requirements §2`` + D10):
-    # the wire body for ``technique_description`` is validated as a
-    # typed :class:`TechniqueDescription` before submit. The freeform
-    # ``technique_description_text`` field was dropped from the request
-    # spec entirely (D10: no backcompat shim) — unknown keys are
-    # rejected by Pydantic at the request-parse boundary via
-    # ``extra="forbid"``. The reproduce-paper path carries no
-    # technique description payload; the artifact key remains None on
-    # the resulting record.
+    # Per DEC-032 a novel-technique proposal's primary input is the
+    # free-text ``description`` the planner drafts the technique *from*;
+    # ``technique_description`` is an optional pre-structured path
+    # validated as a typed :class:`TechniqueDescription` before submit
+    # (the typed schema is the planner's / ingestion's output shape).
+    # The spec's exactly-one-of validator guarantees at most one of the
+    # two novel-technique forms is set; the reproduce-paper path carries
+    # neither (its artifact key stays None on the resulting record).
     technique_description: TechniqueDescription | None = (
         TechniqueDescription.model_validate(dict(body.technique_description))
         if body.technique_description is not None
@@ -92,6 +91,7 @@ async def submit_proposal(
     submission = await runtime.proposals.submit(
         proposal_id=proposal_id,
         submission_kind=body.submission_kind,
+        description=body.description,
         technique_description=technique_description,
         reproduce_paper_arxiv_id=body.reproduce_paper_arxiv_id,
         submitted_by=body.submitted_by,

@@ -6,19 +6,20 @@
 
 import { z } from "zod";
 
-// 11-api.md §5.2.1: SubmitProposalRequest — exactly one of the three
-// description fields populated, consistent with submission_kind. We model
-// the two surface forms separately and union them:
+// 11-api.md §5.2.1 + DEC-032: SubmitProposalRequest — exactly one input
+// form populated, consistent with submission_kind. We model the two surface
+// forms separately and union them:
 //
-//   * novel_technique → free-form text. (The inline-JSON form is reserved
-//     for future structured-description UX; the day-one form route only
-//     ships the text path per 13-frontend.md §11.3.)
+//   * novel_technique → free-text `description` the planner drafts the
+//     technique from (the primary input per DEC-032). The optional typed
+//     `technique_description` pre-structured path is not exposed in the
+//     day-one form; callers with a structured technique use the API/CLI.
 //   * reproduce_paper → arxiv_id pinned. The server returns 409 +
 //     PAPER_NOT_READY when the paper isn't in `registered`.
 export const proposalSubmissionSchema = z.discriminatedUnion("submission_kind", [
   z.object({
     submission_kind: z.literal("novel_technique"),
-    technique_description_text: z
+    description: z
       .string()
       .min(1, "Technique description is required")
       .max(64_000, "Technique description must be under 64K characters"),

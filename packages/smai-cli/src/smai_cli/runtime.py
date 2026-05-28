@@ -861,6 +861,7 @@ class ProposalsService:
         *,
         proposal_id: str,
         submission_kind: str = "novel_technique",
+        description: str | None = None,
         technique_description: TechniqueDescription | None = None,
         reproduce_paper_arxiv_id: str | None = None,
         submitted_by: str | None = None,
@@ -870,28 +871,51 @@ class ProposalsService:
         Per ``08-novel-technique-pipeline.md`` §3.1 / `09` §1: the
         submission step is synchronous in the API surface and runs
         BEFORE the entity enters the pipeline-spec. Persists the
-        user's submitted :class:`TechniqueDescription` (or
-        reproduce-paper reference) to ArtifactStore at
+        novel-technique input (or reproduce-paper reference) to
+        ArtifactStore at
         :data:`PROPOSAL_TECHNIQUE_DESCRIPTION_KEY_TEMPLATE`, then
         creates the :class:`ProposalRecord` in ``proposal_submitted``.
 
-        Per planner_refactor Step 2 / ``upstream_requirements §2``:
-        the typed :class:`TechniqueDescription` shape replaces the v1
-        ``dict | str | None`` body. Old freeform bodies are rejected
-        at validation time per D10 (no backcompat shim, no migration
-        helper); fixtures get re-submitted under the new shape.
+        Per DEC-032 a novel-technique proposal's primary input is a
+        free-text ``description`` the planner drafts the technique
+        *from*; the typed :class:`TechniqueDescription` is the
+        planner's / ingestion's *output* shape, accepted here only as
+        an optional pre-structured path. Exactly one of
+        ``description`` / ``technique_description`` /
+        ``reproduce_paper_arxiv_id`` must be supplied. Both novel-
+        technique forms persist to the same artifact key (the planner's
+        loader parses JSON-or-text, so prose and serialized typed JSON
+        both round-trip):
+
+        * ``description`` → the raw prose string, utf-8 encoded.
+        * ``technique_description`` → ``model_dump_json(indent=2)``.
         """
         if submission_kind not in {"novel_technique", "reproduce_paper"}:
             raise ValueError(
                 f"submission_kind {submission_kind!r} must be "
                 "'novel_technique' or 'reproduce_paper'"
             )
+        forms = {
+            "description": description is not None,
+            "technique_description": technique_description is not None,
+            "reproduce_paper_arxiv_id": reproduce_paper_arxiv_id is not None,
+        }
+        populated = [name for name, present in forms.items() if present]
+        if len(populated) != 1:
+            raise ValueError(
+                "exactly one of description / technique_description / "
+                f"reproduce_paper_arxiv_id must be populated; got {populated or ['none']}"
+            )
         artifact_key: str | None = None
-        if technique_description is not None:
+        if description is not None or technique_description is not None:
             artifact_key = PROPOSAL_TECHNIQUE_DESCRIPTION_KEY_TEMPLATE.format(
                 proposal_id=proposal_id,
             )
-            payload = technique_description.model_dump_json(indent=2).encode("utf-8")
+            if technique_description is not None:
+                payload = technique_description.model_dump_json(indent=2).encode("utf-8")
+            else:
+                assert description is not None
+                payload = description.encode("utf-8")
             await self._plugins.artifact_store.put(artifact_key, payload)
         now = datetime.now(UTC)
         record = ProposalRecord(

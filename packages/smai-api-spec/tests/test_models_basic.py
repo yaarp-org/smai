@@ -175,12 +175,39 @@ def test_worker_heartbeat_roundtrip() -> None:
 # === Proposals ==============================================================
 
 
+def test_submit_proposal_request_prose_description_novel() -> None:
+    """The primary novel-technique input per DEC-032: free-text prose."""
+    req = SubmitProposalRequest(
+        submission_kind="novel_technique",
+        description="Add cutout augmentation and compare top-1 accuracy to baseline.",
+    )
+    _roundtrip(req)
+
+
+def test_submit_proposal_request_prose_description_default_kind() -> None:
+    """``submission_kind`` defaults to ``novel_technique``; prose alone is valid."""
+    req = SubmitProposalRequest(description="Anneal the learning rate with a cosine schedule.")
+    _roundtrip(req)
+    assert req.submission_kind == "novel_technique"
+
+
 def test_submit_proposal_request_novel_technique_dict() -> None:
     req = SubmitProposalRequest(
         submission_kind="novel_technique",
         technique_description={"name": "warmup", "params": {"steps": 1000}},
     )
     _roundtrip(req)
+
+
+def test_submit_proposal_request_description_and_technique_rejected() -> None:
+    """The two novel-technique input forms are mutually exclusive."""
+    with pytest.raises(ValidationError) as excinfo:
+        SubmitProposalRequest(
+            submission_kind="novel_technique",
+            description="prose form",
+            technique_description={"name": "x"},
+        )
+    assert "exactly one" in str(excinfo.value)
 
 
 def test_submit_proposal_request_reproduce_paper() -> None:

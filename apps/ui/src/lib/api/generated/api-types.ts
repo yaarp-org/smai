@@ -1632,12 +1632,25 @@ export interface components {
          * SubmitProposalRequest
          * @description Submit a novel-technique proposal or a reproduce-paper proposal.
          *
-         *     Per ``11`` §5.2.1: exactly one of the three description fields must be
-         *     populated; the populated field must be consistent with
+         *     Per ``11`` §5.2.1 + DEC-032: exactly one of three input forms must
+         *     be populated; the populated form must be consistent with
          *     ``submission_kind``:
          *
          *     * ``submission_kind="novel_technique"`` → exactly one of
-         *       ``technique_description`` / ``technique_description_text``.
+         *       ``description`` / ``technique_description``.
+         *
+         *       - ``description`` is the **primary** input: a free-text prose
+         *         description the planner drafts the technique *from* (per
+         *         DEC-032 — proposals submit a description, the planner designs
+         *         it). This is the path the SPA form and ``smai submit-proposal``
+         *         use by default.
+         *       - ``technique_description`` is an **optional pre-structured**
+         *         input: a typed
+         *         :class:`smai_inline_agents.planner.TechniqueDescription` dict
+         *         for callers that already hold a structured technique (e.g.
+         *         lifted out of paper ingestion). The typed schema is the
+         *         planner's / ingestion's *output* shape; accepting it here lets
+         *         such a caller skip the drafting phase. It is never required.
          *     * ``submission_kind="reproduce_paper"`` → ``reproduce_paper_arxiv_id``,
          *       and the referenced paper must exist + be in a terminal
          *       ``registered`` state. Implementations enforce the latter at submit
@@ -1655,6 +1668,8 @@ export interface components {
          *     RESOLVED 2026-05-03 — same Pydantic shape on both sides).
          */
         SubmitProposalRequest: {
+            /** Description */
+            description?: string | null;
             /** Proposal Id */
             proposal_id?: string | null;
             /** Reproduce Paper Arxiv Id */
@@ -1671,8 +1686,6 @@ export interface components {
             technique_description?: {
                 [key: string]: unknown;
             } | null;
-            /** Technique Description Text */
-            technique_description_text?: string | null;
         };
         /**
          * SummaryCounts

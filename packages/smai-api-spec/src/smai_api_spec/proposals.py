@@ -37,24 +37,31 @@ from smai_api_spec.pagination import PaginationParams
 class SubmitProposalRequest(APIBaseModel):
     """Submit a novel-technique proposal or a reproduce-paper proposal.
 
-    Per ``11`` §5.2.1 + planner_refactor D10: exactly one of two
-    description fields must be populated; the populated field must be
-    consistent with ``submission_kind``:
+    Per ``11`` §5.2.1 + DEC-032: exactly one of three input forms must
+    be populated; the populated form must be consistent with
+    ``submission_kind``:
 
-    * ``submission_kind="novel_technique"`` → ``technique_description``
-      (typed :class:`smai_inline_agents.planner.TechniqueDescription`
-      dict per planner_refactor Step 2 / ``upstream_requirements §2``).
+    * ``submission_kind="novel_technique"`` → exactly one of
+      ``description`` / ``technique_description``.
+
+      - ``description`` is the **primary** input: a free-text prose
+        description the planner drafts the technique *from* (per
+        DEC-032 — proposals submit a description, the planner designs
+        it). This is the path the SPA form and ``smai submit-proposal``
+        use by default.
+      - ``technique_description`` is an **optional pre-structured**
+        input: a typed
+        :class:`smai_inline_agents.planner.TechniqueDescription` dict
+        for callers that already hold a structured technique (e.g.
+        lifted out of paper ingestion). The typed schema is the
+        planner's / ingestion's *output* shape; accepting it here lets
+        such a caller skip the drafting phase. It is never required.
     * ``submission_kind="reproduce_paper"`` → ``reproduce_paper_arxiv_id``,
       and the referenced paper must exist + be in a terminal
       ``registered`` state. Implementations enforce the latter at submit
       time and respond with 409 + ``code: "PAPER_NOT_READY"`` if the
       paper is missing or non-terminal (per ``11`` §13 OQ11 RESOLVED
       2026-05-03).
-
-    The freeform ``technique_description_text`` field that this
-    request previously carried was dropped per D10 (no backcompat shim
-    for pre-Step-2 callers); SubmitProposalRequest's ``extra="forbid"``
-    config now rejects it at the request-parse boundary.
 
     ``proposal_id`` lets callers pin their own ULID for idempotency: a
     repeat submit with the same id returns the existing proposal record
@@ -67,6 +74,7 @@ class SubmitProposalRequest(APIBaseModel):
     """
 
     submission_kind: SubmissionKind = "novel_technique"
+    description: str | None = None
     technique_description: dict[str, object] | None = None
     reproduce_paper_arxiv_id: str | None = None
     proposal_id: str | None = None
@@ -74,24 +82,26 @@ class SubmitProposalRequest(APIBaseModel):
 
     @model_validator(mode="after")
     def _exactly_one_description_form(self) -> Self:
-        # Count populated description fields. ``technique_description``
-        # is a dict; treat ``{}`` as populated (some callers may submit
-        # an explicitly-empty design baseline) — the check is presence,
-        # not truthiness.
+        # Count populated input forms. ``technique_description`` is a
+        # dict and ``description`` a str; treat any non-``None`` value
+        # as populated (an explicitly-empty ``{}`` / ``""`` still counts
+        # as "the caller chose this form") — the check is presence, not
+        # truthiness.
         forms = {
+            "description": self.description is not None,
             "technique_description": self.technique_description is not None,
             "reproduce_paper_arxiv_id": self.reproduce_paper_arxiv_id is not None,
         }
         populated = [name for name, present in forms.items() if present]
         if len(populated) == 0:
             raise ValueError(
-                "exactly one of technique_description / reproduce_paper_arxiv_id "
-                "must be populated; got none"
+                "exactly one of description / technique_description / "
+                "reproduce_paper_arxiv_id must be populated; got none"
             )
         if len(populated) > 1:
             raise ValueError(
-                "exactly one of technique_description / reproduce_paper_arxiv_id "
-                f"must be populated; got {populated}"
+                "exactly one of description / technique_description / "
+                f"reproduce_paper_arxiv_id must be populated; got {populated}"
             )
         # Cross-validate with submission_kind.
         if self.submission_kind == "reproduce_paper":
@@ -100,7 +110,8 @@ class SubmitProposalRequest(APIBaseModel):
                     "submission_kind='reproduce_paper' requires reproduce_paper_arxiv_id"
                 )
         else:
-            # submission_kind == "novel_technique"
+            # submission_kind == "novel_technique" → exactly one of the
+            # two novel-technique input forms; the arxiv id is invalid.
             if self.reproduce_paper_arxiv_id is not None:
                 raise ValueError(
                     "reproduce_paper_arxiv_id is only valid with submission_kind='reproduce_paper'"

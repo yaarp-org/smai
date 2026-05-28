@@ -892,9 +892,10 @@ def smai_submit_proposal(
         str | None,
         typer.Argument(
             help=(
-                "Inline JSON technique description. Pass `-` to read from "
-                "stdin. Mutually exclusive with --description-file and "
-                "--reproduce-paper."
+                "Prose description of the novel technique; the planner drafts "
+                "the technique from it (DEC-032). Pass `-` to read from stdin. "
+                "Mutually exclusive with --description-file, --technique-json, "
+                "and --reproduce-paper."
             ),
         ),
     ] = None,
@@ -903,7 +904,22 @@ def smai_submit_proposal(
         typer.Option(
             "--description-file",
             "-f",
-            help="Path to a JSON file with the technique description.",
+            help="Path to a file with the prose technique description.",
+            exists=True,
+            dir_okay=False,
+            readable=True,
+        ),
+    ] = None,
+    technique_json: Annotated[
+        Path | None,
+        typer.Option(
+            "--technique-json",
+            help=(
+                "Path to a JSON file with a pre-structured TechniqueDescription "
+                "(the planner / ingestion output shape) for callers that already "
+                "hold a typed technique. Mutually exclusive with the prose "
+                "argument, --description-file, and --reproduce-paper."
+            ),
             exists=True,
             dir_okay=False,
             readable=True,
@@ -933,30 +949,58 @@ def smai_submit_proposal(
 ) -> None:
     """Submit a novel-technique or reproduce-paper proposal (`09` §1).
 
-    The PRIMARY input verb per DEC-032. Synchronously creates the
-    :class:`ProposalRecord` in ``proposal_submitted`` and persists the
-    submission artifact. The next worker cycle picks it up and fires
-    the planner.
+    The PRIMARY input verb per DEC-032. A novel-technique proposal's
+    primary input is a prose ``description`` the planner drafts the
+    technique *from*; ``--technique-json`` is an optional pre-structured
+    path (the typed TechniqueDescription is the planner's / ingestion's
+    output shape, accepted here for callers that already hold one).
+    Synchronously creates the :class:`ProposalRecord` in
+    ``proposal_submitted`` and persists the submission artifact. The
+    next worker cycle picks it up and fires the planner.
     """
-    if reproduce_paper is None and description is None and description_file is None:
+    from pydantic import ValidationError  # noqa: PLC0415
+    from smai_inline_agents.planner import TechniqueDescription  # noqa: PLC0415
+
+    prose_given = description is not None or description_file is not None
+    typed_given = technique_json is not None
+    paper_given = reproduce_paper is not None
+    n_forms = sum((prose_given, typed_given, paper_given))
+    if n_forms == 0:
         _err(
-            "submit-proposal requires one of: a description argument, "
-            "--description-file, or --reproduce-paper."
+            "submit-proposal requires one of: a prose description argument, "
+            "--description-file, --technique-json, or --reproduce-paper."
         )
-    if reproduce_paper is not None and (description is not None or description_file is not None):
+    if n_forms > 1:
         _err(
-            "submit-proposal: --reproduce-paper is mutually exclusive with "
-            "an inline description argument or --description-file."
+            "submit-proposal: the prose description (argument / "
+            "--description-file), --technique-json, and --reproduce-paper are "
+            "mutually exclusive; supply exactly one."
+        )
+    if description is not None and description_file is not None:
+        _err(
+            "submit-proposal: pass either an inline prose argument or --description-file, not both."
         )
 
-    submission_kind = "reproduce_paper" if reproduce_paper is not None else "novel_technique"
-    technique_payload: Any = None
-    if description_file is not None:
-        technique_payload = description_file.read_text(encoding="utf-8")
-    elif description == "-":
-        technique_payload = sys.stdin.read()
-    elif description is not None:
-        technique_payload = description
+    submission_kind = "reproduce_paper" if paper_given else "novel_technique"
+    prose_text: str | None = None
+    typed_description: TechniqueDescription | None = None
+    if typed_given:
+        assert technique_json is not None
+        try:
+            data = json.loads(technique_json.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            _err(f"--technique-json: could not read JSON from {technique_json}: {exc}")
+        try:
+            typed_description = TechniqueDescription.model_validate(data)
+        except ValidationError as exc:
+            _err(f"--technique-json: not a valid TechniqueDescription: {exc}")
+    elif prose_given:
+        if description_file is not None:
+            prose_text = description_file.read_text(encoding="utf-8")
+        elif description == "-":
+            prose_text = sys.stdin.read()
+        else:
+            prose_text = description
 
     final_proposal_id = proposal_id or _generate_proposal_id()
 
@@ -973,7 +1017,8 @@ def smai_submit_proposal(
             submission = await runtime.proposals.submit(
                 proposal_id=final_proposal_id,
                 submission_kind=submission_kind,
-                technique_description=technique_payload,
+                description=prose_text,
+                technique_description=typed_description,
                 reproduce_paper_arxiv_id=reproduce_paper,
             )
             typer.echo(submission.proposal_id)

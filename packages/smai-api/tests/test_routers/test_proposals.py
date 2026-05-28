@@ -98,13 +98,12 @@ async def test_submit_proposal_pinned_id_round_trips(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_submit_proposal_rejects_freeform_text(tmp_path: Path) -> None:
-    """``technique_description_text`` is the freeform shape D10 dropped.
+async def test_submit_proposal_with_prose_description(tmp_path: Path) -> None:
+    """``description`` (free-text prose) is the PRIMARY novel-technique
+    input per DEC-032 — the planner drafts the technique from it.
 
-    Planner-refactor Step 2 follow-up: the field was deleted from
-    :class:`SubmitProposalRequest` entirely (no backcompat shim per D10);
-    ``extra="forbid"`` on the spec model rejects it at the request-parse
-    boundary with 400 + VALIDATION_ERROR.
+    Submits cleanly with 202 and the submission artifact key is populated
+    on the response (the prose is persisted as the submission artifact).
     """
     runtime = await make_test_runtime(artifact_root=tmp_path / "artifacts")
     app = make_api_app(runtime)  # type: ignore[arg-type]
@@ -113,15 +112,15 @@ async def test_submit_proposal_rejects_freeform_text(tmp_path: Path) -> None:
             PROPOSALS,
             json={
                 "submission_kind": "novel_technique",
-                "technique_description_text": "old freeform shape, no longer accepted",
+                "description": (
+                    "Add cutout augmentation to the CIFAR-10 training transforms "
+                    "and compare top-1 accuracy against an unaugmented baseline."
+                ),
             },
         )
-        assert response.status_code == 400, response.text
+        assert response.status_code == 202, response.text
         body = response.json()
-        assert body["error"]["code"] == "VALIDATION_ERROR"
-        assert any(
-            "technique_description_text" in issue["loc"] for issue in body["error"]["issues"]
-        )
+        assert body["technique_description_artifact_key"]
 
 
 @pytest.mark.asyncio

@@ -33,6 +33,7 @@ from smai_orchestrator.specs.proposal import (
     POOL_PROPOSAL_PIPELINE_LIMIT,
     POOL_PROPOSAL_PIPELINE_PRIORITY,
     PROPOSAL_PIPELINE_SPEC_NAME,
+    TECHNIQUE_DESCRIPTION_KEY_TEMPLATE,
     build_proposal_pipeline_spec,
 )
 from smai_orchestrator.worker.loop import run_worker_cycle
@@ -255,6 +256,161 @@ async def test_proposal_round_trip_proposal_submitted_to_registered(  # type: ig
 
     # Suppress unused-import warning.
     _ = DispatchContext
+
+
+@pytest.mark.asyncio
+async def test_designing_dispatch_feeds_prose_description_to_planner_input(  # type: ignore[no-untyped-def]
+    sqlite_store,
+    localfs: LocalFsStore,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Gap closer: a PROSE ``description`` submission reaches
+    ``PlannerInput.technique_description`` verbatim through the
+    designing-state planner dispatch.
+
+    Per DEC-032 a novel-technique proposal's primary input is the prose
+    the planner drafts the technique *from*. The pre-existing round-trip
+    tests submit a pre-built typed buffer and never assert what the
+    planner *received* as input; that blind spot let planner-refactor
+    Step 2 invert the submit contract (prose dropped, typed-only required)
+    without a red test. This drives the actual prose path through to the
+    planner's input.
+    """
+    import smai_inline_agents.agents.planner as planner_mod  # noqa: PLC0415
+
+    prose = (
+        "Add cutout augmentation to the CIFAR-10 training transforms and "
+        "compare top-1 accuracy against an unaugmented baseline."
+    )
+    proposal_id = "prop-prose-gap"
+
+    # Persist the prose exactly as ``ProposalsService.submit(description=...)``
+    # does: raw utf-8 bytes at the submission artifact key (no JSON
+    # wrapping). The planner's ``_load_technique_description`` parses
+    # JSON-or-text and returns prose verbatim.
+    key = TECHNIQUE_DESCRIPTION_KEY_TEMPLATE.format(proposal_id=proposal_id)
+    await localfs.put(key, prose.encode("utf-8"))
+
+    proposal = make_proposal_record(
+        proposal_id=proposal_id,
+        state="proposal_submitted",
+        technique_description_artifact_key=key,
+    )
+    await sqlite_store.create_proposal(proposal)
+
+    captured: dict[str, Any] = {}
+    real_run = planner_mod.run_planner_session
+
+    async def _capturing_run(**kwargs: Any) -> Any:
+        planner_input = kwargs["input"]
+        captured["technique_description"] = planner_input.technique_description
+        captured["submission_kind"] = planner_input.submission_kind
+        return await real_run(**kwargs)
+
+    monkeypatch.setattr(planner_mod, "run_planner_session", _capturing_run)
+
+    planner_llm = StubLlmProvider(
+        make_planner_responses_for_finalize(
+            proposal_id=proposal_id,
+            cg_drafts=[
+                {"id": "cg-1", "factor_dimension": "augmentation", "factor_type": "additive"}
+            ],
+        )
+    )
+    spec = build_proposal_pipeline_spec(
+        workspace_root=tmp_path / "ws",
+        llm_for_planner=planner_llm,  # type: ignore[arg-type]
+        require_human_approval=False,
+    )
+    config = EngineConfig(supervisor_enabled=False)
+
+    for _ in range(8):
+        await run_worker_cycle(
+            spec=spec.engine_spec(),
+            metadata_store=sqlite_store,
+            artifact_store=localfs,  # type: ignore[arg-type]
+            compute=_NoComputeStub(),  # type: ignore[arg-type]
+            llm_providers=None,
+            config=config,
+        )
+        if "technique_description" in captured:
+            break
+
+    assert captured["technique_description"] == prose
+    assert captured["submission_kind"] == "novel_technique"
+
+
+@pytest.mark.asyncio
+async def test_designing_dispatch_feeds_typed_description_as_json_to_planner_input(  # type: ignore[no-untyped-def]
+    sqlite_store,
+    localfs: LocalFsStore,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Optional pre-structured path: a typed ``technique_description``
+    submission (persisted as JSON, the planner's / ingestion's output
+    shape) reaches the planner as the serialized JSON.
+
+    The planner's ``_load_technique_description`` renders a JSON object as
+    pretty-printed, key-sorted text, so the planner receives the typed
+    body re-serialized rather than dropped.
+    """
+    import smai_inline_agents.agents.planner as planner_mod  # noqa: PLC0415
+
+    typed = {"name": "cutout", "summary": "Cutout augmentation probe."}
+    proposal_id = "prop-typed-gap"
+
+    # ``ProposalsService.submit(technique_description=...)`` persists
+    # ``model_dump_json(indent=2)``; a plain JSON object round-trips the
+    # same way through the planner loader.
+    key = TECHNIQUE_DESCRIPTION_KEY_TEMPLATE.format(proposal_id=proposal_id)
+    await localfs.put(key, json.dumps(typed, indent=2).encode("utf-8"))
+
+    proposal = make_proposal_record(
+        proposal_id=proposal_id,
+        state="proposal_submitted",
+        technique_description_artifact_key=key,
+    )
+    await sqlite_store.create_proposal(proposal)
+
+    captured: dict[str, Any] = {}
+    real_run = planner_mod.run_planner_session
+
+    async def _capturing_run(**kwargs: Any) -> Any:
+        captured["technique_description"] = kwargs["input"].technique_description
+        return await real_run(**kwargs)
+
+    monkeypatch.setattr(planner_mod, "run_planner_session", _capturing_run)
+
+    planner_llm = StubLlmProvider(
+        make_planner_responses_for_finalize(
+            proposal_id=proposal_id,
+            cg_drafts=[
+                {"id": "cg-1", "factor_dimension": "augmentation", "factor_type": "additive"}
+            ],
+        )
+    )
+    spec = build_proposal_pipeline_spec(
+        workspace_root=tmp_path / "ws",
+        llm_for_planner=planner_llm,  # type: ignore[arg-type]
+        require_human_approval=False,
+    )
+    config = EngineConfig(supervisor_enabled=False)
+
+    for _ in range(8):
+        await run_worker_cycle(
+            spec=spec.engine_spec(),
+            metadata_store=sqlite_store,
+            artifact_store=localfs,  # type: ignore[arg-type]
+            compute=_NoComputeStub(),  # type: ignore[arg-type]
+            llm_providers=None,
+            config=config,
+        )
+        if "technique_description" in captured:
+            break
+
+    assert captured["technique_description"] == json.dumps(typed, indent=2, sort_keys=True)
 
 
 @pytest.mark.asyncio

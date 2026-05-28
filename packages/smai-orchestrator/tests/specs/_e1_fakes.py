@@ -38,13 +38,14 @@ def make_proposal_record(
     proposal_id: str,
     state: str = "proposal_submitted",
     submission_kind: str = "novel_technique",
+    technique_description_artifact_key: str | None = None,
 ) -> ProposalRecord:
     now = datetime.now(UTC)
     return ProposalRecord(
         id=proposal_id,
         submitted_by=None,
         submission_kind=submission_kind,  # type: ignore[arg-type]
-        technique_description_artifact_key=None,
+        technique_description_artifact_key=technique_description_artifact_key,
         reproduce_paper_arxiv_id=None,
         state=state,  # type: ignore[arg-type]
         version=0,
