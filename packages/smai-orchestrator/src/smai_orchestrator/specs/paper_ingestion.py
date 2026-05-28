@@ -784,6 +784,7 @@ def make_dispatch_paper_register(
         # is safe.
         from smai_inline_agents.planner import TechniqueDescription  # noqa: PLC0415
 
+        seen_ids: set[str] = set()
         for raw in cast(list[dict[str, Any]], techniques_raw):
             try:
                 desc = TechniqueDescription.model_validate(raw)
@@ -796,6 +797,26 @@ def make_dispatch_paper_register(
                 paper_arxiv_id=arxiv_id,
                 paper_title=paper_title,
             )
+            # A paper can contribute multiple techniques (ingestion §3); two of
+            # them sharing a name would collide on the store PK and silently
+            # overwrite. Disambiguate with a numeric suffix. Deterministic over
+            # the finalized buffer, so registration retries stay idempotent.
+            if ref.id in seen_ids:
+                base_id = ref.id
+                suffix = 2
+                while f"{base_id}-{suffix}" in seen_ids:
+                    suffix += 1
+                disambiguated = f"{base_id}-{suffix}"
+                _log.warning(
+                    "paper %s emitted multiple techniques named %r; "
+                    "disambiguating ref id %r -> %r to avoid a silent overwrite",
+                    arxiv_id,
+                    desc.name,
+                    base_id,
+                    disambiguated,
+                )
+                ref = ref.model_copy(update={"id": disambiguated})
+            seen_ids.add(ref.id)
             await ctx.metadata_store.upsert_technique(ref)
         return DispatchOutcome()
 
@@ -821,6 +842,12 @@ def _technique_description_to_paper_ref(
     parameter schema) default to the v1 additive baseline. A downstream
     proposal-pipeline planner that references the paper refines those at
     CG-construction time.
+
+    The ref ``id`` is namespaced by the paper (``{arxiv_id}:{name}``) so
+    two papers that extract a like-named technique do not collide on the
+    store PK. Intra-paper name collisions (one paper emitting two
+    techniques with the same name) are disambiguated by the registration
+    loop, not here.
     """
     anchor = PaperFidelityAnchor(
         arxiv_id=paper_arxiv_id,
@@ -828,7 +855,7 @@ def _technique_description_to_paper_ref(
         title=paper_title,
     )
     return TechniqueRef(
-        id=desc.name,
+        id=f"{paper_arxiv_id}:{desc.name}",
         name=desc.name,
         description=desc.summary,
         category="uncategorized",

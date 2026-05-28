@@ -509,6 +509,93 @@ async def test_paper_techniques_finalized_gate_blocks_on_unfinalized_buffer(  # 
     assert rec.state != "registered"
 
 
+@pytest.mark.asyncio
+async def test_paper_registration_disambiguates_same_named_techniques(  # type: ignore[no-untyped-def]
+    sqlite_store,
+    localfs: LocalFsStore,
+) -> None:
+    """Two techniques in one paper sharing a name must NOT collide on the
+    store PK and silently overwrite each other.
+
+    The registration handler namespaces the ref id by paper
+    (``{arxiv_id}:{name}``, cross-paper safety) and suffixes intra-paper
+    name collisions (``...-2``). Pre-stage a finalized buffer carrying the
+    same technique twice and assert two distinct paper-anchored
+    ``TechniqueRef``s register.
+    """
+    arxiv_id = "2401.55555"
+    payload = build_finalized_paper_buffer_payload(arxiv_id=arxiv_id, name="cutout")
+    # Two techniques with the same name -> would clobber under id=name.
+    payload["techniques"] = [payload["techniques"][0], payload["techniques"][0]]
+
+    await localfs.put(
+        PAPER_TEXT_KEY_TEMPLATE.format(arxiv_id=arxiv_id),
+        json.dumps(
+            {
+                "arxiv_id": arxiv_id,
+                "title": "Test",
+                "abstract": "test",
+                "authors": [],
+                "paper_text": "test text",
+            }
+        ).encode("utf-8"),
+    )
+    await localfs.put(
+        SCREEN_RESULT_KEY_TEMPLATE.format(arxiv_id=arxiv_id),
+        json.dumps({"decision": "accept", "summary": "test", "rejection_reason": None}).encode(
+            "utf-8"
+        ),
+    )
+    await localfs.put(
+        TECHNIQUE_BUFFER_KEY_TEMPLATE.format(arxiv_id=arxiv_id),
+        json.dumps(payload).encode("utf-8"),
+    )
+
+    async def _none_corpus(requested_arxiv_id: str):  # type: ignore[no-untyped-def]
+        del requested_arxiv_id
+        return None
+
+    spec = build_paper_ingestion_spec(
+        llm_for_screener=StubLlmProvider([]),  # type: ignore[arg-type]
+        llm_for_ingestion=StubLlmProvider([]),  # type: ignore[arg-type]
+        fetcher=InProcessFakeFetcher(),
+        ingestion_corpus_fetcher=_none_corpus,
+        max_planning_attempts=10,
+    )
+    config = EngineConfig(supervisor_enabled=False)
+
+    from smai_core.plugins import JobHandle  # noqa: PLC0415
+
+    paper = make_paper_record(arxiv_id=arxiv_id, state="planning")
+    paper.planner_job_handle = JobHandle(plugin="inline", handle=f"inline-paper-plan-{arxiv_id}")
+    await sqlite_store.create_paper(paper)
+
+    final_state: str | None = None
+    for _ in range(10):
+        await run_worker_cycle(
+            spec=spec.engine_spec(),
+            metadata_store=sqlite_store,
+            artifact_store=localfs,  # type: ignore[arg-type]
+            compute=_NoComputeStub(),  # type: ignore[arg-type]
+            llm_providers=None,
+            config=config,
+        )
+        rec = await sqlite_store.get_paper(arxiv_id)
+        assert rec is not None
+        if rec.state in {"registered", "rejected", "failed"}:
+            final_state = rec.state
+            break
+
+    assert final_state == "registered", f"got {final_state}"
+
+    techniques = await sqlite_store.list_techniques_for_paper(arxiv_id)
+    ids = {t.id for t in techniques.items}
+    # Both techniques survived (no silent overwrite) with distinct ids,
+    # both paper-namespaced.
+    assert ids == {f"{arxiv_id}:cutout", f"{arxiv_id}:cutout-2"}, ids
+    assert all(t.context_kind == "paper_extract" for t in techniques.items)
+
+
 # === Helpers ================================================================
 
 
