@@ -1416,6 +1416,8 @@ class Runtime:
         paper_fetcher: PaperFetcher | None = None,
         worker_id: str | None = None,
         proposal_cg_id_for: Callable[[str, str], str] | None = None,
+        ingestion_corpus_fetcher: Any = None,
+        ingestion_model: Any = None,
     ) -> AsyncGenerator[Runtime, None]:
         """Boot the in-band Runtime; yield a configured instance.
 
@@ -1591,21 +1593,26 @@ class Runtime:
             )
             # Register the paper-ingestion pipeline-spec (per Task 3.E2
             # / DEC-032 — the supporting utility per the
-            # ``08-novel-technique-pipeline.md`` §5 framing). Reuses the
-            # same per-role :class:`LlmProvider` map; the screener,
-            # planner (paper-ingestion variant), and enricher each
-            # receive their own role-bound provider. ``paper_fetcher``
-            # defaults to :class:`ArxivLatexFetcher` (production); test
-            # callers inject a fake fetcher that returns canned content
-            # to keep the fetch-stage offline.
+            # ``08-novel-technique-pipeline.md`` §5 framing). The
+            # ``screening`` state uses the ``screener`` role provider;
+            # the ``planning`` state runs the SciReplicate-shaped
+            # ingestion subagent (planner_refactor Step 3), whose in-tool
+            # sub-extractions use the ``ingestion`` role provider.
+            # ``paper_fetcher`` defaults to :class:`ArxivLatexFetcher`
+            # (production); test callers inject a fake fetcher to keep
+            # the fetch-stage offline.
             llm_for_screener = plugins.llm_providers.get("screener", llm_for_planner)
-            llm_for_enricher = plugins.llm_providers.get("enricher", llm_for_planner)
+            llm_for_ingestion = plugins.llm_providers.get("ingestion", llm_for_planner)
             paper_spec = register_paper_ingestion_pipeline(
-                workspace_root=workspace_root,
                 llm_for_screener=llm_for_screener,
-                llm_for_planner=llm_for_planner,
-                llm_for_enricher=llm_for_enricher,
+                llm_for_ingestion=llm_for_ingestion,
                 fetcher=paper_fetcher,
+                # Test-only seams (default None -> production fetch +
+                # role-resolved PydanticAI model): integration tests
+                # inject a fake corpus fetcher + a FunctionModel so the
+                # planning-state ingestion subagent runs offline.
+                ingestion_corpus_fetcher=ingestion_corpus_fetcher,
+                ingestion_model=ingestion_model,
             )
             # Drive specs in this order each cycle:
             #   1. proposal spec — advance proposals through designing

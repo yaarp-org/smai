@@ -20,7 +20,8 @@ import pytest
 from _e2_fakes import (  # type: ignore[import-not-found]
     InProcessFakeFetcher,
     build_finalized_paper_buffer_payload,
-    make_paper_planner_responses,
+    make_ingestion_corpus_fetcher,
+    make_ingestion_function_model,
     make_paper_record,
     make_screener_response,
 )
@@ -43,12 +44,11 @@ from smai_store_sqlite import SqliteStore
 
 @pytest.fixture
 def paper_spec(tmp_path: Path):  # type: ignore[no-untyped-def]
+    del tmp_path
     stub_llm = StubLlmProvider([])
     return build_paper_ingestion_spec(
-        workspace_root=tmp_path / "ws",
         llm_for_screener=stub_llm,  # type: ignore[arg-type]
-        llm_for_planner=stub_llm,  # type: ignore[arg-type]
-        llm_for_enricher=stub_llm,  # type: ignore[arg-type]
+        llm_for_ingestion=stub_llm,  # type: ignore[arg-type]
         fetcher=InProcessFakeFetcher(),
     )
 
@@ -229,30 +229,35 @@ def localfs(tmp_path: Path) -> LocalFsStore:
 
 
 @pytest.mark.asyncio
-async def test_paper_round_trip_submitted_to_registered(  # type: ignore[no-untyped-def]
+async def test_paper_round_trip_subagent_registers_paper_extract_no_double_screen(  # type: ignore[no-untyped-def]
     sqlite_store,
     localfs: LocalFsStore,
-    tmp_path: Path,
 ) -> None:
-    """End-to-end: submitted → fetching → screening → planning → registered.
+    """End-to-end: submitted → fetching → screening → planning → registered
+    through the ingestion subagent (Step 3, Sub-PR B).
 
-    Drives the full spec round-trip with a fake arxiv fetcher + canned
-    screener / planner responses. Asserts at least one
-    :class:`TechniqueRef` is registered with a
-    :class:`PaperFidelityAnchor` matching the paper.
+    The ``screening`` state runs the screener ONCE; the ``planning`` state
+    reuses that verdict via ``run_ingestion_subagent(screening=...)`` so
+    the paper is NOT re-screened. The ``ingestion`` LLM (the in-tool
+    sub-extraction + internal screener provider) must therefore never be
+    called: ``ingestion_llm.calls`` stays empty. Asserts a
+    ``context_kind='paper_extract'`` :class:`TechniqueRef` is registered
+    with a :class:`PaperFidelityAnchor` matching the paper.
     """
     arxiv_id = "2401.99999"
     fetcher = InProcessFakeFetcher()
     screener_llm = StubLlmProvider([make_screener_response(decision="accept")])
-    planner_llm = StubLlmProvider(make_paper_planner_responses(arxiv_id=arxiv_id))
-    enricher_llm = StubLlmProvider([])  # contribution technique only — no enrichment fires
+    # If the planning handler re-screened or ran a sub-extraction it would
+    # call this provider, which raises on an empty queue — proving the
+    # no-double-screen contract by construction.
+    ingestion_llm = StubLlmProvider([])
 
     spec = build_paper_ingestion_spec(
-        workspace_root=tmp_path / "ws",
         llm_for_screener=screener_llm,  # type: ignore[arg-type]
-        llm_for_planner=planner_llm,  # type: ignore[arg-type]
-        llm_for_enricher=enricher_llm,  # type: ignore[arg-type]
+        llm_for_ingestion=ingestion_llm,  # type: ignore[arg-type]
         fetcher=fetcher,
+        ingestion_corpus_fetcher=make_ingestion_corpus_fetcher(arxiv_id=arxiv_id),
+        ingestion_model=make_ingestion_function_model(source_arxiv_id=arxiv_id),
     )
     config = EngineConfig(supervisor_enabled=False)
 
@@ -277,24 +282,24 @@ async def test_paper_round_trip_submitted_to_registered(  # type: ignore[no-unty
 
     assert final_state == "registered", f"got {final_state}"
 
-    # Fetcher was actually called — the ``submitted → fetching`` edge
-    # fired.
+    # Fetcher was actually called — the ``submitted → fetching`` edge fired.
     assert fetcher.fetch_log == [arxiv_id]
-
-    # Paper text artifact landed.
+    # Paper text + screen result + technique buffer artifacts landed.
     assert await localfs.exists(PAPER_TEXT_KEY_TEMPLATE.format(arxiv_id=arxiv_id))
-
-    # Screen result artifact landed.
     assert await localfs.exists(SCREEN_RESULT_KEY_TEMPLATE.format(arxiv_id=arxiv_id))
-
-    # Technique buffer artifact landed (planner finalize wrote it).
     assert await localfs.exists(TECHNIQUE_BUFFER_KEY_TEMPLATE.format(arxiv_id=arxiv_id))
 
-    # ≥ 1 ``TechniqueRef`` registered with a ``PaperFidelityAnchor``
-    # matching this paper.
+    # No double-screen: the screener fired exactly once (screening state);
+    # the ingestion provider was never touched (no re-screen, no
+    # sub-extraction in this fixture).
+    assert len(screener_llm.calls) == 1
+    assert ingestion_llm.calls == []
+
+    # ≥ 1 paper_extract ``TechniqueRef`` registered, paper-anchored.
     techniques = await sqlite_store.list_techniques_for_paper(arxiv_id)
     assert len(techniques.items) >= 1
     technique = techniques.items[0]
+    assert technique.context_kind == "paper_extract"
     assert technique.fidelity_anchor is not None
     assert technique.fidelity_anchor.kind == "paper"
     assert technique.fidelity_anchor.arxiv_id == arxiv_id
@@ -304,11 +309,10 @@ async def test_paper_round_trip_submitted_to_registered(  # type: ignore[no-unty
 async def test_paper_screener_rejection_routes_to_rejected(  # type: ignore[no-untyped-def]
     sqlite_store,
     localfs: LocalFsStore,
-    tmp_path: Path,
 ) -> None:
     """Screener rejection routes the paper to the ``rejected`` terminal.
 
-    Asserts no ``TechniqueRef`` is registered (the planner never fires).
+    Asserts no ``TechniqueRef`` is registered (the subagent never fires).
     """
     arxiv_id = "2401.88888"
     fetcher = InProcessFakeFetcher()
@@ -320,14 +324,11 @@ async def test_paper_screener_rejection_routes_to_rejected(  # type: ignore[no-u
             )
         ]
     )
-    planner_llm = StubLlmProvider([])
-    enricher_llm = StubLlmProvider([])
+    ingestion_llm = StubLlmProvider([])
 
     spec = build_paper_ingestion_spec(
-        workspace_root=tmp_path / "ws",
         llm_for_screener=screener_llm,  # type: ignore[arg-type]
-        llm_for_planner=planner_llm,  # type: ignore[arg-type]
-        llm_for_enricher=enricher_llm,  # type: ignore[arg-type]
+        llm_for_ingestion=ingestion_llm,  # type: ignore[arg-type]
         fetcher=fetcher,
     )
     config = EngineConfig(supervisor_enabled=False)
@@ -362,7 +363,6 @@ async def test_paper_screener_rejection_routes_to_rejected(  # type: ignore[no-u
 async def test_paper_content_already_extracted_short_circuits_fetch(  # type: ignore[no-untyped-def]
     sqlite_store,
     localfs: LocalFsStore,
-    tmp_path: Path,
 ) -> None:
     """When ``papers/{arxiv_id}/extracted/paper_text.json`` already
     exists at the time the paper enters ``submitted``, the
@@ -391,15 +391,14 @@ async def test_paper_content_already_extracted_short_circuits_fetch(  # type: ig
 
     fetcher = InProcessFakeFetcher()
     screener_llm = StubLlmProvider([make_screener_response(decision="accept")])
-    planner_llm = StubLlmProvider(make_paper_planner_responses(arxiv_id=arxiv_id))
-    enricher_llm = StubLlmProvider([])
+    ingestion_llm = StubLlmProvider([])
 
     spec = build_paper_ingestion_spec(
-        workspace_root=tmp_path / "ws",
         llm_for_screener=screener_llm,  # type: ignore[arg-type]
-        llm_for_planner=planner_llm,  # type: ignore[arg-type]
-        llm_for_enricher=enricher_llm,  # type: ignore[arg-type]
+        llm_for_ingestion=ingestion_llm,  # type: ignore[arg-type]
         fetcher=fetcher,
+        ingestion_corpus_fetcher=make_ingestion_corpus_fetcher(arxiv_id=arxiv_id),
+        ingestion_model=make_ingestion_function_model(source_arxiv_id=arxiv_id),
     )
     config = EngineConfig(supervisor_enabled=False)
 
@@ -431,14 +430,15 @@ async def test_paper_content_already_extracted_short_circuits_fetch(  # type: ig
 async def test_paper_techniques_finalized_gate_blocks_on_unfinalized_buffer(  # type: ignore[no-untyped-def]
     sqlite_store,
     localfs: LocalFsStore,
-    tmp_path: Path,
 ) -> None:
     """The `planning → registered` gate requires the buffer to be finalized.
 
-    Pre-stage a partial buffer (finalized=False) at the technique-
-    buffer artifact key; assert the paper stays in `planning` (the
-    gate blocks). Verifies the gate logic in isolation from the
-    planner-loop firing.
+    Pre-stage a buffer with ``finalized=False`` at the technique-buffer
+    artifact key; assert the paper does not advance to ``registered``.
+    The subagent's corpus fetch is wired to return ``None`` so that if
+    the planning handler re-fires it fails fast (``fetch_failed``)
+    without overwriting the pre-staged buffer — keeping the gate the
+    thing under test.
     """
     arxiv_id = "2401.66666"
     payload = build_finalized_paper_buffer_payload(arxiv_id=arxiv_id)
@@ -470,17 +470,19 @@ async def test_paper_techniques_finalized_gate_blocks_on_unfinalized_buffer(  # 
         json.dumps(payload).encode("utf-8"),
     )
 
+    async def _none_corpus(requested_arxiv_id: str):  # type: ignore[no-untyped-def]
+        del requested_arxiv_id
+        return None
+
     fetcher = InProcessFakeFetcher()
     screener_llm = StubLlmProvider([])  # already pre-staged
-    planner_llm = StubLlmProvider(make_paper_planner_responses(arxiv_id=arxiv_id))
-    enricher_llm = StubLlmProvider([])
+    ingestion_llm = StubLlmProvider([])
 
     spec = build_paper_ingestion_spec(
-        workspace_root=tmp_path / "ws",
         llm_for_screener=screener_llm,  # type: ignore[arg-type]
-        llm_for_planner=planner_llm,  # type: ignore[arg-type]
-        llm_for_enricher=enricher_llm,  # type: ignore[arg-type]
+        llm_for_ingestion=ingestion_llm,  # type: ignore[arg-type]
         fetcher=fetcher,
+        ingestion_corpus_fetcher=_none_corpus,
         max_planning_attempts=10,  # generous so the retry-budget terminal doesn't fire
     )
     config = EngineConfig(supervisor_enabled=False)
@@ -504,11 +506,6 @@ async def test_paper_techniques_finalized_gate_blocks_on_unfinalized_buffer(  # 
     )
     rec = await sqlite_store.get_paper(arxiv_id)
     assert rec is not None
-    # Will re-run the planner because finalized=False; the planner
-    # writes a fresh finalized buffer this time. Reseed the buffer to
-    # not-finalized after each cycle to ensure the gate stays blocked.
-    # For this test purpose: assert the paper is NOT in registered after
-    # a single cycle while the buffer is unfinalized.
     assert rec.state != "registered"
 
 

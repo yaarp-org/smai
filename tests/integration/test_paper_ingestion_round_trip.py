@@ -25,7 +25,8 @@ from _e2_integration_fakes import (  # type: ignore[import-not-found]
     InProcessFakeFetcher,
     StubLlmProvider,
     build_smoke_runtime_config_for_papers,
-    make_paper_planner_responses,
+    make_ingestion_corpus_fetcher,
+    make_ingestion_function_model,
     make_screener_response,
 )
 from smai_artifacts_localfs import LocalFsStore
@@ -41,15 +42,18 @@ from smai_orchestrator.specs.paper_ingestion import (
 )
 
 
-def _build_per_role_stubs(arxiv_id: str) -> dict[str, StubLlmProvider]:
+def _build_per_role_stubs() -> dict[str, StubLlmProvider]:
     """Build one :class:`StubLlmProvider` per task role.
 
-    Only ``screener``, ``planner``, ``enricher`` are actually invoked
-    in the paper-ingestion flow (per `08` §7 — paper ingestion uses
-    LlmProvider for those three roles; the agent loop never runs in
-    this test because there's no CG-execution path). Every other role
-    gets an empty-queue stub that ``AssertionError``s if anything
-    calls it — a tripwire.
+    With the planner-refactor Step-3 cutover, only the ``screener`` role
+    LLM is actually invoked in this fixture: the ``screening`` state runs
+    the screener once, and the ``planning`` state's ingestion subagent
+    runs on the injected ``FunctionModel`` (its in-tool ``ingestion``
+    sub-extractions never fire because the model emits the output tool
+    immediately). Every other role gets an empty-queue stub that
+    ``AssertionError``s if anything calls it — a tripwire that also
+    proves the no-double-screen contract (the ``ingestion`` role stub
+    would be called on a re-screen / sub-extraction).
     """
     role_to_stub: dict[str, StubLlmProvider] = {}
     for role in DEFAULT_TASK_ROLES:
@@ -58,14 +62,6 @@ def _build_per_role_stubs(arxiv_id: str) -> dict[str, StubLlmProvider]:
                 [make_screener_response(decision="accept")],
                 name=f"stub-{role}",
             )
-        elif role == "planner":
-            role_to_stub[role] = StubLlmProvider(
-                make_paper_planner_responses(arxiv_id=arxiv_id),
-                name=f"stub-{role}",
-            )
-        elif role == "enricher":
-            # Contribution-technique-only test — enricher is not invoked.
-            role_to_stub[role] = StubLlmProvider([], name=f"stub-{role}")
         else:
             role_to_stub[role] = StubLlmProvider([], name=f"stub-{role}")
     return role_to_stub
@@ -82,7 +78,7 @@ async def test_paper_ingestion_round_trip_submitted_to_registered(tmp_path: Path
     """
     arxiv_id = "2401.12345"
     artifact_store = LocalFsStore(tmp_path / "artifacts")
-    role_stubs = _build_per_role_stubs(arxiv_id)
+    role_stubs = _build_per_role_stubs()
     fake_fetcher = InProcessFakeFetcher()
     overrides = PluginOverrides(
         llm_providers=cast(dict[str, object], dict(role_stubs)),  # type: ignore[arg-type]
@@ -98,6 +94,10 @@ async def test_paper_ingestion_round_trip_submitted_to_registered(tmp_path: Path
         plugin_overrides=overrides,
         run_worker=False,
         paper_fetcher=fake_fetcher,
+        # Step-3 ingestion subagent runs offline: fake LaTeX corpus +
+        # a FunctionModel emitting the paper_extract output tool.
+        ingestion_corpus_fetcher=make_ingestion_corpus_fetcher(arxiv_id=arxiv_id),
+        ingestion_model=make_ingestion_function_model(source_arxiv_id=arxiv_id),
     ) as runtime:
         submission = await runtime.papers.submit(arxiv_id=arxiv_id, title="Test Paper")
         assert submission.arxiv_id == arxiv_id
@@ -122,10 +122,12 @@ async def test_paper_ingestion_round_trip_submitted_to_registered(tmp_path: Path
         assert await artifact_store.exists(SCREEN_RESULT_KEY_TEMPLATE.format(arxiv_id=arxiv_id))
         assert await artifact_store.exists(TECHNIQUE_BUFFER_KEY_TEMPLATE.format(arxiv_id=arxiv_id))
 
-        # ≥ 1 ``TechniqueRef`` committed with a ``PaperFidelityAnchor``.
+        # ≥ 1 paper_extract ``TechniqueRef`` committed with a
+        # ``PaperFidelityAnchor``.
         techniques = await runtime.plugins.metadata_store.list_techniques_for_paper(arxiv_id)
         assert len(techniques.items) >= 1
         technique = techniques.items[0]
+        assert technique.context_kind == "paper_extract"
         assert technique.fidelity_anchor is not None
         assert technique.fidelity_anchor.kind == "paper"
         assert technique.fidelity_anchor.arxiv_id == arxiv_id
@@ -138,10 +140,10 @@ async def test_paper_ingestion_round_trip_submitted_to_registered(tmp_path: Path
         # CG-list-by-proposal route would also be empty (no proposals
         # were created either).
 
-    # Sanity check: the screener stub was invoked exactly once.
+    # Sanity check: the screener stub was invoked exactly once (the
+    # screening state). No double-screen + no sub-extraction: the
+    # ``ingestion`` role provider was never called (the subagent ran on
+    # the injected FunctionModel and reused the screening verdict).
     assert len(role_stubs["screener"].calls) == 1
-    # The planner stub was invoked at least 3 times (create, finalize,
-    # finish). The enricher stub was NOT invoked (no comparison
-    # techniques to enrich for this fixture).
-    assert len(role_stubs["planner"].calls) >= 3
-    assert len(role_stubs["enricher"].calls) == 0
+    assert len(role_stubs["ingestion"].calls) == 0
+    assert len(role_stubs["planner"].calls) == 0

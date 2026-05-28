@@ -11,20 +11,22 @@ Builders shipped here:
   canned :class:`FetchedPaper` content. Used by spec tests + the
   integration round-trip test to keep the fetch stage offline.
 * :func:`make_paper_record` — :class:`PaperRecord` builder.
-* :func:`build_finalized_paper_buffer_payload` — JSON-shaped buffer
-  matching :class:`smai_agents.agents.planner.PlannerBuffer` on
-  ``finalize_paper_techniques`` success. Used to pre-stage a
-  ``planning → registered`` advance without driving the planner loop.
-* :func:`make_paper_planner_responses` — canned LLM responses driving
-  the paper-ingestion-variant planner through a happy-path finalize:
-  ``draft_create_technique`` then ``finalize_paper_techniques``.
+* :func:`build_finalized_paper_buffer_payload` — JSON-shaped finalized
+  technique buffer (a list of :class:`TechniqueDescription` dicts) the
+  ingestion subagent writes. Used to pre-stage a ``planning →
+  registered`` advance / registration without driving the subagent.
+* :func:`make_paper_extraction_args` — a paper_extract
+  :class:`PaperExtraction` dict for the ingestion output tool.
+* :func:`make_ingestion_function_model` — a PydanticAI ``FunctionModel``
+  emitting that output (offline Paper Agent run).
+* :func:`make_ingestion_corpus_fetcher` — a canned :class:`PaperCorpus`
+  fetcher so the subagent's LaTeX-source fetch stays offline.
 * :func:`make_screener_response` — canned LLM response emitting a
   :class:`ScreenResult` tool_use.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
@@ -125,145 +127,189 @@ def make_screener_response(
     return _model_response(tool_uses=[("call_1", tool_name, payload)])
 
 
-def make_enricher_response(
+def make_paper_extraction_args(
     *,
-    implementability: str = "high",
-    method_extraction: str = "## Algorithm\n1. Apply standard component.\n",
-    refined_description: str | None = None,
-    blocked_reason: str | None = None,
-    tool_name: str = "submit_enrichment",
-) -> ModelResponse:
-    payload: dict[str, Any] = {
-        "implementability": implementability,
-        "method_extraction": method_extraction,
-    }
-    if refined_description is not None:
-        payload["refined_description"] = refined_description
-    if blocked_reason is not None:
-        payload["blocked_reason"] = blocked_reason
-    return _model_response(tool_uses=[("call_1", tool_name, payload)])
+    name: str = "cutout",
+    source_arxiv_id: str,
+) -> dict[str, Any]:
+    """A JSON-serializable :class:`PaperExtraction` (one paper_extract technique).
 
-
-def make_paper_planner_responses(
-    *,
-    arxiv_id: str,
-    contribution_techniques: Sequence[dict[str, Any]] | None = None,
-) -> list[ModelResponse]:
-    """Canned LLM responses driving the paper-ingestion-variant planner
-    through a happy-path finalize.
-
-    For each contribution technique: one ``draft_create_technique`` call
-    seeded with a :class:`PaperFidelityAnchor` matching ``arxiv_id``.
-    Then one ``finalize_paper_techniques`` call (no symbol arg —
-    finalizes the whole buffer per `08` §5.4) and one ``finish``.
+    Drives the ingestion Paper Agent's output tool through a
+    ``FunctionModel`` (see :func:`make_ingestion_function_model`). The
+    single technique is a minimal but valid ``context_kind='paper_extract'``
+    :class:`TechniqueDescription` so the planning handler can project it
+    to a :class:`TechniqueRef` on registration.
     """
-    techniques = (
-        list(contribution_techniques)
-        if contribution_techniques is not None
-        else [
-            {
-                "symbolic_name": f"{arxiv_id}-tech-contrib",
-                "name": "Contribution Technique",
-                "description": "Primary contribution technique extracted from the paper.",
-                "category": "augmentation",
-                "compatible_factor_types": ["additive"],
-                "standard": False,
-                "fidelity_anchor": {
-                    "kind": "paper",
-                    "arxiv_id": arxiv_id,
-                    "doi": f"arxiv:{arxiv_id}",
-                },
-            }
-        ]
+    from smai_inline_agents.ingestion import PaperExtraction  # noqa: PLC0415
+    from smai_inline_agents.planner.schemas import (  # noqa: PLC0415
+        AlgorithmSpec,
+        ConfidenceFlag,
+        Hyperparameter,
+        SourceExcerpt,
+        SourceLocationSection,
+        TechniqueDescription,
     )
 
-    responses: list[ModelResponse] = []
-    for idx, tech in enumerate(techniques):
-        responses.append(
-            _model_response(
-                tool_uses=[
-                    (
-                        f"tu-create-{idx}",
-                        "draft_create_technique",
-                        dict(tech),
-                    ),
-                ],
-            )
-        )
-
-    # ``finalize_paper_techniques`` takes no input fields per
-    # FinalizePaperTechniquesInput. Send an empty dict.
-    responses.append(
-        _model_response(
-            tool_uses=[("tu-finalize", "finalize_paper_techniques", {})],
-        )
-    )
-    responses.append(
-        _model_response(
-            tool_uses=[
-                (
-                    "tu-finish",
-                    "finish",
-                    {"success": True, "summary": "paper ingestion complete"},
+    technique = TechniqueDescription(
+        name=name,
+        summary=(
+            "Cutout masks a contiguous square region of each input image during "
+            "training as a simple, dataset-agnostic regularizer."
+        ),
+        motivation=(
+            "Convolutional networks overfit on small datasets; occluding a region "
+            "forces robustness to missing information and improves generalization."
+        ),
+        problem_setting=(
+            "Supervised image classification with convolutional networks on small "
+            "labeled datasets such as CIFAR-10 and SVHN."
+        ),
+        algorithm=AlgorithmSpec(
+            summary=(
+                "For each training image, sample a random square region and zero "
+                "its pixels before the forward pass; the mask location is uniform."
+            ),
+            source_excerpts=[
+                SourceExcerpt(
+                    text="we randomly mask out square regions of input during training",
+                    location=SourceLocationSection(section_id="3"),
                 )
             ],
-        )
+        ),
+        hyperparameters=[
+            Hyperparameter(
+                name="patch_size",
+                summary="side length in pixels of the square cutout region",
+                value="16",
+                source_excerpt=SourceExcerpt(
+                    text="we use a patch length of 16 pixels",
+                    location=SourceLocationSection(section_id="4"),
+                ),
+            )
+        ],
+        loss_function=None,
+        training_recipe=None,
+        limitations="Cutout size must be tuned per dataset.",
+        context_kind="paper_extract",
+        confidence_flags=[
+            ConfidenceFlag(
+                field_path="/loss_function",
+                severity="unknown",
+                note="paper introduces no custom loss; standard cross-entropy is used.",
+            ),
+            ConfidenceFlag(
+                field_path="/training_recipe",
+                severity="unknown",
+                note="paper specifies no special training recipe beyond standard SGD.",
+            ),
+            ConfidenceFlag(
+                field_path="/evaluation_protocol",
+                severity="unknown",
+                note="paper gives no structured evaluation protocol beyond top-1 accuracy.",
+            ),
+        ],
+        source_arxiv_id=source_arxiv_id,
     )
-    return responses
+    return PaperExtraction(
+        techniques=[technique],
+        paper_summary="The paper introduces Cutout, a regularization technique for CNNs.",
+        extraction_caveats=[],
+        extraction_audit=[],
+    ).model_dump(mode="json")
+
+
+def make_ingestion_function_model(*, source_arxiv_id: str, name: str = "cutout") -> Any:
+    """A PydanticAI ``FunctionModel`` that emits the ingestion output tool.
+
+    Passed as ``ingestion_model`` to :func:`build_paper_ingestion_spec`
+    so the planning-state subagent runs offline (no real LLM); the model
+    immediately calls ``emit_ingestion_result`` with a paper_extract
+    :class:`PaperExtraction`.
+    """
+    from pydantic_ai.messages import ModelResponse as PydModelResponse  # noqa: PLC0415
+    from pydantic_ai.messages import ToolCallPart  # noqa: PLC0415
+    from pydantic_ai.models.function import AgentInfo, FunctionModel  # noqa: PLC0415
+
+    def model_fn(messages: list[Any], info: AgentInfo) -> PydModelResponse:
+        return PydModelResponse(
+            parts=[
+                ToolCallPart(
+                    tool_name=info.output_tools[0].name,
+                    args=make_paper_extraction_args(name=name, source_arxiv_id=source_arxiv_id),
+                )
+            ]
+        )
+
+    return FunctionModel(model_fn)
+
+
+def make_ingestion_corpus_fetcher(
+    *,
+    arxiv_id: str,
+    title: str = "Fake Ingested Paper",
+    abstract: str = "Fake abstract for the ingestion subagent.",
+):  # type: ignore[no-untyped-def]
+    """An async corpus fetcher returning a canned :class:`PaperCorpus`.
+
+    Passed as ``ingestion_corpus_fetcher`` to
+    :func:`build_paper_ingestion_spec` so the subagent's LaTeX-source
+    fetch stays offline.
+    """
+    from smai_inline_agents.ingestion import PaperCorpus  # noqa: PLC0415
+    from smai_inline_agents.ingestion.fetch import LatexCiteResolver  # noqa: PLC0415
+    from smai_inline_agents.ingestion.schemas import SectionRef  # noqa: PLC0415
+
+    corpus = PaperCorpus(
+        arxiv_id=arxiv_id,
+        title=title,
+        abstract=abstract,
+        full_latex="\\section{Method} We randomly mask out square regions of input.",
+        sections=[SectionRef(section_id="1", title="Method", depth=1)],
+        sections_by_id={"1": "We randomly mask out square regions of input."},
+        cite_resolver=LatexCiteResolver({}),
+    )
+
+    async def _fetch(requested_arxiv_id: str):  # type: ignore[no-untyped-def]
+        del requested_arxiv_id
+        return corpus
+
+    return _fetch
 
 
 def build_finalized_paper_buffer_payload(
     *,
     arxiv_id: str,
-    techniques: Sequence[dict[str, Any]] | None = None,
+    name: str = "cutout",
 ) -> dict[str, Any]:
-    """Build a JSON-shaped finalized :class:`PlannerBuffer` payload for
-    the paper-ingestion variant.
+    """Build the JSON-shaped finalized technique buffer the ingestion
+    subagent writes (Step 3, Sub-PR B).
 
-    Used by spec tests that pre-stage the buffer artifact at
+    The ``techniques`` key is now a list of
+    :class:`TechniqueDescription` dicts (the ingestion subagent's output)
+    rather than the old planner-buffer dict. Used by spec tests that
+    pre-stage the buffer artifact at
     ``papers/{arxiv_id}/draft_techniques.json`` to drive the
-    ``planning → registered`` gate without running the planner loop.
+    ``planning → registered`` gate / registration without running the
+    subagent.
     """
-    techniques_dict: dict[str, dict[str, Any]] = {}
-    techs = (
-        list(techniques)
-        if techniques is not None
-        else [
-            {
-                "symbolic_name": f"{arxiv_id}-tech-contrib",
-                "name": "Contribution Technique",
-                "description": "Primary contribution technique extracted from the paper.",
-                "category": "augmentation",
-                "compatible_factor_types": ["additive"],
-                "standard": False,
-                "fidelity_anchor": {
-                    "kind": "paper",
-                    "arxiv_id": arxiv_id,
-                    "doi": f"arxiv:{arxiv_id}",
-                },
-                "affects_extension_points": [],
-                "implies_controlled": [],
-            }
-        ]
-    )
-    for tech in techs:
-        techniques_dict[tech["symbolic_name"]] = dict(tech)
+    extraction = make_paper_extraction_args(name=name, source_arxiv_id=arxiv_id)
     return {
-        "proposal_id": None,
-        "paper_arxiv_id": arxiv_id,
-        "techniques": techniques_dict,
-        "comparison_groups": [],
-        "classification": None,
-        "follow_ups": [],
         "finalized": True,
+        "arxiv_id": arxiv_id,
+        "paper_title": "Fake Ingested Paper",
+        "paper_level_summary": extraction["paper_summary"],
+        "screening": {"decision": "accept", "rejection_reason": None, "summary": "in scope"},
+        "extraction_caveats": [],
+        "techniques": extraction["techniques"],
     }
 
 
 __all__ = [
     "InProcessFakeFetcher",
     "build_finalized_paper_buffer_payload",
-    "make_enricher_response",
-    "make_paper_planner_responses",
+    "make_ingestion_corpus_fetcher",
+    "make_ingestion_function_model",
+    "make_paper_extraction_args",
     "make_paper_record",
     "make_screener_response",
 ]

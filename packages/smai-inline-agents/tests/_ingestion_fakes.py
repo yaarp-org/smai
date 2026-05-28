@@ -233,6 +233,27 @@ def snippets_response(snippets: list[str], *, found: bool = True) -> ModelRespon
     )
 
 
+def screener_response(
+    *,
+    decision: str = "accept",
+    rejection_reason: str | None = None,
+    summary: str = "Empirical comparison paper; in scope for the technique pool.",
+) -> ModelResponse:
+    """A canned ``submit_screening`` tool_use for the screener single-call.
+
+    Drives ``run_paper_screening`` through the wrapper's internal-screening
+    path; the screener prompt's structured-output tool is named
+    ``submit_screening``.
+    """
+    payload: dict[str, Any] = {"decision": decision, "summary": summary}
+    if rejection_reason is not None:
+        payload["rejection_reason"] = rejection_reason
+    return model_response(
+        tool_uses=[("screen-1", "submit_screening", payload)],
+        stop_reason="tool_use",
+    )
+
+
 class AlwaysSnippetsLlm:
     """An :class:`LlmProvider` that returns the same snippets on every call.
 
@@ -305,5 +326,6 @@ __all__ = [
     "make_paper_extract_technique",
     "make_paper_extraction",
     "make_paper_extraction_args",
+    "screener_response",
     "snippets_response",
 ]

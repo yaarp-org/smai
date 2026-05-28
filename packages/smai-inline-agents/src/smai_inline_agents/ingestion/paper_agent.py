@@ -47,6 +47,7 @@ from smai_inline_agents.prompts import (
 from smai_inline_agents.structured_call import structured_call
 
 if TYPE_CHECKING:
+    from pydantic_ai.usage import RunUsage
     from smai_core.plugins import LlmProvider
 
 # ---------------------------------------------------------------------------
@@ -170,27 +171,47 @@ async def _do_search_literature(
     cite_key: str,
     query: str,
     request_deep_extraction: bool = False,
+    *,
+    usage: RunUsage | None = None,
 ) -> str:
-    """Lightweight cited-paper extraction (design note §4 mode 1).
+    """Cited-paper extraction (design note §4 modes 1 + 2).
 
-    Resolves ``cite_key`` to an arXiv id, fetches the cited paper's
-    corpus via the injected fetcher, and runs a focused sub-extraction
-    for ``query``. Honors the precedence rule (prefer the target paper)
-    by tagging the result ``Source: Relevant Literature`` so downstream
-    consumers can see the provenance.
+    Resolves ``cite_key`` to an arXiv id, then either:
+
+    * **Deep (mode 2):** when ``request_deep_extraction`` is set, the
+      recursion budget is not exhausted (``deps.enrichment_depth <
+      deps.enrichment_depth_limit``), and a recursion factory is wired
+      (``deps.subagent_factory``), recursively invoke
+      ``run_ingestion_subagent`` on the cited paper with a depth-bumped
+      factory and ``usage`` rolled up under the outer cap. The recursive
+      result's techniques splice into ``deps.enriched_techniques`` and a
+      summary pointer returns so the agent can reference them by name.
+    * **Lightweight (mode 1, the default + the at-depth-limit fallback):**
+      fetch the cited paper's corpus via the injected fetcher and run a
+      focused sub-extraction for ``query``, tagged ``Source: Relevant
+      Literature`` (the precedence rule prefers the target paper).
     """
     ref = deps.cite_resolver.resolve(cite_key)
     if ref is None:
         return f"No paper found for cite key {cite_key!r}."
-    if request_deep_extraction:
-        # TODO(step-3-B): deep recursive mode. When request_deep_extraction
-        # is True, recursively invoke run_ingestion_subagent on the cited
-        # paper (depth-limited at deps.enrichment_depth_limit), splice its
-        # techniques into deps.enriched_techniques, and return a pointer.
-        # Sub-PR A falls back to lightweight extraction below.
-        pass
     if ref.arxiv_id is None:
         return _NO_INFO_SENTINEL
+    if (
+        request_deep_extraction
+        and deps.subagent_factory is not None
+        and deps.enrichment_depth < deps.enrichment_depth_limit
+    ):
+        # Lazy import breaks the run.py <-> paper_agent.py import cycle
+        # (run.py imports build_paper_agent from this module).
+        from smai_inline_agents.ingestion.run import (  # noqa: PLC0415
+            run_ingestion_subagent,
+            summarize_recursive_result,
+        )
+
+        sub_factory = deps.subagent_factory.for_recursion()
+        sub_result = await run_ingestion_subagent(ref.arxiv_id, sub_factory, usage=usage)
+        deps.enriched_techniques.extend(sub_result.techniques)
+        return summarize_recursive_result(ref.arxiv_id, sub_result)
     cited = await deps.corpus_fetcher(ref.arxiv_id)
     if cited is None:
         return _NO_INFO_SENTINEL
@@ -351,10 +372,14 @@ def build_paper_agent(
         Literature". When the cited paper conflicts with the target
         paper, prefer the target paper. Set request_deep_extraction=True
         only for a full recursive extraction of a comparison-relevant
-        cited technique (reserved; currently runs the lightweight path).
+        cited technique not yet in the pool: that runs the whole
+        ingestion subagent on the cited paper (depth-limited) and adds
+        its techniques to this paper's pool.
         """
         ctx.deps.tool_call_count += 1
-        return await _do_search_literature(ctx.deps, cite_key, query, request_deep_extraction)
+        return await _do_search_literature(
+            ctx.deps, cite_key, query, request_deep_extraction, usage=ctx.usage
+        )
 
     # The decorator registers each tool as a side effect; bind to ``_`` so
     # the unused-name lint stays quiet (mirrors smai-agent-runtime).

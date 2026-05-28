@@ -33,8 +33,8 @@ assembly seam.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal, Protocol, runtime_checkable
+from dataclasses import dataclass, field, replace
+from typing import TYPE_CHECKING, Any, Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field
 from smai_core.plugins import LlmProvider
@@ -208,6 +208,72 @@ class PaperAgentDeps:
     enriched_techniques: list[TechniqueDescription] = field(
         default_factory=list[TechniqueDescription]
     )
+    subagent_factory: PaperAgentDepsFactory | None = None
+    """The factory these deps were built from, set by
+    :func:`smai_inline_agents.ingestion.run.run_ingestion_subagent` so the
+    ``search_literature`` deep-extraction mode (design note §4) can
+    recurse on a cited paper with a depth-bumped factory. ``None`` when
+    the deps were hand-built (Sub-PR A tests / lightweight-only callers):
+    the deep branch then falls back to the lightweight extraction."""
+
+
+# ---------------------------------------------------------------------------
+# Deps factory (host-side; rebuilds deps from a fetched corpus, design note §4).
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class PaperAgentDepsFactory:
+    """Builds :class:`PaperAgentDeps` from a fetched :class:`PaperCorpus`.
+
+    Carries the non-paper-specific run dependencies (the sub-extraction
+    LLM, the cited-paper fetcher, the optional screener LLM, the pool
+    snapshot, the recursion-depth counters, and an optional PydanticAI
+    ``model`` override) so the same factory can build deps for the
+    top-level paper and -- via :meth:`for_recursion` -- a depth-bumped
+    factory for a cited paper reached through ``search_literature``'s
+    deep mode (design note §4).
+
+    :attr:`model` is the PydanticAI model passed to ``agent.run(model=)``
+    by the wrapper; ``None`` in production (the Paper Agent uses its
+    role-resolved model) and a ``FunctionModel`` in tests. Typed ``Any``
+    so this schema module stays free of a ``pydantic_ai`` import.
+
+    :attr:`screener_llm` is consulted only on the internal-screening
+    path (when ``run_ingestion_subagent`` is called without a
+    pre-computed ``screening``); the pipeline path passes the
+    screening-state verdict and never re-screens, so it may be ``None``.
+    """
+
+    sub_extraction_llm: LlmProvider
+    corpus_fetcher: CorpusFetcher
+    screener_llm: LlmProvider | None = None
+    model: Any = None
+    pool_snapshot: PoolSnapshot = field(default_factory=lambda: PoolSnapshot.empty())
+    enrichment_depth: int = 0
+    enrichment_depth_limit: int = 1
+
+    def build(self, *, corpus: PaperCorpus) -> PaperAgentDeps:
+        """Construct :class:`PaperAgentDeps` from a fetched corpus."""
+        return PaperAgentDeps(
+            arxiv_id=corpus.arxiv_id,
+            paper_title=corpus.title,
+            paper_abstract=corpus.abstract,
+            section_list=corpus.sections,
+            full_latex=corpus.full_latex,
+            sections_by_id=corpus.sections_by_id,
+            cite_resolver=corpus.cite_resolver,
+            pool_snapshot=self.pool_snapshot,
+            sub_extraction_llm=self.sub_extraction_llm,
+            corpus_fetcher=self.corpus_fetcher,
+            enrichment_depth=self.enrichment_depth,
+            enrichment_depth_limit=self.enrichment_depth_limit,
+            subagent_factory=self,
+        )
+
+    def for_recursion(self) -> PaperAgentDepsFactory:
+        """A copy with ``enrichment_depth`` bumped by one (design note §4)."""
+        return replace(self, enrichment_depth=self.enrichment_depth + 1)
 
 
 # ---------------------------------------------------------------------------
@@ -321,6 +387,7 @@ __all__ = [
     "ExtractionAuditEntry",
     "IngestionResult",
     "PaperAgentDeps",
+    "PaperAgentDepsFactory",
     "PaperExtraction",
     "PoolSnapshot",
     "ScreeningOutcome",

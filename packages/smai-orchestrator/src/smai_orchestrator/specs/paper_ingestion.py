@@ -75,34 +75,26 @@ Spec ambiguities resolved
   table's ``job_succeeded`` / ``job_failed`` triggers are v1-vestigial
   framing.
 
-* **Composite ``planning`` dispatch handler.** Per `03` §5.3 and `08`
-  §5.6 the ``planning`` state's on-entry handler runs three sub-steps:
-  (1) the paper-ingestion-variant planner agent loop (multi-turn,
-  inline); (2) per-skeleton-technique enrichment via the single-call
-  ``enricher`` agent for each non-standard cited source paper; (3)
-  eager per-technique ``method_extraction.json`` writes per DEC-032
-  OQ5. Implemented as
-  :func:`make_dispatch_paper_planner_and_enrich` — composes
-  :func:`smai_agents.agents.planner.run_planner_session(variant=
-  "paper_ingestion")` with the per-skeleton enricher loop. The handler
-  is inline; the enricher dedup against existing ``partial`` papers
-  per `08` §5.7 happens inside the handler via
-  :meth:`MetadataStore.get_paper` + :meth:`MetadataStore.create_paper`
-  for new partials.
-
-* **Planner-variant integration: parallel factory rather than kwarg.**
-  :mod:`smai_agents.agents.planner.make_dispatch_planner` is hardcoded
-  to ``variant="novel_technique"`` and reads
-  :class:`ProposalRecord` from :class:`MetadataStore`. The paper-
-  ingestion variant's lookups are substantively different
-  (:class:`PaperRecord` not :class:`ProposalRecord`, paper artifact
-  paths not proposal paths, ``arxiv_id`` not ``proposal_id`` for the
-  entity id, paper-text load not technique-description load). Adding a
-  ``variant=`` kwarg would force two distinct lookup paths to coexist
-  inside one ``_dispatch`` body, hurting clarity. This module ships a
-  parallel :func:`make_dispatch_paper_planner_and_enrich` factory in
-  the paper-ingestion spec module — the same shape, paper-side
-  semantics. Surfaced in the report; either approach is defensible.
+* **``planning`` dispatch handler: the ingestion subagent (planner-
+  refactor Step 3, Sub-PR B).** The ``planning`` state's on-entry
+  handler (:func:`make_dispatch_paper_ingestion_subagent`) replaces the
+  old planner-paper-variant + per-skeleton enricher loop with a single
+  call to
+  :func:`smai_inline_agents.ingestion.run_ingestion_subagent`. It reuses
+  the ``screening`` state's verdict (read from ``screen_result.json``
+  and passed as ``screening=``) so the paper is screened ONCE (no
+  double-screen — ``ingestion_subagent.md`` §4 vs §7), runs the
+  SciReplicate-shaped Paper Agent, and writes the extracted
+  :class:`smai_inline_agents.planner.TechniqueDescription` list to the
+  finalized technique-buffer artifact. The ``registered`` state's
+  registration handler projects each into a paper-anchored
+  :class:`TechniqueRef`
+  (:func:`_technique_description_to_paper_ref`). The handler is inline;
+  it uses no :class:`Compute`. The old enricher-loop's ``partial``-paper
+  dedup is superseded by ``search_literature``'s depth-limited deep
+  recursion inside the subagent (the v1 ``enricher`` agent survives as a
+  removable fallback per ``ingestion_subagent.md`` §4 until
+  planner-refactor step 8).
 
 * **arXiv fetching.** Production fetcher uses the `arxiv` PyPI package
   (see :class:`PaperFetcher` for the seam). Tests inject an inline
@@ -136,7 +128,6 @@ import os
 import tempfile
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, cast
 
 from smai_core.entities.technique import (
@@ -161,7 +152,6 @@ from smai_orchestrator.engine.types import (
     SchedulingQueryRef,
     StateDef,
 )
-from smai_orchestrator.entities.tracking import PaperRecord
 from smai_orchestrator.runtime.registry import register_pipeline_spec
 from smai_orchestrator.runtime.spec import PipelineSpec
 
@@ -612,290 +602,135 @@ def make_dispatch_paper_screener(
     return _dispatch
 
 
-def make_dispatch_paper_planner_and_enrich(
+def make_dispatch_paper_ingestion_subagent(
     *,
-    workspace_root: Path,
-    llm_for_planner: LlmProvider,
-    llm_for_enricher: LlmProvider,
-    paper_text_key_for: Callable[[str], str] | None = None,
+    llm_for_ingestion: LlmProvider,
+    screen_result_key_for: Callable[[str], str] | None = None,
     technique_buffer_key_for: Callable[[str], str] | None = None,
-    method_extraction_key_for: Callable[[str, str], str] | None = None,
-    metric_registry_summary: str = "(default v1 metric registry — accuracy, loss)",
-    inline_runner: Any = None,
+    corpus_fetcher: Any = None,
+    ingestion_model: Any = None,
 ) -> Callable[[DispatchContext], Awaitable[DispatchOutcome]]:
-    """``planning`` on-entry dispatch — paper.dispatch_planner_and_enrich.
+    """``planning`` on-entry dispatch — paper.dispatch_ingestion_subagent.
 
-    Per `03` §5.3 / `08` §5.6: composite inline handler that runs
-    three sub-steps:
+    Per ``planner_refactor/design_notes/ingestion_subagent.md`` §7: the
+    ``planning`` state cuts over from today's planner-paper-variant +
+    enricher loop to the SciReplicate-shaped ingestion subagent. The
+    handler:
 
-    1. The paper-ingestion-variant planner agent loop (multi-turn,
-       inline) — per `08` §5.3 / `04-agents.md` §2.1. Drives
-       :func:`smai_agents.agents.planner.run_planner_session` with
-       ``variant="paper_ingestion"`` and a paper-shaped
-       :class:`PlannerInput`.
-    2. Per-skeleton-technique enrichment for non-standard
-       ``draft_ensure_technique`` skeletons in the planner's buffer.
-       Per `08` §5.6 the enrichment step skips standard techniques
-       (DEC-015), dedups against existing :class:`PaperRecord` rows
-       via :meth:`MetadataStore.get_paper`, and creates new
-       ``partial`` :class:`PaperRecord`s for cited source papers when
-       no row exists.
-    3. Eager :class:`method_extraction.json` writes per DEC-032 OQ5 —
-       one per non-standard non-blocked enriched technique.
+    1. Reads the screening verdict the ``screening`` state already wrote
+       (``papers/{arxiv_id}/screen_result.json``) and passes it into
+       :func:`run_ingestion_subagent` as ``screening=`` so the paper is
+       screened ONCE (no double-screen — design note §4 vs §7).
+    2. Runs the subagent (fetch -> agent run -> assemble). The subagent's
+       corpus fetch is LaTeX-source-first via the injectable
+       ``corpus_fetcher`` (defaults to :func:`fetch_paper_corpus`; tests
+       inject a fake). ``ingestion_model`` overrides the PydanticAI model
+       (tests pass a ``FunctionModel``; production leaves ``None`` so the
+       agent uses its role-resolved model).
+    3. Writes the extracted :class:`TechniqueDescription` list to the
+       finalized technique-buffer artifact the ``planning → registered``
+       gate reads; the ``registered`` state's registration handler
+       projects each into a :class:`TechniqueRef`.
 
-    Returns a synthetic :class:`JobHandle` so the next cycle's
-    ``get_in_flight_paper_plan`` query picks the entity up; the
-    ``planning → registered`` gate body checks for the finalized
-    technique buffer artifact.
+    On an empty / errored result (``fetch_failed``, ``reject``, or no
+    techniques) the handler returns a :class:`DispatchOutcome` error so
+    the planning :class:`RetryPolicy` routes the paper to ``failed`` once
+    the budget is exhausted (the existing failed edge — no new states).
     """
-    paper_text_key_fn = paper_text_key_for or _default_paper_text_key
+    screen_result_key_fn = screen_result_key_for or _default_screen_result_key
     technique_buffer_key_fn = technique_buffer_key_for or _default_technique_buffer_key
-    method_extraction_key_fn = method_extraction_key_for or _default_method_extraction_key
 
     async def _dispatch(ctx: DispatchContext) -> DispatchOutcome:
-        from smai_inline_agents.agents.planner import (  # noqa: PLC0415
-            PlannerInput,
-            run_planner_session,
+        from smai_inline_agents.ingestion import (  # noqa: PLC0415
+            PaperAgentDepsFactory,
+            ScreeningOutcome,
+            fetch_paper_corpus,
+            run_ingestion_subagent,
         )
+        from smai_inline_agents.schemas.screener import ScreenResult  # noqa: PLC0415
 
         arxiv_id = ctx.entity_id
         paper = await ctx.metadata_store.get_paper(arxiv_id)
         if paper is None:
             return DispatchOutcome(error=f"paper {arxiv_id!r} not found in MetadataStore")
 
-        paper_text_key = paper_text_key_fn(arxiv_id)
+        # Reuse the screening-state verdict (no double-screen).
+        screen_key = screen_result_key_fn(arxiv_id)
         try:
-            payload = await ctx.artifact_store.get(paper_text_key)
+            screen_payload = await ctx.artifact_store.get(screen_key)
         except ArtifactNotFound:
-            return DispatchOutcome(
-                error=f"paper text artifact missing at {paper_text_key!r}",
-            )
+            return DispatchOutcome(error=f"screen result missing at {screen_key!r}")
         try:
-            text_blob = cast(dict[str, Any], json.loads(payload))
-        except (ValueError, UnicodeDecodeError) as exc:
-            return DispatchOutcome(error=f"paper text parse failed: {exc}")
-        technique_description = cast(str, text_blob.get("paper_text", ""))
+            screen = ScreenResult.model_validate_json(screen_payload)
+        except Exception as exc:  # noqa: BLE001 — malformed artifact -> dispatch error
+            return DispatchOutcome(error=f"screen result parse failed: {exc}")
+        screening = ScreeningOutcome.from_screen_result(screen)
 
-        # Pool snapshot — render directly from MetadataStore. v1
-        # pattern; the brief's planner_input shape carries it as
-        # free-form context.
-        pool_summary = await _render_pool_summary(ctx)
-
-        # ``submission_kind`` is novel-technique-variant-only per
-        # :class:`PlannerInput` — the paper-ingestion variant leaves it
-        # ``None``. The variant discriminator on
-        # :attr:`PlannerInput.variant` is what selects the prompt + tool
-        # surface.
-        planner_input = PlannerInput(
-            variant="paper_ingestion",
-            paper_arxiv_id=arxiv_id,
-            technique_description=technique_description,
-            pool_summary=pool_summary,
-            metric_registry_summary=metric_registry_summary,
+        pool = await _render_pool_snapshot(ctx)
+        factory = PaperAgentDepsFactory(
+            sub_extraction_llm=llm_for_ingestion,
+            screener_llm=llm_for_ingestion,
+            corpus_fetcher=corpus_fetcher or fetch_paper_corpus,
+            pool_snapshot=pool,
+            model=ingestion_model,
         )
-        workspace_path = workspace_root / arxiv_id
-        workspace_path.mkdir(parents=True, exist_ok=True)
-        artifact_key = technique_buffer_key_fn(arxiv_id)
-
-        # Translate :class:`EngineConfig` supervisor settings (Task
-        # 3.G4) into the loop's :class:`AgentLoopConfig`. Mirrors
-        # :mod:`smai_agents.agents.planner.make_dispatch_planner`.
-        from smai_inline_agents.loop import AgentLoopConfig  # noqa: PLC0415
-
-        engine_config = getattr(ctx, "config", None)
-        if (
-            engine_config is not None
-            and getattr(engine_config, "supervisor_enabled", False) is True
-        ):
-            supervisor_on = True
-            supervisor_cadence = int(getattr(engine_config, "supervisor_check_every_n_turns", 0))
-        else:
-            supervisor_on = False
-            supervisor_cadence = 0
-        loop_config = AgentLoopConfig(supervisor_check_every_turns=supervisor_cadence)
-
         try:
-            result = await run_planner_session(
-                input=planner_input,
-                llm=llm_for_planner,
-                workspace_path=workspace_path,
-                artifact_store=ctx.artifact_store,
-                design_plan_artifact_key=artifact_key,
-                runner=inline_runner,
-                supervisor_llm=llm_for_planner if supervisor_on else None,
-                config=loop_config,
-            )
-        except Exception as exc:  # noqa: BLE001 — surface planner failures via DispatchOutcome
-            return DispatchOutcome(error=f"paper planner failed: {type(exc).__name__}: {exc}")
+            result = await run_ingestion_subagent(arxiv_id, factory, screening=screening)
+        except Exception as exc:  # noqa: BLE001 — surface subagent failures via DispatchOutcome
+            return DispatchOutcome(error=f"ingestion subagent failed: {type(exc).__name__}: {exc}")
 
-        if not result.buffer.finalized:
+        if result.error_reason or not result.techniques:
             return DispatchOutcome(
-                error=(
-                    f"paper planner did not finalize: agent outcome="
-                    f"{result.outcome.kind!r} after {result.outcome.turn_count} turn(s)"
-                ),
+                error=(f"ingestion produced no techniques (reason={result.error_reason!r})"),
             )
 
-        # Enrichment loop — per `08` §5.6 decision tree.
-        try:
-            await _run_enrichment_loop(
-                ctx=ctx,
-                buffer=result.buffer,
-                citing_arxiv_id=arxiv_id,
-                llm_for_enricher=llm_for_enricher,
-                method_extraction_key_for=method_extraction_key_fn,
-            )
-        except Exception as exc:  # noqa: BLE001
-            return DispatchOutcome(error=f"paper enrichment failed: {type(exc).__name__}: {exc}")
-
+        buffer = {
+            "finalized": True,
+            "arxiv_id": arxiv_id,
+            "paper_title": result.paper_title,
+            "paper_level_summary": result.paper_level_summary,
+            "screening": screening.model_dump(mode="json"),
+            "extraction_caveats": list(result.extraction_caveats),
+            "techniques": [t.model_dump(mode="json") for t in result.techniques],
+        }
+        await ctx.artifact_store.put(
+            technique_buffer_key_fn(arxiv_id),
+            json.dumps(buffer, indent=2).encode("utf-8"),
+        )
         del paper  # held for runbook context; the registration handler re-reads
-        handle = JobHandle(plugin="inline", handle=f"inline-paper-plan-{arxiv_id}")
+        handle = JobHandle(plugin="inline", handle=f"inline-paper-ingest-{arxiv_id}")
         return DispatchOutcome(submitted_handles=[handle])
 
     return _dispatch
 
 
-async def _render_pool_summary(ctx: DispatchContext) -> str:
-    """Render a free-form text summary of the technique pool for the planner.
+async def _render_pool_snapshot(ctx: DispatchContext) -> Any:
+    """Build a :class:`PoolSnapshot` of the technique pool for the subagent.
 
     Drains :meth:`MetadataStore.list_techniques` (cursor-paginated per
-    DEC-035 #1) and emits one line per technique. Mirrors the v1
-    novel-technique planner-input pattern.
+    DEC-035 #1) into the canonical names + a Markdown summary the prompt
+    template drops in verbatim (so the agent does not re-emit a technique
+    already in the pool).
     """
+    from smai_inline_agents.ingestion import PoolSnapshot  # noqa: PLC0415
+
+    names: list[str] = []
     lines: list[str] = []
     cursor: str | None = None
     while True:
         page = await ctx.metadata_store.list_techniques(limit=100, cursor=cursor)
         for technique in page.items:
+            names.append(technique.name)
             lines.append(
-                f"{technique.id} | {technique.name} | "
+                f"- {technique.id} | {technique.name} | "
                 f"category={technique.category} | standard={technique.standard}"
             )
         if page.next_cursor is None:
             break
         cursor = page.next_cursor
     if not lines:
-        return "(empty pool — no techniques registered yet)"
-    return "\n".join(lines)
-
-
-async def _run_enrichment_loop(
-    *,
-    ctx: DispatchContext,
-    buffer: Any,  # smai_agents.agents.planner.PlannerBuffer
-    citing_arxiv_id: str,
-    llm_for_enricher: LlmProvider,
-    method_extraction_key_for: Callable[[str, str], str],
-) -> None:
-    """Per-skeleton enrichment per `08` §5.6.
-
-    For each :class:`DraftTechnique` in ``buffer.draft_techniques`` that
-    was created via ``draft_ensure_technique`` (i.e., a comparison
-    technique skeleton) and is **not** already in :class:`MetadataStore`,
-    decide what to do per the policy:
-
-    * ``standard=True`` — skip (DEC-015).
-    * ``standard=False`` and source paper resolvable — fetch the
-      source paper if needed (creating a ``partial``
-      :class:`PaperRecord` per `08` §5.7 dedup), run the enricher,
-      persist the method-extraction artifact eagerly per DEC-032 OQ5.
-    * ``standard=False`` and source paper not resolvable — mark the
-      technique blocked (no method extraction; downstream consumers
-      treat as non-runnable).
-    """
-    from smai_inline_agents.agents.enricher import (  # noqa: PLC0415
-        EnricherInput,
-        run_technique_enrichment,
-    )
-
-    # PlannerBuffer.techniques: dict[str, DraftTechnique] per
-    # :mod:`smai_agents.agents.planner`. Iterate the live in-memory
-    # buffer (post-finalize) — the dispatch handler is invoked
-    # immediately after :func:`run_planner_session` returns.
-    techniques = cast(dict[str, Any], getattr(buffer, "techniques", {}))
-    for symbolic_name, draft in techniques.items():
-        is_standard = bool(getattr(draft, "standard", False))
-        if is_standard:
-            continue
-        # The planner draft buffer carries a fidelity_anchor as a free-
-        # form dict per :class:`DraftTechnique` (smai-agents keeps
-        # methodology imports out of its tool surface). Access via
-        # :meth:`dict.get` rather than attribute lookup.
-        anchor = getattr(draft, "fidelity_anchor", None)
-        source_arxiv_id: str | None = None
-        if isinstance(anchor, dict):
-            anchor_dict = cast(dict[str, Any], anchor)
-            anchor_arxiv = anchor_dict.get("arxiv_id")
-            if isinstance(anchor_arxiv, str):
-                source_arxiv_id = anchor_arxiv
-        if not source_arxiv_id or source_arxiv_id == citing_arxiv_id:
-            # No source paper to enrich against (or it's the citing
-            # paper itself — contribution techniques don't enrich).
-            continue
-        # Look up the source paper. If absent, create a partial
-        # entity so downstream lookups dedup.
-        source_paper = await ctx.metadata_store.get_paper(source_arxiv_id)
-        if source_paper is None:
-            from datetime import UTC, datetime  # noqa: PLC0415
-
-            now = datetime.now(UTC)
-            partial = PaperRecord(
-                arxiv_id=source_arxiv_id,
-                state="partial",
-                created_at=now,
-                updated_at=now,
-            )
-            try:
-                await ctx.metadata_store.create_paper(partial)
-            except Exception as exc:  # noqa: BLE001 — race-on-create is fine
-                _log.debug(
-                    "create_paper for partial %s raced: %s; treating as already-present",
-                    source_arxiv_id,
-                    exc,
-                )
-        # Read source paper text; if not present, mark the technique
-        # blocked (graceful degradation per `08` §5.6).
-        source_text_key = _default_paper_text_key(source_arxiv_id)
-        try:
-            payload = await ctx.artifact_store.get(source_text_key)
-        except ArtifactNotFound:
-            # No content extracted for the source paper. v1 would
-            # fetch on the fly; v2 surfaces the source paper as a
-            # ``partial`` for the user to optionally promote later
-            # (per `08` §5.7).
-            _log.info(
-                "enrichment: source paper %s has no extracted text; "
-                "skipping enrichment (technique remains a skeleton)",
-                source_arxiv_id,
-            )
-            continue
-        try:
-            text_blob = cast(dict[str, Any], json.loads(payload))
-        except (ValueError, UnicodeDecodeError):
-            _log.warning(
-                "enrichment: source paper %s text artifact unparseable; skipping",
-                source_arxiv_id,
-            )
-            continue
-        source_paper_text = cast(str, text_blob.get("paper_text", ""))
-        enricher_input = EnricherInput(
-            technique_id=symbolic_name,
-            technique_name=cast(str, getattr(draft, "name", symbolic_name)),
-            technique_description=cast(str, getattr(draft, "description", "")),
-            citing_paper_arxiv_id=citing_arxiv_id,
-            source_paper_arxiv_id=source_arxiv_id,
-            source_paper_text=source_paper_text,
-        )
-        enrichment_result = await run_technique_enrichment(
-            llm=llm_for_enricher,
-            input=enricher_input,
-        )
-        # Persist the method-extraction artifact eagerly per DEC-032
-        # OQ5.
-        await ctx.artifact_store.put(
-            method_extraction_key_for(source_arxiv_id, symbolic_name),
-            enrichment_result.model_dump_json(indent=2).encode("utf-8"),
-        )
+        return PoolSnapshot.empty()
+    return PoolSnapshot(technique_names=names[:2000], summary_markdown="\n".join(lines)[:20000])
 
 
 def make_dispatch_paper_register(
@@ -932,25 +767,34 @@ def make_dispatch_paper_register(
         if not buffer.get("finalized"):
             return DispatchOutcome(error="technique buffer not finalized")
 
-        techniques_raw = cast(dict[str, dict[str, Any]], buffer.get("techniques") or {})
-        if not techniques_raw:
+        techniques_raw = buffer.get("techniques")
+        if not isinstance(techniques_raw, list) or not techniques_raw:
             return DispatchOutcome(
                 error=(
                     "technique buffer has no techniques — paper ingestion produces "
                     "TechniqueRefs only; an empty buffer means there is nothing to register"
                 ),
             )
-        # Upsert each technique. Per DEC-030 the registration could
-        # run inside a single ``MetadataStore.transaction``, but
-        # ``upsert_technique`` is not on the transaction Protocol
-        # (only on the top-level :class:`MetadataStore`); we call it
-        # directly. Idempotent per `07` §5.3 — re-running on a
-        # registration retry is safe.
-        for symbolic_name, raw in techniques_raw.items():
-            ref = _draft_technique_to_paper_ref(
-                symbolic_name=symbolic_name,
-                raw=raw,
+        paper_title = cast(str | None, buffer.get("paper_title")) or None
+        # Project + upsert each technique. Per DEC-030 the registration
+        # could run inside a single ``MetadataStore.transaction``, but
+        # ``upsert_technique`` is not on the transaction Protocol (only
+        # on the top-level :class:`MetadataStore`); we call it directly.
+        # Idempotent per `07` §5.3 — re-running on a registration retry
+        # is safe.
+        from smai_inline_agents.planner import TechniqueDescription  # noqa: PLC0415
+
+        for raw in cast(list[dict[str, Any]], techniques_raw):
+            try:
+                desc = TechniqueDescription.model_validate(raw)
+            except Exception as exc:  # noqa: BLE001 — malformed buffer entry -> dispatch error
+                return DispatchOutcome(
+                    error=f"technique buffer entry failed TechniqueDescription validation: {exc}"
+                )
+            ref = _technique_description_to_paper_ref(
+                desc=desc,
                 paper_arxiv_id=arxiv_id,
+                paper_title=paper_title,
             )
             await ctx.metadata_store.upsert_technique(ref)
         return DispatchOutcome()
@@ -958,61 +802,44 @@ def make_dispatch_paper_register(
     return _dispatch
 
 
-def _draft_technique_to_paper_ref(
+def _technique_description_to_paper_ref(
     *,
-    symbolic_name: str,
-    raw: dict[str, Any],
+    desc: Any,  # smai_inline_agents.planner.TechniqueDescription
     paper_arxiv_id: str,
+    paper_title: str | None = None,
 ) -> TechniqueRef:
-    """Project a planner ``DraftTechnique`` (raw dict from buffer JSON)
-    to a :class:`TechniqueRef` with a :class:`PaperFidelityAnchor`
-    pointing at this paper.
+    """Project an ingestion :class:`TechniqueDescription` to a paper-anchored
+    :class:`TechniqueRef`.
 
-    Mirrors :func:`smai_core.draft_technique_to_ref` but always anchors
-    at the paper (paper-ingestion variant produces
-    ``TechniqueRef``s only — no proposal anchor path). Standard
-    techniques carry no anchor per DEC-015.
+    The ingestion subagent emits ``context_kind="paper_extract"``
+    techniques (``upstream_requirements §1``), so the ref always carries
+    a :class:`PaperFidelityAnchor` pointing at this paper and is
+    non-standard. The :class:`TechniqueDescription` is the rich
+    scientific surface; the methodology-wiring fields the
+    :class:`TechniqueRef` needs but the description does not carry
+    (``category`` / ``compatible_factor_types`` / extension points /
+    parameter schema) default to the v1 additive baseline. A downstream
+    proposal-pipeline planner that references the paper refines those at
+    CG-construction time.
     """
-    standard = bool(raw.get("standard", False))
-    anchor: PaperFidelityAnchor | None = None
-    if not standard:
-        anchor = PaperFidelityAnchor(
-            arxiv_id=paper_arxiv_id,
-            doi=cast(str | None, raw.get("doi")) or f"arxiv:{paper_arxiv_id}",
-            title=cast(str | None, raw.get("paper_title")),
-        )
-    compatible_factor_types_raw = cast(
-        list[str], raw.get("compatible_factor_types") or ["additive"]
+    anchor = PaperFidelityAnchor(
+        arxiv_id=paper_arxiv_id,
+        doi=f"arxiv:{paper_arxiv_id}",
+        title=paper_title,
     )
-    compatible_factor_types = [_validate_factor_type(t) for t in compatible_factor_types_raw]
-    # Paper-ingestion is the canonical ``paper_extract`` producer path
-    # (``upstream_requirements §1``): non-standard refs land with a
-    # :class:`PaperFidelityAnchor` so ``context_kind="paper_extract"``;
-    # DEC-015 ``standard`` refs land with ``standard=True`` so
-    # ``context_kind="standard"``. :class:`TechniqueRef.context_kind` is
-    # required so we set it explicitly here — the validator rejects any
-    # anchor / standard disagreement.
     return TechniqueRef(
-        id=symbolic_name,
-        name=cast(str, raw.get("name", symbolic_name)),
-        description=cast(str, raw.get("description", "")),
-        category=cast(str, raw.get("category", "uncategorized")),
-        compatible_factor_types=compatible_factor_types,
-        standard=standard,
+        id=desc.name,
+        name=desc.name,
+        description=desc.summary,
+        category="uncategorized",
+        compatible_factor_types=["additive"],
+        standard=False,
         fidelity_anchor=anchor,
-        affects_extension_points=cast(list[str], raw.get("affects_extension_points") or []),
-        implies_controlled=cast(list[str], raw.get("implies_controlled") or []),
-        parameter_schema=cast(dict[str, Any] | None, raw.get("parameter_schema")),
-        context_kind="standard" if standard else "paper_extract",
+        affects_extension_points=[],
+        implies_controlled=[],
+        parameter_schema=None,
+        context_kind="paper_extract",
     )
-
-
-def _validate_factor_type(value: str) -> Any:  # Literal["additive", "substitutive"]
-    if value == "additive":
-        return "additive"
-    if value == "substitutive":
-        return "substitutive"
-    raise ValueError(f"unknown factor_type {value!r}")
 
 
 # === Default key-resolver helpers ===========================================
@@ -1038,66 +865,57 @@ def _default_technique_buffer_key(arxiv_id: str) -> str:
     return TECHNIQUE_BUFFER_KEY_TEMPLATE.format(arxiv_id=arxiv_id)
 
 
-def _default_method_extraction_key(arxiv_id: str, technique_id: str) -> str:
-    return METHOD_EXTRACTION_KEY_TEMPLATE.format(arxiv_id=arxiv_id, technique_id=technique_id)
-
-
 # === Spec factory ===========================================================
 
 
 def build_paper_ingestion_spec(
     *,
-    workspace_root: Path,
     llm_for_screener: LlmProvider,
-    llm_for_planner: LlmProvider,
-    llm_for_enricher: LlmProvider,
+    llm_for_ingestion: LlmProvider,
     fetcher: PaperFetcher | None = None,
     max_screening_attempts: int = 1,
     max_planning_attempts: int = 1,
-    metric_registry_summary: str = "(default v1 metric registry — accuracy, loss)",
     paper_text_key_for: Callable[[str], str] | None = None,
     figures_key_for: Callable[[str], str] | None = None,
     expanded_tex_key_for: Callable[[str], str] | None = None,
     screen_result_key_for: Callable[[str], str] | None = None,
     technique_buffer_key_for: Callable[[str], str] | None = None,
-    method_extraction_key_for: Callable[[str, str], str] | None = None,
     pool_limit: int = POOL_PAPER_INGESTION_LIMIT,
     pool_priority: int = POOL_PAPER_INGESTION_PRIORITY,
-    inline_planner_runner: Any = None,
+    ingestion_corpus_fetcher: Any = None,
+    ingestion_model: Any = None,
 ) -> PipelineSpec:
     """Build the SMAI paper-ingestion :class:`PipelineSpec`.
 
     Args:
-        workspace_root: Filesystem root for per-paper planner
-            workspaces. The planner+enrichment dispatch handler
-            creates ``<workspace_root>/<arxiv_id>/`` before invoking
-            the session.
         llm_for_screener: :class:`LlmProvider` for the ``screener``
-            role.
-        llm_for_planner: :class:`LlmProvider` for the ``planner`` role
-            (paper-ingestion variant).
-        llm_for_enricher: :class:`LlmProvider` for the ``enricher``
-            role.
+            role (the ``screening`` state's single-call agent).
+        llm_for_ingestion: :class:`LlmProvider` for the ``ingestion``
+            role — drives the Paper Agent's in-tool ``structured_call``
+            sub-extractions (``search_paper`` / ``search_literature``)
+            and the internal screener on deep-recursion.
         fetcher: Optional :class:`PaperFetcher`; defaults to
             :class:`ArxivLatexFetcher`. Tests inject a fake.
         max_screening_attempts: Per `08` §5.2 retry budget for the
             screening stage. v1 default 1 (one retry beyond initial).
         max_planning_attempts: Per `08` §5.2 retry budget for the
             planning stage. v1 default 1.
-        metric_registry_summary: Free-text summary threaded into the
-            planner's prompt context.
         paper_text_key_for / figures_key_for / expanded_tex_key_for
-            / screen_result_key_for / technique_buffer_key_for /
-            method_extraction_key_for: Optional ArtifactStore key
-            template overrides; defaults are the
-            ``papers/{arxiv_id}/...`` shape per the v1 layout.
+            / screen_result_key_for / technique_buffer_key_for:
+            Optional ArtifactStore key template overrides; defaults are
+            the ``papers/{arxiv_id}/...`` shape per the v1 layout.
         pool_limit: ``paper_ingestion`` pool limit. Default 2 per
             DEC-034 #4.
         pool_priority: ``paper_ingestion`` pool priority. Default 10
             per DEC-034 #4 (lowest of the four pools).
-        inline_planner_runner: Test-only seam — when non-``None``, the
-            planner dispatch handler runs the agent loop in-process
-            via this runner. Production passes ``None``.
+        ingestion_corpus_fetcher: Test-only seam — the LaTeX-source-first
+            corpus fetcher the ingestion subagent uses. Defaults to
+            :func:`smai_inline_agents.ingestion.fetch_paper_corpus`
+            (production); tests inject a fake that returns a canned
+            :class:`PaperCorpus` to keep the planning stage offline.
+        ingestion_model: Test-only seam — the PydanticAI model override
+            for the Paper Agent. Production leaves ``None`` (the agent
+            uses its role-resolved model); tests pass a ``FunctionModel``.
 
     Returns:
         A :class:`PipelineSpec` with ``entity_kind="paper"`` ready for
@@ -1154,17 +972,13 @@ def build_paper_ingestion_spec(
         StateDef(
             name="planning",
             on_entry_dispatch=DispatchAction(
-                name="paper.dispatch_planner_and_enrich",
-                handler=make_dispatch_paper_planner_and_enrich(
-                    workspace_root=workspace_root,
-                    llm_for_planner=llm_for_planner,
-                    llm_for_enricher=llm_for_enricher,
-                    paper_text_key_for=paper_text_key_fn,
+                name="paper.dispatch_ingestion_subagent",
+                handler=make_dispatch_paper_ingestion_subagent(
+                    llm_for_ingestion=llm_for_ingestion,
+                    screen_result_key_for=screen_result_key_fn,
                     technique_buffer_key_for=technique_buffer_key_fn,
-                    method_extraction_key_for=method_extraction_key_for
-                    or _default_method_extraction_key,
-                    metric_registry_summary=metric_registry_summary,
-                    inline_runner=inline_planner_runner,
+                    corpus_fetcher=ingestion_corpus_fetcher,
+                    ingestion_model=ingestion_model,
                 ),
                 pool=POOL_PAPER_INGESTION,
                 handle_field="planner_job_handle",
@@ -1340,21 +1154,18 @@ def _drain_to_list(method_name: str) -> Callable[[Any], Awaitable[list[Any]]]:
 
 def register_paper_ingestion_pipeline(
     *,
-    workspace_root: Path,
     llm_for_screener: LlmProvider,
-    llm_for_planner: LlmProvider,
-    llm_for_enricher: LlmProvider,
+    llm_for_ingestion: LlmProvider,
     fetcher: PaperFetcher | None = None,
     max_screening_attempts: int = 1,
     max_planning_attempts: int = 1,
-    metric_registry_summary: str = "(default v1 metric registry — accuracy, loss)",
     paper_text_key_for: Callable[[str], str] | None = None,
     figures_key_for: Callable[[str], str] | None = None,
     expanded_tex_key_for: Callable[[str], str] | None = None,
     screen_result_key_for: Callable[[str], str] | None = None,
     technique_buffer_key_for: Callable[[str], str] | None = None,
-    method_extraction_key_for: Callable[[str, str], str] | None = None,
-    inline_planner_runner: Any = None,
+    ingestion_corpus_fetcher: Any = None,
+    ingestion_model: Any = None,
 ) -> PipelineSpec:
     """Construct + register the paper-ingestion pipeline-spec.
 
@@ -1363,21 +1174,18 @@ def register_paper_ingestion_pipeline(
     the constructed spec.
     """
     spec = build_paper_ingestion_spec(
-        workspace_root=workspace_root,
         llm_for_screener=llm_for_screener,
-        llm_for_planner=llm_for_planner,
-        llm_for_enricher=llm_for_enricher,
+        llm_for_ingestion=llm_for_ingestion,
         fetcher=fetcher,
         max_screening_attempts=max_screening_attempts,
         max_planning_attempts=max_planning_attempts,
-        metric_registry_summary=metric_registry_summary,
         paper_text_key_for=paper_text_key_for,
         figures_key_for=figures_key_for,
         expanded_tex_key_for=expanded_tex_key_for,
         screen_result_key_for=screen_result_key_for,
         technique_buffer_key_for=technique_buffer_key_for,
-        method_extraction_key_for=method_extraction_key_for,
-        inline_planner_runner=inline_planner_runner,
+        ingestion_corpus_fetcher=ingestion_corpus_fetcher,
+        ingestion_model=ingestion_model,
     )
     register_pipeline_spec(spec)
     return spec
@@ -1401,7 +1209,7 @@ __all__ = [
     "TECHNIQUE_BUFFER_KEY_TEMPLATE",
     "build_paper_ingestion_spec",
     "make_dispatch_paper_fetch",
-    "make_dispatch_paper_planner_and_enrich",
+    "make_dispatch_paper_ingestion_subagent",
     "make_dispatch_paper_register",
     "make_dispatch_paper_screener",
     "register_paper_ingestion_pipeline",

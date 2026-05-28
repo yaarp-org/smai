@@ -213,6 +213,12 @@ system_prompt: |
 initial_user_message_template: |
   # Paper ingestion: {{ paper_arxiv_id }}
 
+  ## Title
+  {{ paper_title | default("(title unavailable)") }}
+
+  ## Abstract
+  {{ paper_abstract | default("(abstract unavailable)") }}
+
   ## Sections in this paper
   {{ section_list }}
 

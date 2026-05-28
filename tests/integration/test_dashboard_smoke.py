@@ -28,7 +28,8 @@ from _e2_integration_fakes import (  # type: ignore[import-not-found]
     InProcessFakeFetcher,
     StubLlmProvider,
     build_smoke_runtime_config_for_papers,
-    make_paper_planner_responses,
+    make_ingestion_corpus_fetcher,
+    make_ingestion_function_model,
     make_screener_response,
 )
 from fastapi.testclient import TestClient
@@ -49,24 +50,20 @@ def _now() -> datetime:
     return datetime(2026, 4, 29, 12, 0, 0, tzinfo=UTC)
 
 
-def _build_per_role_stubs(arxiv_id: str) -> dict[str, StubLlmProvider]:
+def _build_per_role_stubs() -> dict[str, StubLlmProvider]:
     """Per-role :class:`StubLlmProvider` map for the paper-ingestion drive.
 
     Mirrors :mod:`tests.integration.test_paper_ingestion_round_trip`'s
-    setup — we only exercise the paper-ingestion flow here so only
-    ``screener`` / ``planner`` need canned responses; everything else
-    gets an empty-queue tripwire.
+    setup — only the ``screener`` role needs a canned response; the
+    ``planning`` state's ingestion subagent runs on the injected
+    ``FunctionModel`` + corpus fetcher. Everything else gets an
+    empty-queue tripwire.
     """
     role_to_stub: dict[str, StubLlmProvider] = {}
     for role in DEFAULT_TASK_ROLES:
         if role == "screener":
             role_to_stub[role] = StubLlmProvider(
                 [make_screener_response(decision="accept")],
-                name=f"stub-{role}",
-            )
-        elif role == "planner":
-            role_to_stub[role] = StubLlmProvider(
-                make_paper_planner_responses(arxiv_id=arxiv_id),
                 name=f"stub-{role}",
             )
         else:
@@ -93,7 +90,7 @@ async def test_dashboard_smoke_against_populated_runtime(tmp_path: Path) -> None
     """
     arxiv_id = "2401.99999"
     artifact_store = LocalFsStore(tmp_path / "artifacts")
-    role_stubs = _build_per_role_stubs(arxiv_id)
+    role_stubs = _build_per_role_stubs()
     fake_fetcher = InProcessFakeFetcher()
     overrides = PluginOverrides(
         llm_providers=cast(dict[str, object], dict(role_stubs)),  # type: ignore[arg-type]
@@ -107,6 +104,8 @@ async def test_dashboard_smoke_against_populated_runtime(tmp_path: Path) -> None
         plugin_overrides=overrides,
         run_worker=False,
         paper_fetcher=fake_fetcher,
+        ingestion_corpus_fetcher=make_ingestion_corpus_fetcher(arxiv_id=arxiv_id),
+        ingestion_model=make_ingestion_function_model(source_arxiv_id=arxiv_id),
     ) as runtime:
         # Drive the paper through the ingestion pipeline.
         await runtime.papers.submit(arxiv_id=arxiv_id, title="Smoke Test Paper")

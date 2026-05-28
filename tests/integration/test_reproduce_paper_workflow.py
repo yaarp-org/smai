@@ -28,7 +28,8 @@ from _e2_integration_fakes import (  # type: ignore[import-not-found]
     InProcessFakeFetcher,
     StubLlmProvider,
     build_smoke_runtime_config_for_papers,
-    make_paper_planner_responses,
+    make_ingestion_corpus_fetcher,
+    make_ingestion_function_model,
     make_screener_response,
 )
 from smai_artifacts_localfs import LocalFsStore
@@ -239,22 +240,21 @@ def _build_per_role_stubs(
     Roles invoked in the reproduce-paper-X workflow:
 
     * ``screener`` — paper-ingestion's screening stage.
-    * ``planner`` — drives BOTH the paper-ingestion variant (during
-      paper ingestion's ``planning`` state) AND the novel-technique
-      variant (during the proposal pipeline's ``designing`` state).
-      The single planner stub queues responses for both — the
-      paper-ingestion sequence runs first (``smai ingest`` is called
-      before ``smai submit-proposal``), then the novel-technique
-      sequence.
-    * ``enricher`` — not invoked in this test (the contribution
-      technique has no comparison baselines that need enrichment).
+    * ``planner`` — drives the novel-technique variant during the
+      proposal pipeline's ``designing`` state. (Paper ingestion's
+      ``planning`` state no longer uses the planner role: per the
+      planner-refactor Step-3 cutover it runs the ingestion subagent on
+      the injected ``FunctionModel`` + corpus fetcher.)
+    * ``ingestion`` — not invoked in this test: the subagent's
+      ``FunctionModel`` emits the output tool immediately, so no in-tool
+      sub-extraction fires, and the screening verdict is reused (no
+      re-screen).
     """
     role_to_stub: dict[str, StubLlmProvider] = {}
-    # Concatenate paper-ingestion-variant + novel-technique-variant
-    # responses; the paper-ingestion flow drives first.
-    planner_responses = make_paper_planner_responses(
-        arxiv_id=paper_arxiv_id
-    ) + _make_reproduce_paper_proposal_responses(
+    # Paper ingestion no longer drives a planner-response queue (it runs
+    # the ingestion subagent on the injected FunctionModel); the planner
+    # role only serves the proposal pipeline's novel-technique variant.
+    planner_responses = _make_reproduce_paper_proposal_responses(
         proposal_id=proposal_id,
         arxiv_id=paper_arxiv_id,
     )
@@ -314,6 +314,10 @@ async def test_reproduce_paper_workflow(tmp_path: Path) -> None:
         plugin_overrides=overrides,
         run_worker=False,
         paper_fetcher=fake_fetcher,
+        # Step-3 ingestion subagent runs offline during paper ingestion's
+        # planning state (fake LaTeX corpus + FunctionModel output).
+        ingestion_corpus_fetcher=make_ingestion_corpus_fetcher(arxiv_id=arxiv_id),
+        ingestion_model=make_ingestion_function_model(source_arxiv_id=arxiv_id),
     ) as runtime:
         # === Phase 1: ingest paper ==========================================
         submission = await runtime.papers.submit(
@@ -397,10 +401,12 @@ async def test_reproduce_paper_workflow(tmp_path: Path) -> None:
         # artifact (the paper IS the description); the proposal-record
         # just carries the arxiv-id link.
 
-    # Sanity: the screener was called once; the planner was called for
-    # both the paper-ingestion variant AND the novel-technique variant.
+    # Sanity: the screener was called once (paper-ingestion screening
+    # stage); the planner only served the proposal pipeline's
+    # novel-technique variant (7 turns: classify + create + comparison +
+    # conditions + assertion + finalize + finish). Paper ingestion no
+    # longer uses the planner role — it ran the ingestion subagent on the
+    # injected FunctionModel, so the ``ingestion`` provider stayed unused.
     assert len(role_stubs["screener"].calls) == 1
-    # Paper-ingestion planner uses 3 turns (create + finalize + finish).
-    # Novel-technique planner uses 7 turns (classify + create + comparison
-    # + conditions + assertion + finalize + finish). 10 total.
-    assert len(role_stubs["planner"].calls) >= 10
+    assert len(role_stubs["planner"].calls) >= 7
+    assert len(role_stubs["ingestion"].calls) == 0
