@@ -1,0 +1,96 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 470" role="img" aria-label="SMAI plugin abstraction: four interfaces, swappable implementations">
+  <style>
+    :root{
+      --bg:#0f1117; --panel:#161922; --ink:#e7e9ee; --muted:#9aa3b2; --line:#3a4154;
+      --in:#2f6db0; --in-bg:#15243a; --lock:#c98a3a; --lock-bg:#2c2110;
+      --agent:#7a5cc4; --agent-bg:#211a36; --ok:#2f9e6f; --ok-bg:#10271e;
+      --store:#c4577a; --store-bg:#2c1620;
+    }
+    text{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;fill:var(--ink)}
+    .t{font-size:13.5px} .ts{font-size:11px;fill:var(--muted)} .tb{font-size:15px;font-weight:600}
+    .tt{font-size:11px;fill:var(--muted);letter-spacing:.08em}
+    .mono{font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;fill:#e7e9ee}
+    .chip{font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;font-size:12px}
+  </style>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#7f8aa3"/></marker>
+  </defs>
+
+  <rect x="0" y="0" width="960" height="470" rx="14" fill="var(--bg)"/>
+
+  <text x="30" y="34" class="tb">One interface per boundary. Swap the implementation; local to production is a config change.</text>
+  <text x="30" y="54" class="ts">Reference plugins all ship in-repo. Discovery is entry-point based (the dbt-adapter pattern).</text>
+
+  <!-- SMAI consumer -->
+  <rect x="34" y="118" width="210" height="280" rx="13" fill="var(--lock-bg)" stroke="var(--lock)" stroke-width="1.6"/>
+  <text x="139" y="248" text-anchor="middle" class="tb" fill="var(--lock)">SMAI</text>
+  <text x="139" y="270" text-anchor="middle" class="ts">core + pipeline</text>
+  <text x="139" y="298" text-anchor="middle" class="ts">calls four Protocols,</text>
+  <text x="139" y="313" text-anchor="middle" class="ts">never a vendor SDK</text>
+
+  <!-- header columns -->
+  <text x="300" y="92" class="tt">PROTOCOL</text>
+  <text x="546" y="92" class="tt">SWAPPABLE IMPLEMENTATIONS  ·  ▸ = smai dev default</text>
+
+  <!-- fan-out arrows from SMAI -->
+  <line x1="244" y1="150" x2="296" y2="135" stroke="#7f8aa3" stroke-width="1.5" marker-end="url(#a)"/>
+  <line x1="244" y1="215" x2="296" y2="216" stroke="#7f8aa3" stroke-width="1.5" marker-end="url(#a)"/>
+  <line x1="244" y1="280" x2="296" y2="297" stroke="#7f8aa3" stroke-width="1.5" marker-end="url(#a)"/>
+  <line x1="244" y1="345" x2="296" y2="378" stroke="#7f8aa3" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <!-- ROW 1: LlmProvider (agent / purple) -->
+  <rect x="298" y="108" width="186" height="54" rx="9" fill="var(--agent-bg)" stroke="var(--agent)"/>
+  <text x="391" y="132" text-anchor="middle" class="mono">LlmProvider</text>
+  <text x="391" y="150" text-anchor="middle" class="ts">agent turns + tool use</text>
+  <line x1="484" y1="135" x2="534" y2="135" stroke="#7f8aa3" stroke-width="1.4" marker-end="url(#a)"/>
+  <rect x="536" y="112" width="130" height="46" rx="8" fill="var(--agent-bg)" stroke="var(--agent)"/>
+  <text x="601" y="132" text-anchor="middle" class="chip" fill="#c4a3ee">▸ bedrock</text>
+  <text x="601" y="148" text-anchor="middle" class="ts">AWS Converse</text>
+  <rect x="676" y="112" width="130" height="46" rx="8" fill="#0c0e14" stroke="var(--line)"/>
+  <text x="741" y="132" text-anchor="middle" class="chip">anthropic</text>
+  <text x="741" y="148" text-anchor="middle" class="ts">Anthropic SDK</text>
+  <rect x="816" y="112" width="120" height="46" rx="8" fill="#0c0e14" stroke="var(--line)"/>
+  <text x="876" y="132" text-anchor="middle" class="chip">openai</text>
+  <text x="876" y="148" text-anchor="middle" class="ts">OpenAI SDK</text>
+
+  <!-- ROW 2: MetadataStore (store / pink) -->
+  <rect x="298" y="189" width="186" height="54" rx="9" fill="var(--store-bg)" stroke="var(--store)"/>
+  <text x="391" y="213" text-anchor="middle" class="mono">MetadataStore</text>
+  <text x="391" y="231" text-anchor="middle" class="ts">pipeline-tracking state</text>
+  <line x1="484" y1="216" x2="534" y2="216" stroke="#7f8aa3" stroke-width="1.4" marker-end="url(#a)"/>
+  <rect x="536" y="193" width="130" height="46" rx="8" fill="var(--store-bg)" stroke="var(--store)"/>
+  <text x="601" y="213" text-anchor="middle" class="chip" fill="#eea6bd">▸ sqlite</text>
+  <text x="601" y="229" text-anchor="middle" class="ts">single file</text>
+  <rect x="676" y="193" width="130" height="46" rx="8" fill="#0c0e14" stroke="var(--line)"/>
+  <text x="741" y="213" text-anchor="middle" class="chip">postgres</text>
+  <text x="741" y="229" text-anchor="middle" class="ts">production self-host</text>
+
+  <!-- ROW 3: ArtifactStore (in / blue) -->
+  <rect x="298" y="270" width="186" height="54" rx="9" fill="var(--in-bg)" stroke="var(--in)"/>
+  <text x="391" y="294" text-anchor="middle" class="mono">ArtifactStore</text>
+  <text x="391" y="312" text-anchor="middle" class="ts">code, configs, metrics</text>
+  <line x1="484" y1="297" x2="534" y2="297" stroke="#7f8aa3" stroke-width="1.4" marker-end="url(#a)"/>
+  <rect x="536" y="274" width="130" height="46" rx="8" fill="var(--in-bg)" stroke="var(--in)"/>
+  <text x="601" y="294" text-anchor="middle" class="chip" fill="#8fb4dd">▸ localfs</text>
+  <text x="601" y="310" text-anchor="middle" class="ts">local disk</text>
+  <rect x="676" y="274" width="130" height="46" rx="8" fill="#0c0e14" stroke="var(--line)"/>
+  <text x="741" y="294" text-anchor="middle" class="chip">s3</text>
+  <text x="741" y="310" text-anchor="middle" class="ts">your bucket</text>
+
+  <!-- ROW 4: Compute (ok / green) -->
+  <rect x="298" y="351" width="186" height="54" rx="9" fill="var(--ok-bg)" stroke="var(--ok)"/>
+  <text x="391" y="375" text-anchor="middle" class="mono">Compute</text>
+  <text x="391" y="393" text-anchor="middle" class="ts">GPU training runs</text>
+  <line x1="484" y1="378" x2="534" y2="378" stroke="#7f8aa3" stroke-width="1.4" marker-end="url(#a)"/>
+  <rect x="536" y="355" width="130" height="46" rx="8" fill="var(--ok-bg)" stroke="var(--ok)"/>
+  <text x="601" y="375" text-anchor="middle" class="chip" fill="#7fcf9c">▸ localgpu</text>
+  <text x="601" y="391" text-anchor="middle" class="ts">host Docker</text>
+  <rect x="676" y="355" width="130" height="46" rx="8" fill="#0c0e14" stroke="var(--line)"/>
+  <text x="741" y="375" text-anchor="middle" class="chip">modal</text>
+  <text x="741" y="391" text-anchor="middle" class="ts">Modal Sandboxes</text>
+  <rect x="816" y="355" width="120" height="46" rx="8" fill="#0c0e14" stroke="var(--line)"/>
+  <text x="876" y="375" text-anchor="middle" class="chip">runpod</text>
+  <text x="876" y="391" text-anchor="middle" class="ts">RunPod Pods</text>
+
+  <text x="30" y="442" class="ts">Writing your own: subclass the conformance test base from smai_core.plugins.conformance, override one factory, declare the entry point.</text>
+</svg>

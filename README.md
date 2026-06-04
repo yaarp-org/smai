@@ -1,75 +1,47 @@
 # SMAI
 
-> Methodology-as-infrastructure for comparative-claim ML research.
-> Definition in, verdict out, with the metric, the factor structure, and
-> the verdict path locked at compile time.
+> A framework for automated scientific experimentation that separates agent
+> reasoning from scientific verdicts.
+> Mechanical guarantees over whatever experiment the agents design.
 
-SMAI is the experiment-execution stage that an outer auto-research
-pipeline (an "AI scientist" loop) hands off to when its question turns
-**comparative**: *does technique X beat technique Y under matched
-conditions?* It is not an idea generator, not a writeup tool, and not a
-hill-climbing optimizer; those belong to the outer loop. SMAI takes a
-comparative claim, verifies it is even answerable, runs the experiment,
-and returns a verdict the agent that did the work could not have nudged.
+An automated research system renders a verdict on a hypothesis through a chain of
+intermediate work. It designs an experiment, implements and runs it, and
+interprets the results, and a flaw anywhere along that chain quietly undermines
+the verdict at the end. In most systems the validity of the chain is carried by
+prompt context and agent judgment, with nothing checking it. SMAI is the
+machinery that chain is missing.
 
-It does that by compiling the experiment before any code runs. A
-confounded comparison fails to compile. The metric, the aggregation
-rule, and the verdict path are fixed at compile time, and no LLM sits
-anywhere between the raw numbers and the verdict, so an implementing
-agent cannot grade its own work.
+SMAI takes the inferential chain of an experiment (hypothesis, design,
+experiment, results, verdict) and makes the validity conditions of each link
+explicit. Whatever can be checked mechanically is checked, and what cannot is
+handed to an agent deliberately, at the boundary where mechanical checking
+genuinely ends. The surface it checks against is intrinsic to the structure that
+every valid experiment shares, not a grader wired to one task in advance, so the
+guarantees hold over whatever experiment the agents design.
 
-Two short companion posts lay out the reasoning behind this design,
-where mechanical checking ends and agent reasoning must begin:
+<p align="center">
+  <img src="assets/experiment-design.png" alt="A research agent submits a hypothesis to an experiment-designer agent, which drafts an experiment plan in a DSL; a pure-function compiler rejects structurally invalid designs and otherwise emits the contract artifacts that anchor every downstream check" width="900">
+</p>
 
-- [Where agents belong in automated research](https://henry-eigen.github.io/2026/05/18/where-agents-belong.html)
-- [How SMAI works](https://henry-eigen.github.io/2026/05/13/how-yaarp-works.html)
+What that buys, concretely, is a verdict no agent in the loop could have nudged.
+The design compiles to a set of frozen, content-hashed contracts before any code
+runs, the metric and the verdict function are fixed at that moment, and no LLM
+sits anywhere between the raw numbers and the verdict. An agent can implement an
+experiment; it cannot grade its own work.
 
 > **Status: private pre-release.** APIs may break without notice. PyPI
-> distribution and a public docs site are gated on an explicit decision;
-> until then, install from the workspace with `uv sync`. Apache 2.0
-> licensed.
+> distribution and a public docs site are gated on an explicit decision; until
+> then, install from the workspace with `uv sync`. Apache 2.0 licensed.
 
 ---
 
-## Table of Contents
+## The reasoning
 
-- [Why SMAI](#why-smai)
-- [Installation](#installation)
-- [Quick start](#quick-start)
-- [Using SMAI](#using-smai)
-- [Configuration](#configuration)
-- [Architecture](#architecture)
-- [Plugins](#plugins)
-- [CLI reference](#cli-reference)
-- [Documentation](#documentation)
-- [Contributing](#contributing)
-- [License](#license)
+Two short companion posts lay out why SMAI is built this way, where mechanical
+checking ends and agent judgment has to begin:
 
-## Why SMAI
-
-A long-horizon research agent is a stack of LLM turns, and any turn is
-cheap to nudge toward a result that looks better than it is. SMAI closes
-that off for the comparative stretch of the work without taking the
-open-endedness away: the outer agent still does all the creative work,
-and SMAI owns only the stretch where a claim becomes a verdict. What
-that buys is a short list of structural guarantees, not a feature list:
-
-- **Confounded experiments fail to compile.** Factor exclusivity,
-  control completeness, metric well-formedness, comparability of the
-  entries, and "this looks like a sequential pipeline pretending to be
-  an experiment" are all checked mechanically, before any code runs.
-- **The verdict path has no LLM in it.** The metric is fixed at compile
-  time, the aggregation rule is fixed, and the agent that wrote an
-  implementation never sees the verdict criterion. Self-grading is not
-  discouraged, it is structurally impossible.
-- **The contracts are the locked surface.** Compiling a definition emits
-  four immutable, content-hashed JSON artifacts. Agents read them;
-  nothing rewrites them mid-flight. The audit trail is reproducible by
-  construction.
-
-The companion posts linked above explain why these are the right
-guarantees, and where they sit relative to the parts that must stay in
-an agent's hands.
+- [The mechanism boundary in automated research](https://henry-eigen.github.io/2026/05/18/where-agents-belong.html). It argues that an automated research system's reliability comes down to how much of the experiment can be made mechanically checkable.
+- [The architecture of mechanized research](https://henry-eigen.github.io/2026/05/13/how-yaarp-works.html). It realizes that argument as SMAI, walked link by link from experiment design through to verdict.
 
 ## Installation
 
@@ -81,8 +53,8 @@ uv sync                 # install the workspace (editable) + dev deps
 uv run pytest           # run the test suite
 ```
 
-There is no PyPI release yet (see the status note above); the `uv`
-workspace installs every package and plugin editable.
+There is no PyPI release yet (see the status note above); the `uv` workspace
+installs every package and plugin editable.
 
 ## Quick start
 
@@ -95,33 +67,25 @@ smai ui: starting in-process worker (sqlite metadata store detected).
          Listening on http://127.0.0.1:8000/
 ```
 
-Open `http://127.0.0.1:8000/`. In another terminal, submit an experiment
-and watch it run:
+Open `http://127.0.0.1:8000/`. In another terminal, submit an experiment and
+watch it run to a terminal state:
 
 ```bash
 $ uv run smai run tests/fixtures/experiments/cutout_on_cifar10.yaml --watch
 cg_01J7PA8K2X9F4ZB6QH4N0P1234: complete
 ```
 
-`smai dev` is the headless equivalent of `smai ui` (same plugins, no API
-or SPA). `smai compile experiment.yaml` runs only the methodology layer,
-emitting the four contracts to stdout without touching the metadata
-store or compute. The dev defaults dispatch real agent and compute
-calls, so they need credentials and a local Docker setup; the
-prerequisites are in [Configuration](#configuration) and
+`smai dev` is the headless equivalent (same plugins, no API or SPA).
+`smai compile experiment.yaml` runs only the methodology layer, emitting the
+four contracts to stdout without touching the metadata store or compute. The dev
+defaults dispatch real agent and compute calls, so they need credentials and a
+local Docker setup; the prerequisites are in [Configuration](#configuration) and
 [`packages/smai-cli/README.md`](packages/smai-cli/README.md).
 
-## Using SMAI
+### Programmatic
 
-SMAI has two integration patterns, and the seam between them is
-deliberate:
-
-| | What you get | What you import |
-|---|---|---|
-| **Tier A, deep delegation** | Hand SMAI a definition (or a plain-English technique description, and let the planner draft one). Read back a verdict and the artifact set. The full pipeline runs: agents, orchestrator, runtime, plugins. | the `smai` CLI, or `Runtime` programmatically |
-| **Tier B, methodology as library** | Compile your own definitions, run the experiments on your own infrastructure, call the evaluator for the verdict. The pipeline layer never enters the picture. | `smai_core` alone |
-
-### Tier A: programmatic
+To delegate the whole pipeline, drive it through `Runtime` (agents,
+orchestrator, runtime, and plugins all run):
 
 ```python
 import asyncio
@@ -132,7 +96,7 @@ async def main() -> None:
     yaml_text = open("tests/fixtures/experiments/cutout_on_cifar10.yaml").read()
 
     async with Runtime.start_in_band(config) as runtime:
-        # A multi-factor experiment registers N CGs; a single-factor one returns one.
+        # A multi-factor experiment registers N comparison groups; single-factor returns one.
         cg_ids = await runtime.experiments.submit_text(yaml_text)
         for cg_id in cg_ids:
             snap = await runtime.status.wait_for_terminal(cg_id, timeout=None)
@@ -141,147 +105,97 @@ async def main() -> None:
 asyncio.run(main())
 ```
 
-The primary input path is proposals, not raw definitions:
-`runtime.proposals.submit(...)` hands the planner a technique
-description, it drafts a definition into the `designed` state, and a
-human gate approves it, which registers the comparison groups.
-Production deployment (out-of-band worker, Postgres + S3 + remote
-compute) uses `Runtime.start_worker(...)`; recipes are in
-[`packages/smai-cli/OPERATIONS.md`](packages/smai-cli/OPERATIONS.md).
+The primary input path is proposals rather than raw definitions.
+`runtime.proposals.submit(...)` hands the planner a technique description, it
+drafts a definition into the `designed` state, and a human gate approves it,
+which registers the comparison groups. Production deployment (out-of-band
+worker, Postgres + S3 + remote compute) uses `Runtime.start_worker(...)`;
+recipes are in [`packages/smai-cli/OPERATIONS.md`](packages/smai-cli/OPERATIONS.md).
 
-### Tier B: methodology as library
+To take only the methodology layer and run the experiments on your own
+infrastructure, import `smai_core` alone, no pipeline:
 
-`smai_core` is the methodology layer on its own: `compile_experiment(...)`
-turns a definition into the four contracts, `evaluate(...)` turns raw
-multi-seed metrics into a verdict. Its entire dependency list is
-`pydantic` + `jsonschema` + stdlib, so it drops into any infrastructure.
-The DSL, the compiler checks, the contract shapes, and a worked Tier-B
-example are documented in
-[`packages/smai-core/README.md`](packages/smai-core/README.md).
+```python
+from smai_core import compile_experiment, evaluate
 
-## Configuration
-
-`smai dev` and `smai ui` boot with no config file. Past that, settings
-layer: in-code defaults, then `smai.yaml`, then `SMAI_*` env vars, then
-CLI flags, each overriding the last. A minimal `smai.yaml`:
-
-```yaml
-plugins:
-  llm_provider:   bedrock          # bedrock | anthropic | openai
-  metadata_store: sqlite           # sqlite | postgres
-  artifact_store: localfs          # localfs | s3
-  compute:        localgpu         # localgpu | modal | runpod
-
-  llm_provider_config:
-    region: us-east-1
-    model_id: us.anthropic.claude-opus-4-6-v1
+contracts = compile_experiment(document, registries)   # raises VerificationError if confounded
+# ... run the experiment on your own infrastructure, gather raw multi-seed metrics ...
+result = evaluate(contracts.validation_config, raw_metrics)
+print(result.verdict.result)   # "pass" | "fail" | "inconclusive"
 ```
 
-The same file works for `smai dev` and `smai start`; the only difference
-is which fields are defaulted versus required. Swapping
-`sqlite`->`postgres`, `localfs`->`s3`, and `localgpu`->`modal`/`runpod`
-is the entire local-to-production migration, a config change rather than
-a code change. `smai init` scaffolds an annotated `smai.yaml`;
-`smai verify` pings every configured plugin before a run.
-
-The full reference (the config search order, the `SMAI_*` env
-conventions, the per-plugin `*_config` keys, per-role agent models, and
-where state lives) is in
-[`packages/smai-cli/README.md`](packages/smai-cli/README.md). Each
-plugin's own README documents its credentials; see [Plugins](#plugins).
+`smai_core`'s entire dependency list is `pydantic` + `jsonschema` + stdlib, so
+it drops into any stack. The DSL, the compiler checks, the contract shapes, and
+a worked Tier-B example are in
+[`packages/smai-core/README.md`](packages/smai-core/README.md).
 
 ## Architecture
 
 SMAI is two layers, and they have opposite shapes.
 
-**The methodology layer is one library, `smai-core`.** No agents, no
-network, no orchestrator. It takes an experiment definition, verifies
-the claim is answerable, emits the four immutable contracts, and (once
-raw multi-seed metrics exist, from wherever) produces the verdict. It is
-*atomic*: pull a piece out and the others' guarantees break, so it ships
-as one tightly-scoped package, and it is where every guarantee in
-[Why SMAI](#why-smai) is enforced.
+**The methodology layer is one library, `smai-core`.** No agents, no network, no
+orchestrator. It takes a definition, verifies the claim is answerable, emits the
+four immutable contracts, and (once raw multi-seed metrics exist, from wherever)
+produces the verdict. It is atomic; pull a piece out and the others' guarantees
+break, so it ships as one tightly-scoped package, and it is where every
+guarantee in [What you get](#what-you-get) is enforced.
 
-**The pipeline layer is everything that produces those raw metrics for
-you.** Agents draft the definition, write the harness, fill in each
-technique implementation, and review the diffs; an orchestrator drives
-the state machines and the worker loop; four plugin interfaces wire it
-to an LLM, a metadata store, an artifact store, and compute. It is
-*composable*: every piece is independently useful, which is exactly why
-you can drop it and run `smai-core` against your own infrastructure.
+**The pipeline layer is everything that produces those metrics for you.** Agents
+draft the definition, write the harness, fill in each technique implementation,
+and review the diffs; an orchestrator drives the state machines and the worker
+loop; four plugin interfaces wire it to an LLM, a metadata store, an artifact
+store, and compute. It is composable, every piece independently useful, which is
+exactly why you can drop it and run `smai-core` against your own infrastructure.
 
-```
-   experiment definition          one factor varies, everything else is
-   (the SMAI DSL)                 fixed, the metric and baseline named
-          |
-          v
-   +-- smai-core ----------------------------------------------+
-   |  compile_experiment()   a confounded comparison fails to   |
-   |          |              compile, before any code is run    |
-   |          v                                                 |
-   |  four content-hashed contracts:                            |
-   |  ExperimentPlan . HarnessContract . TechniqueContract[]    |
-   |  . ValidationConfig (the verdict path; never shown to the  |
-   |    technique implementer)                                  |
-   +----------+-------------------------------------------------+
-              v
-   +-- pipeline layer -----------------------------------------+
-   |  agents implement the harness and each technique against  |
-   |  the contracts; the orchestrator runs every seed on       |
-   |  compute and collects raw multi-seed metrics              |
-   +----------+------------------------------------------------+
-              v
-   +-- smai-core ----------------------------------------------+
-   |  evaluate()   a pure function (no LLM, deterministic)     |
-   |  applies the locked ValidationConfig to the raw metrics   |
-   +----------+------------------------------------------------+
-              v
-   verdict   (pass / fail / inconclusive)
-```
+<p align="center">
+  <img src="assets/implementation-pipeline.png" alt="The pipeline layer in four stages: Design produces the experiment definition; Define splits it into the shared harness and the technique slots; Build runs the harness builder and one technique implementer per entry against the contracts; Review has a code-review agent inspect every implementation together" width="900">
+</p>
 
-The repo is a `uv` workspace; each package is its own `pyproject.toml` /
-`src/` / `tests/` tree:
-
-| Package | Role |
-|---|---|
-| [`smai-core`](packages/smai-core/README.md) | Methodology layer: data model, DSL + compiler, the four contracts, the mechanical evaluator, the four plugin Protocols. |
-| `smai-runtime` | Harness/technique runtime, fixed templates, the `HarnessAPIManifest`, the no-go-zone hash check. |
-| `smai-agents` | Custom agent loop and the six fleet roles (planner, harness builder, technique implementer, code reviewer, contextual evaluator, supervisor). |
-| `smai-orchestrator` | The pipeline engine: state machines, worker loop, checkpointer, the four `PipelineSpec` instances, Alembic migrations. |
-| [`smai-cli`](packages/smai-cli/README.md) | The 16 `smai` verbs, config layering, `RuntimeConfig`, the in-band `Runtime`. |
-| `smai-api`, `smai-api-spec`, `smai-api-conformance` | The JSON HTTP API, its shared Pydantic contract, and the wire-shape conformance suite. |
-| `smai-events` | The `EventChannel` Protocol and in-process pub/sub that drive the SSE channel. |
-| `smai-ui` | Python wrapper that bundles the React SPA (under `apps/ui/`) into the API wheel. |
-
-`smai-core` depends on nothing else in the workspace; the pipeline
-packages depend on `smai-core`; the CLI depends on everything. The full
-dependency graph and the repo layout are in
+The repo is a `uv` workspace, each package its own `pyproject.toml` / `src/` /
+`tests/` tree. `smai-core` depends on nothing else in the workspace; the
+pipeline packages (`smai-runtime`, `smai-agents`, `smai-orchestrator`,
+`smai-api`, `smai-cli`, and the SSE/UI packages) depend on `smai-core`; the CLI
+depends on everything. The full dependency graph and the package roster are in
 [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Plugins
 
-SMAI has four pluggable boundaries. Every reference implementation ships
-in this repo, so the OSS package is self-contained. Discovery is
-entry-point based (the dbt-adapter pattern). Each plugin's README
-documents its config keys and credentials.
+SMAI has four pluggable boundaries, and it talks to a Protocol at each one, never
+a vendor SDK. Every reference implementation ships in this repo, so the OSS
+package is self-contained, and discovery is entry-point based (the dbt-adapter
+pattern).
 
-| Interface | Plugin | What it is |
-|---|---|---|
-| `LlmProvider` | [`smai-llm-bedrock`](plugins/smai-llm-bedrock/README.md) | AWS Bedrock Converse. `smai dev` default. |
-| | [`smai-llm-anthropic`](plugins/smai-llm-anthropic/README.md) | Anthropic SDK. |
-| | [`smai-llm-openai`](plugins/smai-llm-openai/README.md) | OpenAI SDK. |
-| `MetadataStore` | [`smai-store-sqlite`](plugins/smai-store-sqlite/README.md) | Single-file SQLite. `smai dev` default. |
-| | [`smai-store-postgres`](plugins/smai-store-postgres/README.md) | Postgres for production self-host. |
-| `ArtifactStore` | [`smai-artifacts-localfs`](plugins/smai-artifacts-localfs/README.md) | Local filesystem. `smai dev` default. |
-| | [`smai-artifacts-s3`](plugins/smai-artifacts-s3/README.md) | S3, bring your own bucket. |
-| `Compute` | [`smai-compute-localgpu`](plugins/smai-compute-localgpu/README.md) | Local Docker on the host GPU. `smai dev` default. |
-| | [`smai-compute-modal`](plugins/smai-compute-modal/README.md) | Modal Sandboxes. |
-| | [`smai-compute-runpod`](plugins/smai-compute-runpod/README.md) | RunPod Pods API. |
+<p align="center">
+  <img src="assets/plugins.svg" alt="Four plugin interfaces (LlmProvider, MetadataStore, ArtifactStore, Compute), each with several swappable reference implementations and a smai dev default" width="900">
+</p>
 
-Writing a new plugin: subclass the conformance test base from
-`smai_core.plugins.conformance`, override one factory, and declare the
-entry point. The plugin-author guide is in
-[`CONTRIBUTING.md`](CONTRIBUTING.md).
+Swapping `sqlite`→`postgres`, `localfs`→`s3`, and `localgpu`→`modal`/`runpod` is
+the entire local-to-production migration, a config change rather than a code
+change. Each plugin lives under [`plugins/`](plugins/) with its own README for
+config keys and credentials. Writing a new one means subclassing the conformance
+test base from `smai_core.plugins.conformance`, overriding one factory, and
+declaring the entry point; the guide is in [`CONTRIBUTING.md`](CONTRIBUTING.md).
+
+## Configuration
+
+`smai dev` and `smai ui` boot with no config file. Past that, settings layer:
+in-code defaults, then `smai.yaml`, then `SMAI_*` env vars, then CLI flags, each
+overriding the last. A minimal `smai.yaml` names one plugin per boundary:
+
+```yaml
+plugins:
+  llm_provider:   bedrock     # bedrock | anthropic | openai
+  metadata_store: sqlite      # sqlite | postgres
+  artifact_store: localfs     # localfs | s3
+  compute:        localgpu    # localgpu | modal | runpod
+```
+
+The same file works for `smai dev` and `smai start`; the only difference is
+which fields are defaulted versus required. `smai init` scaffolds an annotated
+`smai.yaml`, and `smai verify` pings every configured plugin before a run. The
+full reference (search order, the `SMAI_*` conventions, per-plugin `*_config`
+keys, per-role agent models) is in
+[`packages/smai-cli/README.md`](packages/smai-cli/README.md).
 
 ## CLI reference
 
@@ -297,16 +211,70 @@ smai status [<id>]     Read pipeline-tracking state for a CG, proposal, or paper
 smai verify            Ping every configured plugin; PASS/FAIL per interface.
 ```
 
-The full verb table, the configuration reference, and the
-`techniques.json` format are in
+The full verb table and the configuration reference are in
 [`packages/smai-cli/README.md`](packages/smai-cli/README.md).
+
+## Worked example
+
+The DSL today expresses single-factor comparative experiments. A definition names
+the one factor that varies and pins everything else; this is the additive case,
+cutout augmentation present versus absent, with architecture and optimizer held
+fixed ([full fixture](tests/fixtures/experiments/cutout_on_cifar10.yaml)):
+
+```yaml
+kind: experiment
+experiment:
+  id: aug_cutout_vs_none_cifar10
+  hypothesis: |
+    Cutout augmentation improves CIFAR-10 top-1 accuracy over an identical
+    pipeline with no augmentation, holding architecture and optimizer fixed.
+
+  factors:
+    - name: cutout_augmentation
+      type: additive                       # baseline = the factor absent
+
+  controlled_conditions:                   # held fixed across every entry
+    dataset:      { name: cifar10, split: standard_50k_train_10k_test }
+    architecture: { name: resnet50 }
+    optimization: { optimizer: adamw, learning_rate: 0.001, batch_size: 128, epochs: 100 }
+    seeds: [42, 1337, 2024, 9999, 55]
+
+  entries:
+    - id: no_aug_baseline
+      is_baseline: true
+      level: { factor: cutout_augmentation, name: absent,  technique_id: null }
+    - id: cutout_treatment
+      level: { factor: cutout_augmentation, name: present, technique_id: tech_cutout }
+
+  validation:
+    metric:      { kind: parametric, family: top_k_accuracy, parameters: { k: 1 } }
+    direction:   higher_is_better
+    aggregation: { method: mean }
+    comparison:  { rule: compare_to_baseline, threshold: 0.003 }
+    seed_count_required: 5
+```
+
+Compiling it emits the four contracts; running it produces raw metrics; the
+evaluator applies the locked `ValidationConfig` and returns a verdict
+(`pass` / `fail` / `inconclusive`) with the per-treatment deltas behind it. Make
+the comparison confounded, vary two things at once or drop a control, and there
+is no verdict to grade because there is no compile:
+
+```python
+>>> compile_experiment(confounded_document, registries)
+smai_core.verification.VerificationError: verification failed with 1 error(s):
+factor.suspected_pipeline_encoding
+```
+
+The DSL, the compiler checks, the contract shapes, and a fuller Tier-B walkthrough
+are in [`packages/smai-core/README.md`](packages/smai-core/README.md).
 
 ## Documentation
 
 | | |
 |---|---|
-| [Where agents belong in automated research](https://henry-eigen.github.io/2026/05/18/where-agents-belong.html) | The argument: where mechanical checking ends and agent reasoning begins. |
-| [How SMAI works](https://henry-eigen.github.io/2026/05/13/how-yaarp-works.html) | That argument realized as SMAI's pipeline. |
+| [The mechanism boundary in automated research](https://henry-eigen.github.io/2026/05/18/where-agents-belong.html) | The argument for where mechanical checking ends and agent reasoning begins. |
+| [The architecture of mechanized research](https://henry-eigen.github.io/2026/05/13/how-yaarp-works.html) | That argument realized as a working system. |
 | [`packages/smai-core/README.md`](packages/smai-core/README.md) | The experiment DSL, the compiler checks, the four contracts, `evaluate()`. |
 | [`packages/smai-cli/README.md`](packages/smai-cli/README.md) | The 16 CLI verbs and the full configuration reference. |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | Repo layout, dependency graph, dev setup, the CI gates, the plugin-author guide. |
@@ -314,14 +282,13 @@ The full verb table, the configuration reference, and the
 
 ## Contributing
 
-See [`CONTRIBUTING.md`](CONTRIBUTING.md) for repo layout, local-dev
-setup, the project conventions, and the plugin-author guide. The four
-plugin Protocols ship parameterizable conformance test bases under
-`smai_core.plugins.conformance`: a new plugin subclasses one, overrides a
-factory, and inherits the contract suite.
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for repo layout, local-dev setup, the
+project conventions, and the plugin-author guide. The four plugin Protocols ship
+parameterizable conformance test bases under `smai_core.plugins.conformance`: a
+new plugin subclasses one, overrides a factory, and inherits the contract suite.
 
 ## License
 
-Apache 2.0, see [`LICENSE`](LICENSE). The SDK, DSL, agent loops,
-contracts, runtime, mechanical evaluator, HTTP API, SPA, and reference
-plugin implementations all ship under Apache 2.0.
+Apache 2.0, see [`LICENSE`](LICENSE). The SDK, DSL, agent loops, contracts,
+runtime, mechanical evaluator, HTTP API, SPA, and reference plugin
+implementations all ship under Apache 2.0.
